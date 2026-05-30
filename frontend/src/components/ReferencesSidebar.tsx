@@ -5,6 +5,7 @@ interface ReferencesSidebarProps {
     onActiveEditsChange?: (edits: any[]) => void;
     duration?: number;
     onClose?: () => void;
+    isMobile?: boolean;
 }
 
 interface MusicTrack {
@@ -228,7 +229,7 @@ const classifyTrack = (track: { name: string; rel_path: string }): MusicTrack =>
     };
 };
 
-export default function ReferencesSidebar({ activeEdits, onActiveEditsChange, duration = 10, onClose }: ReferencesSidebarProps) {
+export default function ReferencesSidebar({ activeEdits, onActiveEditsChange, duration = 10, onClose, isMobile }: ReferencesSidebarProps) {
     const [sidebarTab, setSidebarTab] = useState<'media' | 'music'>('media');
     const [playingTrack, setPlayingTrack] = useState<string | null>(null);
     const [playingSfx, setPlayingSfx] = useState<string | null>(null);
@@ -237,6 +238,14 @@ export default function ReferencesSidebar({ activeEdits, onActiveEditsChange, du
     const [isLoadingTracks, setIsLoadingTracks] = useState(true);
     const audioPreviewRef = useRef<HTMLAudioElement | null>(null);
     const sfxPreviewRef = useRef<HTMLAudioElement | null>(null);
+
+    const [justAddedIds, setJustAddedIds] = useState<string[]>([]);
+    const triggerAddedFeedback = (id: string) => {
+        setJustAddedIds(prev => [...prev, id]);
+        setTimeout(() => {
+            setJustAddedIds(prev => prev.filter(x => x !== id));
+        }, 1000);
+    };
 
     useEffect(() => {
         const fetchTracks = async () => {
@@ -359,6 +368,7 @@ export default function ReferencesSidebar({ activeEdits, onActiveEditsChange, du
         }
 
         onActiveEditsChange(updatedEdits);
+        triggerAddedFeedback(trackName);
     };
 
     // Manual Quick Insert Buttons (Fallback in case they don't drag)
@@ -372,6 +382,7 @@ export default function ReferencesSidebar({ activeEdits, onActiveEditsChange, du
             broll_url: item.url
         };
         onActiveEditsChange([...activeEdits, newEdit]);
+        triggerAddedFeedback(item.id);
     };
 
     const insertLibrarySfx = (item: typeof LIBRARY_SFX[0]) => {
@@ -386,6 +397,7 @@ export default function ReferencesSidebar({ activeEdits, onActiveEditsChange, du
             volume: -10
         };
         onActiveEditsChange([...activeEdits, newEdit]);
+        triggerAddedFeedback(item.id);
     };
 
     const insertLibraryGraphic = (item: typeof LIBRARY_GRAPHICS[0]) => {
@@ -398,6 +410,7 @@ export default function ReferencesSidebar({ activeEdits, onActiveEditsChange, du
             html_content: item.html
         };
         onActiveEditsChange([...activeEdits, newEdit]);
+        triggerAddedFeedback(item.id);
     };
 
     useEffect(() => {
@@ -461,14 +474,25 @@ export default function ReferencesSidebar({ activeEdits, onActiveEditsChange, du
                 
                 {sidebarTab === 'media' && (
                     <div className="space-y-7">
-                        <div className="bg-white/5 rounded-2xl p-4 border border-white/10 text-zinc-350 flex flex-col gap-2 shadow-sm">
-                            <span className="text-[12px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
-                                💡 Interactive Drag & Drop
-                            </span>
-                            <span className="text-[12px] leading-relaxed text-zinc-300 font-medium">
-                                Drag any reference card below and drop it directly onto the timeline tracks to overlay visual pacing elements.
-                            </span>
-                        </div>
+                        {isMobile ? (
+                            <div className="bg-white/5 rounded-2xl p-4 border border-white/10 text-zinc-350 flex flex-col gap-2 shadow-sm font-sans">
+                                <span className="text-[12px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
+                                    💡 Touch Tap-to-Insert
+                                </span>
+                                <span className="text-[12px] leading-relaxed text-zinc-300 font-medium">
+                                    Tap the "+" button or click "select track" on any card to instantly insert the media element into your timeline.
+                                </span>
+                            </div>
+                        ) : (
+                            <div className="bg-white/5 rounded-2xl p-4 border border-white/10 text-zinc-350 flex flex-col gap-2 shadow-sm font-sans">
+                                <span className="text-[12px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
+                                    💡 Interactive Drag & Drop
+                                </span>
+                                <span className="text-[12px] leading-relaxed text-zinc-300 font-medium">
+                                    Drag any reference card below and drop it directly onto the timeline tracks to overlay visual pacing elements.
+                                </span>
+                            </div>
+                        )}
 
                         {/* Video B-Rolls Library */}
                         <div>
@@ -477,48 +501,59 @@ export default function ReferencesSidebar({ activeEdits, onActiveEditsChange, du
                             </div>
                             
                             <div className="grid grid-cols-2 gap-3">
-                                {LIBRARY_BROLLS.map((item) => (
-                                    <div 
-                                        key={item.id} 
-                                        draggable="true"
-                                        onDragStart={(e) => handleDragStart(e, "broll", item)}
-                                        onMouseEnter={() => setHoveredBroll(item.id)}
-                                        onMouseLeave={() => setHoveredBroll(null)}
-                                        className="relative aspect-video bg-zinc-950 border border-white/5 rounded-2xl overflow-hidden cursor-grab hover:border-amber-500/50 active:cursor-grabbing transition-all group flex flex-col items-center justify-center shadow-lg"
-                                    >
-                                        {hoveredBroll === item.id ? (
-                                            <video 
-                                                src={item.url} 
-                                                autoPlay 
-                                                loop 
-                                                muted 
-                                                playsInline 
-                                                className="absolute inset-0 w-full h-full object-cover z-0" 
-                                            />
-                                        ) : (
-                                            <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent z-0 opacity-80" />
-                                        )}
-                                        
-                                        <div className="absolute top-2 right-2 z-10">
-                                            <button 
-                                                onClick={() => insertLibraryBroll(item)}
-                                                className="w-7 h-7 rounded-full bg-black/60 backdrop-blur-md border border-white/15 hover:border-amber-500 hover:text-amber-500 flex items-center justify-center text-[13px] font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 text-zinc-200"
-                                                title="Quick insert at playhead"
-                                            >
-                                                +
-                                            </button>
+                                {LIBRARY_BROLLS.map((item) => {
+                                    const isJustAdded = justAddedIds.includes(item.id);
+                                    return (
+                                        <div 
+                                            key={item.id} 
+                                            draggable="true"
+                                            onDragStart={(e) => handleDragStart(e, "broll", item)}
+                                            onMouseEnter={() => setHoveredBroll(item.id)}
+                                            onMouseLeave={() => setHoveredBroll(null)}
+                                            className={`relative aspect-video bg-zinc-950 border rounded-2xl overflow-hidden cursor-grab hover:border-amber-500/50 active:cursor-grabbing transition-all group flex flex-col items-center justify-center shadow-lg ${
+                                                isJustAdded 
+                                                    ? 'border-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.45)] scale-[0.98]' 
+                                                    : 'border-white/5'
+                                            }`}
+                                        >
+                                            {hoveredBroll === item.id ? (
+                                                <video 
+                                                    src={item.url} 
+                                                    autoPlay 
+                                                    loop 
+                                                    muted 
+                                                    playsInline 
+                                                    className="absolute inset-0 w-full h-full object-cover z-0" 
+                                                />
+                                            ) : (
+                                                <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent z-0 opacity-80" />
+                                            )}
+                                            
+                                            <div className="absolute top-2 right-2 z-10">
+                                                <button 
+                                                    onClick={() => insertLibraryBroll(item)}
+                                                    className={`w-7 h-7 rounded-full bg-black/60 backdrop-blur-md border flex items-center justify-center text-[13px] font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 ${
+                                                        isJustAdded 
+                                                            ? 'border-emerald-500 text-emerald-400 bg-emerald-950/85' 
+                                                            : 'border-white/15 hover:border-amber-500 hover:text-amber-500 text-zinc-200'
+                                                    }`}
+                                                    title="Quick insert at playhead"
+                                                >
+                                                    {isJustAdded ? '✓' : '+'}
+                                                </button>
+                                            </div>
+                                            
+                                            <div className="absolute bottom-3 left-3 right-3 z-10 flex flex-col font-sans">
+                                                <span className="text-[13px] font-semibold text-white truncate text-shadow">
+                                                    {item.name}
+                                                </span>
+                                                <span className="text-[11px] text-zinc-300 truncate mt-[2px] font-medium">
+                                                    {item.description}
+                                                </span>
+                                            </div>
                                         </div>
-                                        
-                                        <div className="absolute bottom-3 left-3 right-3 z-10 flex flex-col font-sans">
-                                            <span className="text-[13px] font-semibold text-white truncate text-shadow">
-                                                {item.name}
-                                            </span>
-                                            <span className="text-[11px] text-zinc-300 truncate mt-[2px] font-medium">
-                                                {item.description}
-                                            </span>
-                                        </div>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         </div>
 
@@ -531,12 +566,17 @@ export default function ReferencesSidebar({ activeEdits, onActiveEditsChange, du
                             <div className="flex flex-col gap-3">
                                 {LIBRARY_SFX.map((item) => {
                                     const isPlaying = playingSfx === item.id;
+                                    const isJustAdded = justAddedIds.includes(item.id);
                                     return (
                                         <div 
                                             key={item.id}
                                             draggable="true"
                                             onDragStart={(e) => handleDragStart(e, "sfx", item)}
-                                            className="p-4 bg-white/5 rounded-2xl border border-white/10 cursor-grab hover:border-amber-500/50 hover:bg-white/8 active:cursor-grabbing flex items-center gap-4 group transition-all duration-200 shadow-md"
+                                            className={`p-4 rounded-2xl border cursor-grab hover:bg-white/8 active:cursor-grabbing flex items-center gap-4 group transition-all duration-200 shadow-md ${
+                                                isJustAdded 
+                                                    ? 'border-emerald-500 bg-emerald-950/10 shadow-[0_0_15px_rgba(16,185,129,0.3)] scale-[0.98]' 
+                                                    : 'border-white/10 bg-white/5 hover:border-amber-500/50'
+                                            }`}
                                         >
                                             <button 
                                                 onClick={() => togglePlaySfx(item)}
@@ -554,10 +594,14 @@ export default function ReferencesSidebar({ activeEdits, onActiveEditsChange, du
                                                     <p className="text-[13.5px] font-bold text-zinc-150 truncate">{item.name}</p>
                                                     <button 
                                                         onClick={() => insertLibrarySfx(item)}
-                                                        className="text-[12px] text-amber-500 hover:text-amber-400 font-bold px-3 py-1 bg-amber-500/10 hover:bg-amber-500/20 rounded-xl transition-all cursor-pointer"
+                                                        className={`text-[12px] font-bold px-3 py-1 rounded-xl transition-all cursor-pointer ${
+                                                            isJustAdded 
+                                                                ? 'text-emerald-400 bg-emerald-500/10' 
+                                                                : 'text-amber-500 hover:text-amber-400 bg-amber-500/10 hover:bg-amber-500/20'
+                                                        }`}
                                                         title="Quick insert at playhead"
                                                     >
-                                                        + add
+                                                        {isJustAdded ? '✓ added' : '+ add'}
                                                     </button>
                                                 </div>
                                                 <p className="text-[11.5px] text-zinc-300 mt-1.5 leading-normal font-medium">{item.description}</p>
@@ -575,38 +619,49 @@ export default function ReferencesSidebar({ activeEdits, onActiveEditsChange, du
                             </div>
                             
                             <div className="flex flex-col gap-3.5">
-                                {LIBRARY_GRAPHICS.map((item) => (
-                                    <div 
-                                        key={item.id}
-                                        draggable="true"
-                                        onDragStart={(e) => handleDragStart(e, "graphics", item)}
-                                        className="relative bg-white/5 rounded-2xl border border-white/10 cursor-grab hover:border-amber-500/50 hover:bg-white/8 active:cursor-grabbing flex flex-col group overflow-hidden transition-all duration-200 shadow-md"
-                                    >
-                                        <div className="w-full h-20 bg-zinc-950 pointer-events-none overflow-hidden opacity-60 group-hover:opacity-90 transition-opacity">
-                                            <iframe
-                                                srcDoc={`<!doctype html><html><head><meta charset="UTF-8"/><script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script><style>*{margin:0;padding:0;box-sizing:border-box;}html,body{width:100%;height:100%;overflow:hidden;background:#050507;display:flex;align-items:center;justify-content:center;}.clip{position:absolute;}#root{width:1080px;height:1920px;position:relative;transform-origin:top left;transform:scale(0.074);}</style></head><body><div id="root">${item.html}</div></body></html>`}
-                                                className="w-full h-full border-none rounded-t-2xl"
-                                                style={{ background: 'transparent' }}
-                                                title={`lib-graphic-${item.id}`}
-                                            />
-                                        </div>
-                                        
-                                        <div className="flex items-center justify-between px-4 py-3 border-t border-white/10 bg-[#08080a]/90 font-sans">
-                                            <div className="flex flex-col">
-                                                <span className="text-[13px] font-bold text-zinc-200">{item.name}</span>
-                                                <span className="text-[11px] text-zinc-300 mt-1 font-medium">{item.description}</span>
+                                {LIBRARY_GRAPHICS.map((item) => {
+                                    const isJustAdded = justAddedIds.includes(item.id);
+                                    return (
+                                        <div 
+                                            key={item.id}
+                                            draggable="true"
+                                            onDragStart={(e) => handleDragStart(e, "graphics", item)}
+                                            className={`relative rounded-2xl border cursor-grab hover:bg-white/8 active:cursor-grabbing flex flex-col group overflow-hidden transition-all duration-200 shadow-md ${
+                                                isJustAdded 
+                                                    ? 'border-emerald-500 bg-emerald-950/10 shadow-[0_0_15px_rgba(16,185,129,0.3)] scale-[0.98]' 
+                                                    : 'border-white/10 bg-white/5 hover:border-amber-500/50'
+                                            }`}
+                                        >
+                                            <div className="w-full h-20 bg-zinc-950 pointer-events-none overflow-hidden opacity-60 group-hover:opacity-90 transition-opacity">
+                                                <iframe
+                                                    srcDoc={`<!doctype html><html><head><meta charset="UTF-8"/><script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script><style>*{margin:0;padding:0;box-sizing:border-box;}html,body{width:100%;height:100%;overflow:hidden;background:#050507;display:flex;align-items:center;justify-content:center;}.clip{position:absolute;}#root{width:1080px;height:1920px;position:relative;transform-origin:top left;transform:scale(0.074);}</style></head><body><div id="root">${item.html}</div></body></html>`}
+                                                    className="w-full h-full border-none rounded-t-2xl"
+                                                    style={{ background: 'transparent' }}
+                                                    title={`lib-graphic-${item.id}`}
+                                                />
                                             </div>
                                             
-                                            <button 
-                                                onClick={() => insertLibraryGraphic(item)}
-                                                className="w-8 h-8 rounded-full bg-zinc-950 border border-white/10 hover:border-amber-500 hover:text-amber-500 flex items-center justify-center text-[14px] font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 text-zinc-200"
-                                                title="Quick insert at playhead"
-                                            >
-                                                +
-                                            </button>
+                                            <div className="flex items-center justify-between px-4 py-3 border-t border-white/10 bg-[#08080a]/90 font-sans">
+                                                <div className="flex flex-col">
+                                                    <span className="text-[13px] font-bold text-zinc-200">{item.name}</span>
+                                                    <span className="text-[11px] text-zinc-300 mt-1 font-medium">{item.description}</span>
+                                                </div>
+                                                
+                                                <button 
+                                                    onClick={() => insertLibraryGraphic(item)}
+                                                    className={`w-8 h-8 rounded-full bg-zinc-950 border flex items-center justify-center text-[14px] font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 ${
+                                                        isJustAdded 
+                                                            ? 'border-emerald-500 text-emerald-400 bg-emerald-950/80' 
+                                                            : 'border-white/10 hover:border-amber-500 hover:text-amber-500 text-zinc-200'
+                                                    }`}
+                                                    title="Quick insert at playhead"
+                                                >
+                                                    {isJustAdded ? '✓' : '+'}
+                                                </button>
+                                            </div>
                                         </div>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         </div>
 
@@ -634,14 +689,25 @@ export default function ReferencesSidebar({ activeEdits, onActiveEditsChange, du
 
                 {sidebarTab === 'music' && (
                     <div className="space-y-7">
-                        <div className="bg-white/5 rounded-2xl p-4 border border-white/10 text-zinc-350 flex flex-col gap-2 font-sans shadow-sm">
-                            <span className="text-[12px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
-                                💡 Soundtrack Management
-                            </span>
-                            <span className="text-[12px] leading-relaxed text-zinc-300 font-medium">
-                                Select a track below. You can also **drag and drop** the card onto the **music m1** track of the timeline.
-                            </span>
-                        </div>
+                        {isMobile ? (
+                            <div className="bg-white/5 rounded-2xl p-4 border border-white/10 text-zinc-350 flex flex-col gap-2 font-sans shadow-sm">
+                                <span className="text-[12px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
+                                    💡 Soundtrack Management
+                                </span>
+                                <span className="text-[12px] leading-relaxed text-zinc-300 font-medium">
+                                    Tap "select track" below to overlay the selected audio track onto your timeline.
+                                </span>
+                            </div>
+                        ) : (
+                            <div className="bg-white/5 rounded-2xl p-4 border border-white/10 text-zinc-350 flex flex-col gap-2 font-sans shadow-sm">
+                                <span className="text-[12px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
+                                    💡 Soundtrack Management
+                                </span>
+                                <span className="text-[12px] leading-relaxed text-zinc-300 font-medium">
+                                    Select a track below. You can also **drag and drop** the card onto the **music m1** track of the timeline.
+                                </span>
+                            </div>
+                        )}
                         
                         {Object.entries(categories).map(([catName, tracks]) => (
                             <div key={catName}>
@@ -654,31 +720,37 @@ export default function ReferencesSidebar({ activeEdits, onActiveEditsChange, du
                                     {tracks.map(track => {
                                         const isApplied = activeBgmName.toLowerCase().includes(track.name.split(" - ").pop()?.toLowerCase() || "___non_existent___") || activeBgmName.toLowerCase().includes(track.title.toLowerCase());
                                         const isPlaying = playingTrack === track.name;
-                                        
+                                                                                const isJustAdded = justAddedIds.includes(track.name);
                                         return (
                                             <div 
                                                 key={track.name} 
                                                 draggable="true"
                                                 onDragStart={(e) => handleDragStart(e, "music", track)}
-                                                className={`p-4.5 bg-white/5 border flex flex-col gap-3.5 transition-all duration-200 rounded-2xl cursor-grab active:cursor-grabbing hover:bg-white/8 shadow-md ${
+                                                className={`p-4.5 border flex flex-col gap-3.5 transition-all duration-200 rounded-2xl cursor-grab active:cursor-grabbing hover:bg-white/8 shadow-md ${
                                                     isApplied 
                                                         ? 'border-amber-500/40 bg-amber-500/5' 
-                                                        : 'border-white/10 hover:border-white/15'
+                                                        : isJustAdded
+                                                            ? 'border-emerald-500 bg-emerald-950/10 shadow-[0_0_15px_rgba(16,185,129,0.3)] scale-[0.98]'
+                                                            : 'border-white/10 bg-white/5 hover:border-white/15'
                                                 }`}
                                             >
                                                 <div className="flex items-start justify-between gap-3">
                                                     <div className="flex-1 min-w-0">
-                                                        <h4 className={`text-[14.5px] font-bold truncate ${isApplied ? 'text-amber-500' : 'text-white'}`}>
+                                                        <h4 className={`text-[14.5px] font-bold truncate ${isApplied ? 'text-amber-500' : isJustAdded ? 'text-emerald-400' : 'text-white'}`}>
                                                             {track.title}
                                                         </h4>
                                                         <p className="text-[12px] text-zinc-350 font-sans">by {track.artist}</p>
                                                     </div>
                                                     
-                                                    {isApplied && (
+                                                    {isApplied ? (
                                                         <span className="text-[10px] font-bold uppercase tracking-wider bg-amber-500/10 text-amber-500 px-3 py-1 rounded-full border border-amber-500/20 shrink-0 select-none animate-pulse">
                                                             active
                                                         </span>
-                                                    )}
+                                                    ) : isJustAdded ? (
+                                                        <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 px-3 py-1 rounded-full border border-emerald-500/20 shrink-0 select-none">
+                                                            added
+                                                        </span>
+                                                    ) : null}
                                                 </div>
                                                 
                                                 <p className="text-[12.5px] text-zinc-200 leading-relaxed font-medium">{track.description}</p>
@@ -705,13 +777,20 @@ export default function ReferencesSidebar({ activeEdits, onActiveEditsChange, du
                                                         className={`flex-1 h-10 rounded-xl text-[12.5px] font-semibold tracking-wide transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                                                             isApplied 
                                                                 ? 'bg-amber-500/10 border border-amber-500/30 text-amber-500 cursor-default shadow-sm' 
-                                                                : 'bg-white/5 hover:bg-white/10 border border-white/15 text-zinc-200 active:scale-98 shadow-sm'
+                                                                : isJustAdded
+                                                                    ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 shadow-sm'
+                                                                    : 'bg-white/5 hover:bg-white/10 border border-white/15 text-zinc-200 active:scale-98 shadow-sm'
                                                         }`}
                                                     >
                                                         {isApplied ? (
                                                             <>
                                                                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
                                                                 <span>applied</span>
+                                                            </>
+                                                        ) : isJustAdded ? (
+                                                            <>
+                                                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+                                                                <span>added</span>
                                                             </>
                                                         ) : (
                                                             <span>select track</span>

@@ -725,7 +725,7 @@ export default function VideoTimeline({
             })()}
 
             {/* Tracks Container */}
-            <div className="flex flex-1 relative overflow-y-auto overflow-x-hidden bg-background scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent">
+            <div className="flex flex-1 relative overflow-y-auto overflow-x-auto md:overflow-x-hidden bg-background scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent">
                 
                 {/* 1. Left Sidebar: Track Headers & Add Controls (Premiere/Resolve Style) */}
                 <div className="w-32 bg-[#08080a] border-r border-border flex flex-col z-20 flex-shrink-0 sticky left-0 font-mono text-[8px] text-zinc-500">
@@ -883,7 +883,7 @@ export default function VideoTimeline({
                 </div>
 
                 {/* 2. Right Side: Multi-track Timeline Channels */}
-                <div className="flex-1 flex flex-col min-w-0 relative" ref={containerRef}>
+                <div className="flex-1 flex flex-col min-w-[700px] md:min-w-0 relative" ref={containerRef}>
                     {/* Time Ruler / Scrub area */}
                     <div 
                         className="h-6 bg-card border-b border-border flex items-center relative cursor-ew-resize z-20 sticky top-0"
@@ -1023,8 +1023,8 @@ export default function VideoTimeline({
                                         )}
                                         {activeTool === 'pointer' && !isEditing && (
                                             <>
-                                                <div className="absolute left-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 't1', i, 'left', clip.start)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                <div className="absolute right-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 't1', i, 'right', clip.end)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className="absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 't1', i, 'left', clip.start)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className="absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 't1', i, 'right', clip.end)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                             </>
                                         )}
                                     </div>
@@ -1072,8 +1072,8 @@ export default function VideoTimeline({
                                         <span className="text-[9.5px] absolute left-3 font-mono pointer-events-none truncate right-3 font-medium">📹 B-Roll: "{query.toLowerCase()}"</span>
                                         {activeTool === 'pointer' && (
                                             <>
-                                                <div className="absolute left-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'v2', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                <div className="absolute right-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'v2', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className="absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'v2', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className="absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'v2', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                             </>
                                         )}
                                     </div>
@@ -1128,8 +1128,8 @@ export default function VideoTimeline({
                                         <span className="text-[8px] font-mono text-white bg-zinc-900 px-2 py-0.5 rounded-none border border-border absolute right-2 pointer-events-none">{asset.volume || -22} dB</span>
                                         {activeTool === 'pointer' && (
                                             <>
-                                                <div className="absolute left-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'm1', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                <div className="absolute right-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'm1', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className="absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'm1', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className="absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'm1', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                             </>
                                         )}
                                     </div>
@@ -1183,8 +1183,8 @@ export default function VideoTimeline({
                                         <span className="text-[9.5px] absolute left-3 font-mono pointer-events-none truncate right-3 font-medium">🔊 SFX: "{query.toLowerCase()}"</span>
                                         {activeTool === 'pointer' && (
                                             <>
-                                                <div className="absolute left-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'sfx', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                <div className="absolute right-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'sfx', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className="absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'sfx', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className="absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'sfx', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                             </>
                                         )}
                                     </div>
@@ -1291,8 +1291,8 @@ export default function VideoTimeline({
                                         <span className="text-[9.5px] text-zinc-300 absolute left-3 font-mono pointer-events-none tracking-tight font-medium z-10 drop-shadow">🎞️ Video: track v1 (auto-cuts)</span>
                                         {activeTool === 'pointer' && (
                                             <>
-                                                <div className={`absolute left-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'v1', i, 'left', clip.start)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                <div className={`absolute right-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'v1', i, 'right', clip.end)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className={`absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'v1', i, 'left', clip.start)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className={`absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'v1', i, 'right', clip.end)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                             </>
                                         )}
                                     </div>
@@ -1355,8 +1355,8 @@ export default function VideoTimeline({
                                         
                                         {activeTool === 'pointer' && (
                                             <>
-                                                <div className={`absolute left-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'a1', i, 'left', clip.start)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                <div className={`absolute right-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'a1', i, 'right', clip.end)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className={`absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'a1', i, 'left', clip.start)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className={`absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'a1', i, 'right', clip.end)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                             </>
                                         )}
                                     </div>

@@ -541,11 +541,12 @@ interface ChatSidebarProps {
   isRenderingBackground: boolean;
   logs: string[];
   chatEndRef: React.RefObject<HTMLDivElement | null>;
+  isMobile?: boolean;
 }
 
 export default function ChatSidebar({
   chat, message, setMessage, handleSend, isProcessing,
-  isAgentTyping, isRenderingBackground, logs, chatEndRef
+  isAgentTyping, isRenderingBackground, logs, chatEndRef, isMobile
 }: ChatSidebarProps) {
   const [sidebarWidth, setSidebarWidth] = useState(340);
   const [isResizingWidth, setIsResizingWidth] = useState(false);
@@ -650,18 +651,20 @@ export default function ChatSidebar({
   return (
     <div
       style={{
-        width: `${sidebarWidth}px`,
+        width: isMobile ? "100%" : `${sidebarWidth}px`,
         background: "#0D0D12",
-        borderRight: "1px solid rgba(255,255,255,0.06)",
+        borderRight: isMobile ? "none" : "1px solid rgba(255,255,255,0.06)",
       }}
-      className="shrink-0 flex flex-col overflow-hidden relative"
+      className="shrink-0 flex flex-col overflow-hidden relative w-full h-full"
     >
       {/* Resize handle */}
-      <div
-        onPointerDown={(e) => { e.preventDefault(); setIsResizingWidth(true); }}
-        className={`absolute right-0 top-0 bottom-0 w-1 cursor-col-resize z-40 transition-all ${isResizingWidth ? 'opacity-100' : 'opacity-0 hover:opacity-100'}`}
-        style={{ background: "rgba(59,130,246,0.3)" }}
-      />
+      {!isMobile && (
+        <div
+          onPointerDown={(e) => { e.preventDefault(); setIsResizingWidth(true); }}
+          className={`absolute right-0 top-0 bottom-0 w-1 cursor-col-resize z-40 transition-all ${isResizingWidth ? 'opacity-100' : 'opacity-0 hover:opacity-100'}`}
+          style={{ background: "rgba(59,130,246,0.3)" }}
+        />
+      )}
 
       {/* Header */}
       <div

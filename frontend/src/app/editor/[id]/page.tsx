@@ -185,6 +185,19 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     // Resizable Timeline State
     const [timelineHeight, setTimelineHeight] = useState(250);
     const [isResizing, setIsResizing] = useState(false);
+
+    // Responsive Mobile Views State
+    const [activeMobileTab, setActiveMobileTab] = useState<'chat' | 'editor' | 'library'>('editor');
+    const [isMobile, setIsMobile] = useState(false);
+
+    useEffect(() => {
+        const handleResize = () => {
+            setIsMobile(window.innerWidth < 768);
+        };
+        handleResize();
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
     
     // Derived Video URLs
     const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
@@ -642,169 +655,230 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                 />
             )}
 
-            <div className="flex-1 flex overflow-hidden">
+            <div className="flex-1 flex overflow-hidden flex-col md:flex-row relative">
                 {/* 1. Chat Sidebar */}
-                <ChatSidebar 
-                    chat={chat} 
-                    message={message} 
-                    setMessage={setMessage} 
-                    handleSend={handleSend} 
-                    isProcessing={isProcessing} 
-                    isAgentTyping={isAgentTyping} 
-                    isRenderingBackground={isRenderingBackground} 
-                    logs={logs} 
-                    chatEndRef={chatEndRef} 
-                />
+                {(!isMobile || activeMobileTab === 'chat') && (
+                    <ChatSidebar 
+                        chat={chat} 
+                        message={message} 
+                        setMessage={setMessage} 
+                        handleSend={handleSend} 
+                        isProcessing={isProcessing} 
+                        isAgentTyping={isAgentTyping} 
+                        isRenderingBackground={isRenderingBackground} 
+                        logs={logs} 
+                        chatEndRef={chatEndRef} 
+                        isMobile={isMobile}
+                    />
+                )}
 
                 {/* 2. Center: Preview + Timeline */}
-                <div className="flex-1 flex flex-col min-w-0" style={{ background: "#0B0B0F" }}>
-                    {/* Video Preview */}
-                    <div
-                        className="flex-1 m-3 mb-1 overflow-hidden relative"
-                        style={{
-                            background: "#000",
-                            borderRadius: "20px",
-                            border: "1px solid rgba(255,255,255,0.06)",
-                            boxShadow: "0 8px 40px rgba(0,0,0,0.5)",
-                        }}
-                    >
-                        <SandboxPlayer
-                            videoSrc={currentVideo}
-                            edits={activeEditsWithSubtitles}
-                            edl={multiTrackEdl}
-                            isPlaying={isPlaying}
-                            onTogglePlay={() => {
-                                if (videoRef.current) {
-                                    if (isPlaying) {
-                                        videoRef.current.pause();
-                                        audioRef.current?.pause();
-                                    } else {
-                                        videoRef.current.play();
-                                        audioRef.current?.play();
-                                    }
-                                }
-                                setIsPlaying(!isPlaying);
-                            }}
-                            onTimeUpdate={(t: number) => {
-                                if (videoRef.current && Math.abs(videoRef.current.currentTime - t) > 0.5) {
-                                    videoRef.current.currentTime = t;
-                                }
-                            }}
-                            duration={duration}
-                        />
-                    </div>
-
-                    {/* Resizer pill */}
-                    <div
-                        className="h-4 w-full cursor-row-resize flex items-center justify-center group relative z-50"
-                        onPointerDown={(e) => { e.preventDefault(); setIsResizing(true); }}
-                    >
+                {(!isMobile || activeMobileTab === 'editor') && (
+                    <div className="flex-1 flex flex-col min-w-0 h-full" style={{ background: "#0B0B0F" }}>
+                        {/* Video Preview */}
                         <div
-                            className="w-8 h-1 rounded-full transition-all duration-200"
-                            style={{ background: isResizing ? "rgba(59,130,246,0.5)" : "rgba(255,255,255,0.08)" }}
-                        />
-                        {isResizing && <div className="fixed inset-0 cursor-row-resize z-[100]" />}
-                    </div>
-
-                    {/* Timeline Panel */}
-                    <div
-                        className="flex-shrink-0 flex flex-col overflow-hidden relative mx-3 mb-3"
-                        style={{
-                            height: timelineHeight,
-                            background: "#111318",
-                            borderRadius: "20px",
-                            border: "1px solid rgba(255,255,255,0.06)",
-                        }}
-                    >
-                        {/* Timeline toolbar */}
-                        <div
-                            className="h-11 flex items-center px-4 justify-between shrink-0"
-                            style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}
+                            className="flex-1 m-3 mb-1 overflow-hidden relative"
+                            style={{
+                                background: "#000",
+                                borderRadius: "20px",
+                                border: "1px solid rgba(255,255,255,0.06)",
+                                boxShadow: "0 8px 40px rgba(0,0,0,0.5)",
+                            }}
                         >
-                            <div className="flex gap-1 items-center">
-                                {(['text', 'video'] as const).map(tab => (
-                                    <button
-                                        key={tab}
-                                        onClick={() => setActiveTab(tab)}
-                                        className="px-3 py-1 rounded-lg text-[10px] font-mono transition-all cursor-pointer"
-                                        style={{
-                                            background: activeTab === tab ? "rgba(59,130,246,0.12)" : "transparent",
-                                            color: activeTab === tab ? "rgba(59,130,246,0.9)" : "#3A4151",
-                                            border: activeTab === tab ? "1px solid rgba(59,130,246,0.2)" : "1px solid transparent",
-                                        }}
-                                    >
-                                        {tab === 'text' ? 'Text Timeline' : 'Track Timeline'}
-                                    </button>
-                                ))}
-                            </div>
-                            {activeTab === 'text' && (
-                                <button
-                                    onClick={handleDirectRender}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-medium transition-all cursor-pointer"
-                                    style={{
-                                        background: "rgba(255,255,255,0.04)",
-                                        border: "1px solid rgba(255,255,255,0.08)",
-                                        color: "#9AA4B2",
-                                    }}
-                                >
-                                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                                    </svg>
-                                    <span>Render</span>
-                                </button>
-                            )}
-                        </div>
-
-                        <div className="flex-1 p-2 overflow-hidden">
-                            {activeTab === 'text' ? (
-                                <TimelineEditor 
-                                    transcript={transcript} 
-                                    activeEdits={activeEdits} 
-                                    onEditsChange={setActiveEdits} 
-                                />
-                            ) : (
-                                <VideoTimeline 
-                                    duration={duration}
-                                    activeEdits={activeEdits}
-                                    multiTrackEdl={multiTrackEdl || { v1: [{start: 0, end: duration}], a1: [{start: 0, end: duration}] }}
-                                    audioPeaks={audioPeaks}
-                                    videoRef={videoRef}
-                                    audioRef={audioRef}
-                                    isPlaying={isPlaying}
-                                    onTogglePlay={() => {
-                                        if (!videoRef.current) return;
+                            <SandboxPlayer
+                                videoSrc={currentVideo}
+                                edits={activeEditsWithSubtitles}
+                                edl={multiTrackEdl}
+                                isPlaying={isPlaying}
+                                onTogglePlay={() => {
+                                    if (videoRef.current) {
                                         if (isPlaying) {
                                             videoRef.current.pause();
                                             audioRef.current?.pause();
-                                            setIsPlaying(false);
                                         } else {
                                             videoRef.current.play();
                                             audioRef.current?.play();
-                                            setIsPlaying(true);
                                         }
-                                    }}
-                                    onEdlChange={(newEdl: any) => setMultiTrackEdl(newEdl)}
-                                    onActiveEditsChange={(newEdits: any) => setActiveEdits(newEdits)}
-                                    transcript={transcript}
+                                    }
+                                    setIsPlaying(!isPlaying);
+                                }}
+                                onTimeUpdate={(t: number) => {
+                                    if (videoRef.current && Math.abs(videoRef.current.currentTime - t) > 0.5) {
+                                        videoRef.current.currentTime = t;
+                                    }
+                                }}
+                                duration={duration}
+                            />
+                        </div>
+
+                        {/* Resizer pill */}
+                        {!isMobile && (
+                            <div
+                                className="h-4 w-full cursor-row-resize flex items-center justify-center group relative z-50"
+                                onPointerDown={(e) => { e.preventDefault(); setIsResizing(true); }}
+                            >
+                                <div
+                                    className="w-8 h-1 rounded-full transition-all duration-200"
+                                    style={{ background: isResizing ? "rgba(59,130,246,0.5)" : "rgba(255,255,255,0.08)" }}
                                 />
-                            )}
+                                {isResizing && <div className="fixed inset-0 cursor-row-resize z-[100]" />}
+                            </div>
+                        )}
+
+                        {/* Timeline Panel */}
+                        <div
+                            className="flex-shrink-0 flex flex-col overflow-hidden relative mx-3 mb-3"
+                            style={{
+                                height: isMobile ? "220px" : timelineHeight,
+                                background: "#111318",
+                                borderRadius: "20px",
+                                border: "1px solid rgba(255,255,255,0.06)",
+                            }}
+                        >
+                            {/* Timeline toolbar */}
+                            <div
+                                className="h-11 flex items-center px-4 justify-between shrink-0"
+                                style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}
+                            >
+                                <div className="flex gap-1 items-center">
+                                    {(['text', 'video'] as const).map(tab => (
+                                        <button
+                                            key={tab}
+                                            onClick={() => setActiveTab(tab)}
+                                            className="px-3 py-1 rounded-lg text-[10px] font-mono transition-all cursor-pointer"
+                                            style={{
+                                                background: activeTab === tab ? "rgba(59,130,246,0.12)" : "transparent",
+                                                color: activeTab === tab ? "rgba(59,130,246,0.9)" : "#3A4151",
+                                                border: activeTab === tab ? "1px solid rgba(59,130,246,0.2)" : "1px solid transparent",
+                                            }}
+                                        >
+                                            {tab === 'text' ? 'Text Timeline' : 'Track Timeline'}
+                                        </button>
+                                    ))}
+                                </div>
+                                {activeTab === 'text' && (
+                                    <button
+                                        onClick={handleDirectRender}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-medium transition-all cursor-pointer"
+                                        style={{
+                                            background: "rgba(255,255,255,0.04)",
+                                            border: "1px solid rgba(255,255,255,0.08)",
+                                            color: "#9AA4B2",
+                                        }}
+                                    >
+                                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                        </svg>
+                                        <span>Render</span>
+                                    </button>
+                                )}
+                            </div>
+
+                            <div className="flex-1 p-2 overflow-hidden">
+                                {activeTab === 'text' ? (
+                                    <TimelineEditor 
+                                        transcript={transcript} 
+                                        activeEdits={activeEdits} 
+                                        onEditsChange={setActiveEdits} 
+                                    />
+                                ) : (
+                                    <VideoTimeline 
+                                        duration={duration}
+                                        activeEdits={activeEdits}
+                                        multiTrackEdl={multiTrackEdl || { v1: [{start: 0, end: duration}], a1: [{start: 0, end: duration}] }}
+                                        audioPeaks={audioPeaks}
+                                        videoRef={videoRef}
+                                        audioRef={audioRef}
+                                        isPlaying={isPlaying}
+                                        onTogglePlay={() => {
+                                            if (!videoRef.current) return;
+                                            if (isPlaying) {
+                                                videoRef.current.pause();
+                                                audioRef.current?.pause();
+                                                setIsPlaying(false);
+                                            } else {
+                                                videoRef.current.play();
+                                                audioRef.current?.play();
+                                                setIsPlaying(true);
+                                            }
+                                        }}
+                                        onEdlChange={(newEdl: any) => setMultiTrackEdl(newEdl)}
+                                        onActiveEditsChange={(newEdits: any) => setActiveEdits(newEdits)}
+                                        transcript={transcript}
+                                    />
+                                )}
+                            </div>
                         </div>
                     </div>
-                </div>
+                )}
 
                 {/* 3. Right Sidebar */}
-                <div className={`transition-all duration-300 ease-in-out flex shrink-0 ${showReferences ? 'w-[320px] border-l border-white/5' : 'w-0 overflow-hidden border-none'}`}>
-                    <ReferencesSidebar 
-                        activeEdits={activeEdits} 
-                        onActiveEditsChange={setActiveEdits} 
-                        duration={duration} 
-                        onClose={() => setShowReferences(false)}
-                    />
-                </div>
+                {(!isMobile || activeMobileTab === 'library') && (
+                    <div 
+                        className={`transition-all duration-300 ease-in-out flex shrink-0 ${
+                            isMobile 
+                                ? 'w-full h-full' 
+                                : showReferences 
+                                    ? 'w-[320px] border-l border-white/5' 
+                                    : 'w-0 overflow-hidden border-none'
+                        }`}
+                    >
+                        <ReferencesSidebar 
+                            activeEdits={activeEdits} 
+                            onActiveEditsChange={setActiveEdits} 
+                            duration={duration} 
+                            onClose={isMobile ? undefined : () => setShowReferences(false)}
+                            isMobile={isMobile}
+                        />
+                    </div>
+                )}
             </div>
 
-            {!showReferences && (
+            {/* 4. Bottom Mobile Navigation Bar */}
+            {isMobile && (
+                <div 
+                    className="h-[60px] border-t border-white/5 flex items-center justify-around shrink-0 z-30 font-sans shadow-lg"
+                    style={{
+                        background: "rgba(13, 13, 18, 0.85)",
+                        backdropFilter: "blur(20px)",
+                        WebkitBackdropFilter: "blur(20px)",
+                    }}
+                >
+                    <button
+                        onClick={() => setActiveMobileTab('chat')}
+                        className="flex flex-col items-center justify-center gap-1 py-1 cursor-pointer transition-all active:scale-95 flex-1"
+                        style={{ color: activeMobileTab === 'chat' ? '#3B82F6' : '#5A6478' }}
+                    >
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                        </svg>
+                        <span className="text-[9px] font-semibold uppercase tracking-wider">Chat</span>
+                    </button>
+                    <button
+                        onClick={() => setActiveMobileTab('editor')}
+                        className="flex flex-col items-center justify-center gap-1 py-1 cursor-pointer transition-all active:scale-95 flex-1"
+                        style={{ color: activeMobileTab === 'editor' ? '#3B82F6' : '#5A6478' }}
+                    >
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 022 2z" />
+                        </svg>
+                        <span className="text-[9px] font-semibold uppercase tracking-wider">Edit</span>
+                    </button>
+                    <button
+                        onClick={() => setActiveMobileTab('library')}
+                        className="flex flex-col items-center justify-center gap-1 py-1 cursor-pointer transition-all active:scale-95 flex-1"
+                        style={{ color: activeMobileTab === 'library' ? '#3B82F6' : '#5A6478' }}
+                    >
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                        </svg>
+                        <span className="text-[9px] font-semibold uppercase tracking-wider">Library</span>
+                    </button>
+                </div>
+            )}
+
+            {!isMobile && !showReferences && (
                 <button
                     onClick={() => setShowReferences(true)}
                     className="fixed right-4 top-20 z-50 w-9 h-9 rounded-full flex items-center justify-center transition-all shadow-[0_4px_25px_rgba(0,0,0,0.45)] hover:scale-105 active:scale-95 cursor-pointer bg-black/60"
