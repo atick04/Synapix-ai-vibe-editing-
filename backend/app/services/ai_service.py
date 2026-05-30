@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-groq_api_key = os.getenv("GROQ_API_KEY")
+groq_api_key = os.getenv("GROQ_API_KEY") or "DUMMY_KEY_FOR_IMPORT"
 # Используем OpenAI SDK, но направляем запросы на сверхбыстрые серверы Groq
 client = AsyncOpenAI(
     api_key=groq_api_key,
