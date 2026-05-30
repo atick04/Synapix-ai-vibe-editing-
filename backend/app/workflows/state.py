@@ -21,3 +21,21 @@ class VideoEditingState(TypedDict, total=False):
     edits: List[Dict[str, Any]]
     variants: List[Dict[str, Any]]
     ready_to_render: bool
+
+    # ─── Style Engine ──────────────────────────────────────────────
+    # Graphics style hint: "paper", "vox", "mograph", or "auto"
+    style_hint: Optional[str]
+
+    # ─── Critic Agent Fields ────────────────────────────────────────
+    # Feedback string from critic → graphics agent for retry loop
+    critic_feedback: Optional[str]
+    # How many times the graphics agent has been retried by the critic
+    critic_retry_count: int
+    # Whether the critic approved the output (used for conditional edge)
+    critic_approved: bool
+
+    # ─── Multi-Agent Long-Lived Session Fields ────────────────────────
+    session_id: Optional[str]
+    production_session: Optional[Dict[str, Any]]
+    shared_memory: Optional[Dict[str, Any]]
+

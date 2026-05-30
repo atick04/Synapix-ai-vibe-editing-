@@ -1,0 +1,65 @@
+# Dependency directories
+node_modules/
+jspm_packages/
+web_drivers/
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache / builds
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.tox/
+
+# Next.js / React build
+.next/
+out/
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Project Uploads (always use Cloud Storage in Production!)
+backend/uploads/
+frontend/uploads/
+uploads/
+backend/assets/
+hyperframes_studio/
+
+# Large media files
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.mp3
+*.wav
+
+# IDE / System files
+.vscode/
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.swo
+
+# Debug / Log files
+*.log
+transcript_debug.txt
+uploads/debug_test_agent.txt

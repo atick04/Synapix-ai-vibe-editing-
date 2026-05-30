@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+dist/
+build/
+*.egg-info/
+
+# Environment files — NEVER commit these!
+.env
+.env.local
+.env.production
+
+# Uploaded files (use cloud storage in production)
+uploads/
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+
+# Logs
+*.log
+transcript_debug.txt
+
+# Test artifacts
+*.pyc
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

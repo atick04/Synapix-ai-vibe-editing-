@@ -14,3 +14,8 @@ ffmpeg-python
 openai
 elevenlabs
 google-generativeai
+Pillow
+langgraph
+langchain
+langchain-openai
+langchain-groq

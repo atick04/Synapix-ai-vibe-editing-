@@ -483,6 +483,49 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
         print("[RenderEngine] Error: V1 or A1 is completely empty. Not supported in this simplified compositing format currently.")
         return False
 
+    # --- Step 2.5: Mix Audio Assets (select_bgm, SFX, transitions) ---
+    audio_edits = [e for e in edits if e.get("action") == "add_asset" and e.get("resolved_path")]
+    if audio_edits and a_out is not None:
+        print(f"[RenderEngine] Mixing {len(audio_edits)} audio assets onto A1...")
+        mix_inputs = [a_out]
+        
+        for ae in audio_edits:
+            asset_path = ae.get("resolved_path")
+            
+            # Resolve relative/absolute path safely on Windows
+            if not os.path.isabs(asset_path):
+                # Search in potential project folders
+                for prefix in ("", "backend", "../backend", ".."):
+                    p = os.path.join(prefix, asset_path)
+                    if os.path.exists(p):
+                        asset_path = p
+                        break
+            
+            if not os.path.exists(asset_path):
+                print(f"[RenderEngine] Audio asset not found: {ae.get('resolved_path')}")
+                continue
+                
+            db = ae.get("volume", -20.0)
+            vol_factor = 10 ** (db / 20.0)
+            start_time = float(ae.get("start", 0.0))
+            start_ms = int(start_time * 1000)
+            
+            # Load audio stream
+            if ae.get("is_bgm"):
+                # Loop background music automatically
+                a_stream = ffmpeg.input(asset_path, stream_loop=-1).audio
+            else:
+                a_stream = ffmpeg.input(asset_path).audio
+                
+            # Apply volume and delay to start at correct timestamp
+            a_processed = a_stream.filter('volume', vol_factor).filter('adelay', f"{start_ms}|{start_ms}")
+            mix_inputs.append(a_processed)
+            
+        if len(mix_inputs) > 1:
+            # Mix all streams into one without dropping main volume (normalize=0)
+            a_out = ffmpeg.filter(mix_inputs, 'amix', inputs=len(mix_inputs), normalize=0)
+            print(f"[RenderEngine] ✅ Mixed {len(mix_inputs) - 1} audio tracks successfully.")
+
     # --- Step 3: Camera zoom — already handled above via subprocess ---
 
     # --- Step 4: Text overlays (drawtext) ---
@@ -712,12 +755,11 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
 
 
     # --- Step 4.4: Hyperframes HTML Canvas ---
-    hyperframes_edits = [e for e in edits if e.get("action") == "hyperframes_html"]
+    hyperframes_edits = [e for e in edits if e.get("action") in ("hyperframes_html", "canvas_overlay")]
     if hyperframes_edits:
         print(f"[Hyperframes] Found {len(hyperframes_edits)} html injections. Compositing...")
-        hyperframes_dir = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "..", "..", "hyperframes_studio")
-        )
+        hyperframes_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'hyperframes_studio'))
+        os.makedirs(hyperframes_dir, exist_ok=True)
         
         # Optimize Hyperframes rendering time by calculating the bounding time box of the graphics
         import re
@@ -750,6 +792,9 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 if s < min_start: min_start = s
                 d = max(durs) if durs else 5.0
                 if s + d > max_end: max_end = s + d
+                
+        if max_end <= 0.1:
+            max_end = float(duration)
                 
         combined_html = "\n".join([e.get("html_content", "") for e in hyperframes_edits])
         
@@ -785,6 +830,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
   </body>
 </html>"""
             
+            os.makedirs(hyperframes_dir, exist_ok=True)
             idx_file = os.path.join(hyperframes_dir, "index.html")
             with open(idx_file, "w", encoding="utf-8") as f:
                 f.write(html_doc)
@@ -794,7 +840,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
             
             # Force MOV format (ProRes 4444) for ultra-fast rendering with alpha channel!
             hf_cmd = (
-                f'npx hyperframes render --format mov --output "{hf_output}"'
+                f'npx --yes hyperframes render --format mov --output "{hf_output}"'
             )
             print(f"[Hyperframes] Running: {hf_cmd}")
             try:
@@ -846,6 +892,20 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 # Scale and crop to target resolution, adjust PTS to start at exact timestamp
                 b_scaled = b_in.filter('scale', width, height, force_original_aspect_ratio='increase').filter('crop', width, height).filter('setpts', f'PTS-STARTPTS+{start}/TB')
                 # Overlay it onto main video
+                v_out = ffmpeg.overlay(v_out, b_scaled, enable=f"between(t,{start},{end})", eof_action='pass')
+            else:
+                # Local professional fallback: Use the original input video stream, but apply a zoom + cyberpunk color grading!
+                print(f"[RenderEngine] No Pexels B-Roll downloaded. Using cinematic fallback grade on input video at {start}-{end}s")
+                b_scaled = (
+                    ffmpeg.input(input_path).video
+                    .filter('trim', start=start, end=end)
+                    .filter('setpts', 'PTS-STARTPTS')
+                    .filter('scale', width, height, force_original_aspect_ratio='increase')
+                    .filter('crop', width, height)
+                    .filter('eq', saturation=1.8, contrast=1.2, brightness=0.05)  # Professional pop color grading
+                    .filter('hue', h="120")  # Cyberpunk gold/cyan tint
+                    .filter('setpts', f'PTS-STARTPTS+{start}/TB')
+                )
                 v_out = ffmpeg.overlay(v_out, b_scaled, enable=f"between(t,{start},{end})", eof_action='pass')
 
     # --- Step 5: Subtitles via separate subprocess pass (avoids Windows path/space issues) ---
@@ -987,7 +1047,7 @@ async def render_hyperframes_composition(file_id: str, html_content: str, callba
         await callback("🖌️ Запуск Hyperframes движка (рендеринг в браузере)...")
     
     cmd = [
-        "npx", "hyperframes", "render",
+        "npx", "--yes", "hyperframes", "render",
         "--output", output_path
     ]
     
@@ -1008,3 +1068,4 @@ async def render_hyperframes_composition(file_id: str, html_content: str, callba
         
     print(f"[Hyperframes] SUCCESS -> {output_path}")
     return output_path
+

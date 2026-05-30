@@ -1,0 +1,14 @@
+# Ignore local folders during Docker build on Railway
+uploads/
+venv/
+.venv/
+.env
+.env.local
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.log
+transcript_debug.txt
+*.mp4
+*.mp3
