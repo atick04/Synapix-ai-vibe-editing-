@@ -27,7 +27,7 @@ class ProductionMemory:
         return {
             "creative_goal": self.session.get("creative_goal", "Сделать вовлекающий и динамичный контент"),
             "style_profile": self.session.get("style_profile", "auto"),
-            "graphics_style": self.session.get("visual_identity", {}).get("graphics_style", "vox"),
+            "graphics_template": self.session.get("visual_identity", {}).get("graphics_template", "concept_explainer"),
             "font_family": self.session.get("visual_identity", {}).get("font_family", "Montserrat-ExtraBold"),
             "dominant_color": self.session.get("visual_identity", {}).get("dominant_color", "White")
         }

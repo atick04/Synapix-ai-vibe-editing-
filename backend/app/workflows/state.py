@@ -12,6 +12,9 @@ class VideoEditingState(TypedDict, total=False):
     template_id: Optional[str]
     template_config: Optional[Dict[str, Any]]
     active_edits: Optional[List[Dict[str, Any]]]
+    focused_item: Optional[Dict[str, Any]]
+    media_library: Optional[List[Dict[str, Any]]]
+
     
     # Langchain message stream for generating response
     messages: Annotated[List[BaseMessage], operator.add]
@@ -23,7 +26,7 @@ class VideoEditingState(TypedDict, total=False):
     ready_to_render: bool
 
     # ─── Style Engine ──────────────────────────────────────────────
-    # Graphics style hint: "paper", "vox", "mograph", or "auto"
+    # Graphics template hint: "concept_explainer", "timeline", "cause_effect", or "auto"
     style_hint: Optional[str]
 
     # ─── Critic Agent Fields ────────────────────────────────────────

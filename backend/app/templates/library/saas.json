@@ -1,0 +1,78 @@
+{
+  "id": "saas",
+  "name": "SaaS (Minimal & Expensive)",
+  "description": "Премиальный стиль для презентаций ПО: технологичный саунд-дизайн, стерильные чистые шрифты, математически выверенные переходы.",
+  "preview_url": "https://images.unsplash.com/photo-1551434678-e076c223a692?q=80&w=600&auto=format&fit=crop",
+  "subtitles": {
+    "font_management": {
+      "base_sans_font": "Inter-Medium.ttf",
+      "accent_serif_font": "CormorantGaramond-Italic.ttf",
+      "font_size_px": 54,
+      "line_height": 1.4,
+      "position_y_percent": 75
+    },
+    "color_palette": {
+      "text_main": "#F5F5F7",
+      "text_muted": "#A1A1A6",
+      "text_accent": "#0071E3",
+      "use_bg_inversion_on_peak": true
+    },
+    "animation": {
+      "type": "word_by_word_fly",
+      "duration_frames": 8,
+      "easing_curve": "cubic-bezier(0.25, 1, 0.5, 1)"
+    },
+    "layout": {
+      "max_words_per_screen": 2,
+      "text_case": "Sentence_Case",
+      "use_shadow": true,
+      "shadow_blur_px": 12,
+      "shadow_opacity": 0.15
+    }
+  },
+  "video_processing": {
+    "audio_cut_parameters": {
+      "silence_threshold_db": -32.0,
+      "min_silence_duration_sec": 0.25,
+      "crossfade_duration_ms": 50
+    },
+    "smart_zoom": {
+      "trigger_on_emotional_peak": true,
+      "zoom_scale_factor": 1.08,
+      "animation_speed_frames": 12
+    },
+    "broll_matching": {
+      "clip_aesthetic_score_threshold": 6.5,
+      "min_broll_duration_sec": 2.0,
+      "max_broll_duration_sec": 4.5
+    }
+  },
+  "sound_design": {
+    "background_music": {
+      "genre_tags": [
+        "innovative-beats",
+        "tech-corporate",
+        "clean-ambient"
+      ],
+      "target_bpm": 110,
+      "ducking_volume_db": -12
+    },
+    "sfx_trigger_map": [
+      {
+        "event": "video_hard_cut",
+        "sfx_file": "premium_whoosh_soft.wav",
+        "volume_scale": 0.6
+      },
+      {
+        "event": "accent_word_popup",
+        "sfx_file": "digital_click_clean.wav",
+        "volume_scale": 0.4
+      },
+      {
+        "event": "bento_grid_appear",
+        "sfx_file": "smooth_ui_swipe.wav",
+        "volume_scale": 0.5
+      }
+    ]
+  }
+}

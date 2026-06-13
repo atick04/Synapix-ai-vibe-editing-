@@ -2,8 +2,21 @@
 
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { getApiUrl } from "@/utils/api";
+import { 
+  Video, 
+  FolderClock, 
+  Settings, 
+  LayoutTemplate,
+  Wand2,
+  ChevronRight,
+  Play,
+  UploadCloud,
+  Sparkles,
+  Loader2
+} from "lucide-react";
 
-export default function Home() {
+export default function Dashboard() {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -19,7 +32,7 @@ export default function Home() {
     e.preventDefault();
     setIsDragging(false);
     const dropped = e.dataTransfer.files[0];
-    if (dropped && dropped.type.startsWith("video/")) {
+    if (dropped) {
       setFile(dropped);
     }
   }, []);
@@ -31,7 +44,7 @@ export default function Home() {
     const formData = new FormData();
     formData.append("file", file);
 
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+    const API_URL = getApiUrl();
 
     try {
       const response = await fetch(`${API_URL}/api/video/upload`, {
@@ -50,224 +63,141 @@ export default function Home() {
   };
 
   return (
-    <main
-      className="min-h-screen flex flex-col items-center justify-center p-6 select-none overflow-hidden relative"
-      style={{ background: "#0B0B0F" }}
-    >
-      {/* Ambient glow background */}
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          background:
-            "radial-gradient(ellipse 60% 50% at 50% 40%, rgba(59,130,246,0.06) 0%, rgba(124,58,237,0.04) 50%, transparent 100%)",
-        }}
-      />
+    <div className="h-full overflow-y-auto bg-transparent text-neutral-800 dark:text-neutral-200 font-sans">
 
-      {/* Subtle grid overlay */}
-      <div
-        className="absolute inset-0 pointer-events-none opacity-[0.025]"
-        style={{
-          backgroundImage:
-            "linear-gradient(rgba(255,255,255,0.5) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.5) 1px, transparent 1px)",
-          backgroundSize: "48px 48px",
-        }}
-      />
+      <main className="w-full p-6 md:p-8 lg:p-12 lg:pl-6 max-w-6xl mx-auto">
+        <div>
+          
+          <header className="mb-10">
+            <h1 className="text-[32px] md:text-[40px] font-semibold tracking-tight text-neutral-900 dark:text-neutral-100 mb-2">
+              Create new project
+            </h1>
+            <p className="text-[15px] text-neutral-500 dark:text-neutral-400">
+              Upload your raw footage and let the Cinematic AI handle the rest.
+            </p>
+          </header>
 
-      {/* Main Card */}
-      <div
-        className="relative z-10 w-full max-w-[420px] animate-fade-blur"
-        style={{ animationDelay: "0.05s" }}
-      >
-        {/* Logo / Brand */}
-        <div className="flex flex-col items-center mb-10">
-          <div
-            className="w-10 h-10 rounded-2xl mb-5 flex items-center justify-center overflow-hidden"
-            style={{
-              background: "rgba(255,255,255,0.06)",
-              border: "1px solid rgba(255,255,255,0.1)",
-              boxShadow: "0 0 24px rgba(59,130,246,0.12)",
-            }}
-          >
-            {/* Synapix icon — stylised S */}
-            <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5" xmlns="http://www.w3.org/2000/svg">
-              <path
-                d="M6 8.5C6 7.12 7.12 6 8.5 6H15.5C16.88 6 18 7.12 18 8.5C18 9.88 16.88 11 15.5 11H8.5C7.12 11 6 12.12 6 13.5C6 14.88 7.12 16 8.5 16H15.5C16.88 16 18 14.88 18 13.5"
-                stroke="#F5F7FA"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-              />
-            </svg>
-          </div>
-
-          <h1
-            className="text-[15px] font-semibold tracking-tight mb-2"
-            style={{ color: "#F5F7FA", letterSpacing: "-0.01em" }}
-          >
-            Synapix Cinematic Studio
-          </h1>
-          <p
-            className="text-[12px] text-center leading-relaxed max-w-[280px]"
-            style={{ color: "#5A6478" }}
-          >
-            AI-native video editor. Upload your footage — the system does the rest.
-          </p>
-        </div>
-
-        {/* Upload zone */}
-        <div
-          onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-          onDragLeave={() => setIsDragging(false)}
-          onDrop={handleDrop}
-          className="relative group cursor-pointer transition-all duration-300 mb-4"
-          style={{
-            borderRadius: "20px",
-            background: isDragging
-              ? "rgba(59,130,246,0.07)"
-              : file
-              ? "rgba(59,130,246,0.05)"
-              : "rgba(255,255,255,0.03)",
-            border: `1px dashed ${
-              isDragging
-                ? "rgba(59,130,246,0.5)"
-                : file
-                ? "rgba(59,130,246,0.35)"
-                : "rgba(255,255,255,0.1)"
-            }`,
-            transition: "all 0.3s cubic-bezier(0.22,1,0.36,1)",
-          }}
-        >
-          {!uploading && (
-            <input
-              type="file"
-              accept="video/*"
-              onChange={handleFileChange}
-              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-            />
-          )}
-
-          <div className="flex flex-col items-center justify-center py-12 px-6">
-            {uploading ? (
-              <div className="flex flex-col items-center gap-4">
-                {/* Spinner */}
+          {/* Bento Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 md:gap-8">
+            
+            {/* Main Upload Card */}
+            <div className="md:col-span-2 row-span-2 bg-white dark:bg-neutral-900 rounded-[24px] shadow-sm border border-neutral-200/50 dark:border-neutral-800/50 overflow-hidden flex flex-col transition-all duration-300">
+              <div className="p-8 flex-1 flex flex-col">
+                <h2 className="text-[18px] font-medium mb-6 text-neutral-900 dark:text-neutral-100">Upload Media</h2>
+                
                 <div
-                  className="w-8 h-8 rounded-full"
-                  style={{
-                    border: "1.5px solid rgba(255,255,255,0.08)",
-                    borderTopColor: "rgba(59,130,246,0.7)",
-                    animation: "spin 0.9s linear infinite",
-                  }}
-                />
-                <span className="text-[12px]" style={{ color: "#5A6478" }}>
-                  Analyzing footage...
-                </span>
-              </div>
-            ) : file ? (
-              <div className="flex flex-col items-center gap-3 animate-slide-up">
-                {/* File icon */}
-                <div
-                  className="w-10 h-10 rounded-xl flex items-center justify-center"
-                  style={{ background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.2)" }}
+                  onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={handleDrop}
+                  className={`flex-1 flex flex-col items-center justify-center border-2 border-dashed rounded-[20px] transition-all duration-200 relative group p-8 min-h-[300px] ${
+                    isDragging 
+                      ? "border-neutral-900 dark:border-neutral-100 bg-neutral-50/80 dark:bg-neutral-800/80" 
+                      : file 
+                        ? "border-neutral-200 dark:border-neutral-800 bg-neutral-50/30 dark:bg-neutral-800/30" 
+                        : "border-neutral-200 dark:border-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-700 hover:bg-neutral-50/50 dark:hover:bg-neutral-800/50"
+                  }`}
                 >
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none">
-                    <path d="M15 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V7z" stroke="rgba(59,130,246,0.9)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                    <path d="M15 2v5h5M10 9l2 2 4-4" stroke="rgba(59,130,246,0.9)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
+                  {!uploading && (
+                    <input
+                      type="file"
+                      accept="video/*"
+                      onChange={handleFileChange}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                    />
+                  )}
+
+                  {uploading ? (
+                    <div className="flex flex-col items-center gap-4 animate-in fade-in zoom-in duration-300">
+                      <Loader2 className="w-8 h-8 text-neutral-900 dark:text-neutral-100 animate-spin" />
+                      <span className="text-[15px] font-medium text-neutral-900 dark:text-neutral-100">Uploading and analyzing...</span>
+                    </div>
+                  ) : file ? (
+                    <div className="flex flex-col items-center gap-3 animate-in fade-in zoom-in duration-300">
+                      <div className="w-16 h-16 rounded-full bg-neutral-100 dark:bg-neutral-800 flex items-center justify-center mb-2">
+                        <Video className="w-8 h-8 text-neutral-900 dark:text-neutral-100" />
+                      </div>
+                      <span className="text-[16px] font-medium text-neutral-900 dark:text-neutral-100">{file.name}</span>
+                      <span className="text-[14px] text-neutral-500 dark:text-neutral-400">{(file.size / (1024 * 1024)).toFixed(1)} MB</span>
+                      <span className="text-[14px] text-neutral-400 dark:text-neutral-500 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">Click to replace file</span>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center gap-4 text-center">
+                      <div className="w-16 h-16 rounded-full bg-neutral-100 dark:bg-neutral-800 flex items-center justify-center mb-2 group-hover:scale-105 transition-transform duration-300">
+                        <UploadCloud className="w-8 h-8 text-neutral-600 dark:text-neutral-400" />
+                      </div>
+                      <h3 className="text-[16px] font-medium text-neutral-900 dark:text-neutral-100">Drag & drop your video here</h3>
+                      <p className="text-[14px] text-neutral-500 dark:text-neutral-400 max-w-[260px]">
+                        Support for MP4, MOV, and WebM formats up to 2GB.
+                      </p>
+                    </div>
+                  )}
                 </div>
-                <div className="flex flex-col items-center gap-1">
-                  <span className="text-[13px] font-medium" style={{ color: "#F5F7FA" }}>
-                    {file.name}
-                  </span>
-                  <span className="text-[11px]" style={{ color: "#5A6478" }}>
-                    {(file.size / (1024 * 1024)).toFixed(1)} MB
-                  </span>
-                </div>
-                <span className="text-[10px]" style={{ color: "rgba(59,130,246,0.6)" }}>
-                  click to change
-                </span>
               </div>
-            ) : (
-              <div className="flex flex-col items-center gap-3">
-                {/* Upload icon */}
-                <div
-                  className="w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-200 group-hover:scale-105"
-                  style={{
-                    background: "rgba(255,255,255,0.04)",
-                    border: "1px solid rgba(255,255,255,0.08)",
-                  }}
-                >
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none">
-                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" stroke="rgba(255,255,255,0.4)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                    <polyline points="17 8 12 3 7 8" stroke="rgba(255,255,255,0.4)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-                    <line x1="12" y1="3" x2="12" y2="15" stroke="rgba(255,255,255,0.4)" strokeWidth="1.5" strokeLinecap="round"/>
-                  </svg>
-                </div>
-                <div className="flex flex-col items-center gap-1">
-                  <span className="text-[13px] font-medium" style={{ color: "#9AA4B2" }}>
-                    Drop video here
-                  </span>
-                  <span className="text-[11px]" style={{ color: "#5A6478" }}>
-                    or click to browse
-                  </span>
-                </div>
-                <span
-                  className="text-[10px] px-3 py-1 rounded-full"
-                  style={{
-                    color: "#5A6478",
-                    background: "rgba(255,255,255,0.03)",
-                    border: "1px solid rgba(255,255,255,0.06)",
-                  }}
-                >
-                  MP4 · MOV · up to 500 MB
+
+              {/* Action Bar */}
+              <div className="bg-neutral-50 dark:bg-neutral-800/30 p-6 border-t border-neutral-100 dark:border-neutral-800 flex items-center justify-between">
+                <span className="text-[14px] text-neutral-500 dark:text-neutral-400">
+                  {file ? "Ready to compose" : "Select a file to begin"}
                 </span>
+                <button
+                  onClick={handleUpload}
+                  disabled={!file || uploading}
+                  className={`px-6 py-3 rounded-[16px] text-[15px] font-medium flex items-center gap-2 transition-all duration-200 ${
+                    file && !uploading
+                      ? "bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:bg-neutral-800 dark:hover:bg-neutral-200 hover:scale-[1.02] active:scale-[0.98] shadow-sm"
+                      : "bg-neutral-200 dark:bg-neutral-800 text-neutral-400 dark:text-neutral-600 cursor-not-allowed"
+                  }`}
+                >
+                  {uploading ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      Processing
+                    </>
+                  ) : (
+                    <>
+                      Start Engine
+                      <ChevronRight className="w-5 h-5" />
+                    </>
+                  )}
+                </button>
               </div>
-            )}
+            </div>
+
+            {/* Side Card 1: AI Commercial Generator */}
+            <div className="bg-white dark:bg-neutral-900 rounded-[24px] shadow-sm border border-neutral-200/50 dark:border-neutral-800/50 p-8 flex flex-col justify-between group cursor-pointer hover:border-neutral-300 dark:hover:border-neutral-700 transition-all duration-300">
+              <div>
+                <div className="w-12 h-12 rounded-[16px] bg-neutral-50 dark:bg-neutral-800 flex items-center justify-center mb-6">
+                  <Wand2 className="w-6 h-6 text-neutral-900 dark:text-neutral-100" />
+                </div>
+                <h3 className="text-[18px] font-medium text-neutral-900 dark:text-neutral-100 mb-3">Idea-to-Ad Generator</h3>
+                <p className="text-[14px] text-neutral-500 dark:text-neutral-400 leading-relaxed">
+                  Generate a commercial video completely from scratch using AI. Just type your idea.
+                </p>
+              </div>
+              <div className="mt-8 flex items-center gap-2 text-[14px] font-medium text-neutral-900 dark:text-neutral-100">
+                <span>Try Beta</span>
+                <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+              </div>
+            </div>
+
+            {/* Side Card 2: Recent Projects */}
+            <div className="bg-white dark:bg-neutral-900 rounded-[24px] shadow-sm border border-neutral-200/50 dark:border-neutral-800/50 p-8 flex flex-col">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-[18px] font-medium text-neutral-900 dark:text-neutral-100">Recent</h3>
+                <button className="w-8 h-8 rounded-full bg-neutral-50 dark:bg-neutral-800 flex items-center justify-center hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors">
+                  <Play className="w-4 h-4 text-neutral-600 dark:text-neutral-400 ml-0.5" />
+                </button>
+              </div>
+              
+              <div className="flex-1 flex flex-col justify-center items-center text-center">
+                <FolderClock className="w-10 h-10 text-neutral-200 dark:text-neutral-800 mb-4" />
+                <p className="text-[14px] text-neutral-500 dark:text-neutral-400">No recent projects found. Upload a video to start.</p>
+              </div>
+            </div>
+
           </div>
         </div>
-
-        {/* CTA Button */}
-        <button
-          onClick={handleUpload}
-          disabled={!file || uploading}
-          className="w-full py-3 px-4 flex items-center justify-center gap-2.5 transition-all duration-300 font-medium text-[13px] cursor-pointer"
-          style={{
-            borderRadius: "14px",
-            background: file && !uploading
-              ? "linear-gradient(135deg, rgba(59,130,246,0.18) 0%, rgba(124,58,237,0.12) 100%)"
-              : "rgba(255,255,255,0.03)",
-            border: `1px solid ${
-              file && !uploading ? "rgba(59,130,246,0.3)" : "rgba(255,255,255,0.06)"
-            }`,
-            color: file && !uploading ? "#F5F7FA" : "#3A4151",
-            boxShadow: file && !uploading ? "0 0 20px rgba(59,130,246,0.08)" : "none",
-          }}
-        >
-          {uploading ? (
-            <>
-              <div
-                className="w-3.5 h-3.5 rounded-full shrink-0"
-                style={{
-                  border: "1.5px solid rgba(255,255,255,0.15)",
-                  borderTopColor: "#3B82F6",
-                  animation: "spin 0.9s linear infinite",
-                }}
-              />
-              <span>Analyzing...</span>
-            </>
-          ) : (
-            <>
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
-                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-              <span>Start Composition</span>
-            </>
-          )}
-        </button>
-
-        {/* Bottom footnote */}
-        <p className="text-center text-[10px] mt-6" style={{ color: "#3A4151" }}>
-          Powered by Synapix Cinematic Engine
-        </p>
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }

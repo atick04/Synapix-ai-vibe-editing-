@@ -30,59 +30,28 @@ TOOLS = [
         }
     },
     {
-        "name": "generate_scene_override",
-        "description": "Создает полноэкранную графическую сцену (карточку, список) со звуковым переходом.",
+        "name": "create_scene",
+        "description": "Создает эффектную инфографику или сплит-экран, используя семантический граф (шаблон, сущности, связи).",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "start_time": {"type": "number", "description": "Таймкод появления сцены в секундах"},
-                "duration": {"type": "number", "description": "Длительность графической сцены"},
-                "scene_type": {"type": "string", "description": "Тип сцены (например: 'stat_burst', 'bullet_list', 'infographic')"},
-                "elements": {
+                "start_time": {"type": "number", "description": "Таймкод начала сцены в секундах"},
+                "duration": {"type": "number", "description": "Длительность сцены в секундах"},
+                "scene_template": {"type": "string", "description": "Шаблон сцены (например: 'cause_effect', 'timeline', 'comparison', 'concept_explainer')"},
+                "mood": {"type": "string", "description": "Настроение сцены (например: 'analytical', 'energetic', 'dramatic')"},
+                "energy": {"type": "number", "description": "Уровень энергии от 0.0 до 1.0"},
+                "entities": {
                     "type": "array",
                     "items": {"type": "object"},
-                    "description": "Декларативные элементы графики (заголовки, цифры, стикеры)"
+                    "description": "Список сущностей. Должен включать id, type, text/asset_id и visual_role"
                 },
-                "camera": {"type": "object", "description": "Параметры зума и вращения камеры в сцене"},
-                "sfx_query": {"type": "string", "description": "Звуковой эффект перехода сцены"}
-            },
-            "required": ["start_time", "duration", "scene_type", "elements"]
-        }
-    },
-    {
-        "name": "generate_vox_graphics",
-        "description": "Создает анимированную Vox-инфографику поверх спикерапроекта.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "start_time": {"type": "number", "description": "Время начала показа инфографики"},
-                "duration": {"type": "number", "description": "Длительность показа инфографики"},
-                "elements": {
+                "relations": {
                     "type": "array",
                     "items": {"type": "object"},
-                    "description": "Декларативные элементы графики для чистой Vox-визуализации"
-                },
-                "camera": {"type": "object", "description": "Движение камеры"}
+                    "description": "Связи между сущностями. Список объектов с полями from, to, type"
+                }
             },
-            "required": ["start_time", "duration", "elements"]
-        }
-    },
-    {
-        "name": "generate_mograph_graphics",
-        "description": "Создает неоновые моушн-плашки и оверлеи.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "start_time": {"type": "number", "description": "Время начала неонового моушена"},
-                "duration": {"type": "number", "description": "Длительность моушена"},
-                "elements": {
-                    "type": "array",
-                    "items": {"type": "object"},
-                    "description": "Декларативные элементы для моушн-сцены"
-                },
-                "camera": {"type": "object", "description": "Движение камеры"}
-            },
-            "required": ["start_time", "duration", "elements"]
+            "required": ["start_time", "duration", "scene_template", "entities"]
         }
     },
     {

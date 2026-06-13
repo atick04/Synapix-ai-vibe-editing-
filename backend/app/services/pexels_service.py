@@ -2,14 +2,15 @@ import os
 import requests
 import uuid
 
-def download_broll(query: str, duration: float) -> str:
+def download_broll(query: str, duration: float, aspect_ratio: str = "vertical") -> str:
     api_key = os.getenv("PEXELS_API_KEY")
     if not api_key or api_key == "YOUR_PEXELS_KEY":
         print("Pexels API: Не найден ключ (PEXELS_API_KEY). Оверлей отменен.")
         return None
         
-    print(f"[Motion Agent] Ищу b-roll по запросу: '{query}'...")
-    url = f"https://api.pexels.com/videos/search?query={query}&per_page=15&orientation=portrait"
+    orientation = "landscape" if aspect_ratio == "horizontal" else "portrait"
+    print(f"[Motion Agent] Ищу b-roll по запросу: '{query}' (orientation: {orientation})...")
+    url = f"https://api.pexels.com/videos/search?query={query}&per_page=15&orientation={orientation}"
     headers = {"Authorization": api_key}
     
     try:
@@ -52,11 +53,12 @@ def download_broll(query: str, duration: float) -> str:
         print(f"Pexels Request Error: {e}")
         return None
 
-def resolve_broll_url(query: str, duration: float) -> str:
+def resolve_broll_url(query: str, duration: float, aspect_ratio: str = "vertical") -> str:
     api_key = os.getenv("PEXELS_API_KEY")
     if not api_key or api_key == "YOUR_PEXELS_KEY":
         return None
-    url = f"https://api.pexels.com/videos/search?query={query}&per_page=15&orientation=portrait"
+    orientation = "landscape" if aspect_ratio == "horizontal" else "portrait"
+    url = f"https://api.pexels.com/videos/search?query={query}&per_page=15&orientation={orientation}"
     headers = {"Authorization": api_key}
     try:
         res = requests.get(url, headers=headers)

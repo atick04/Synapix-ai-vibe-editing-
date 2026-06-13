@@ -31,8 +31,16 @@ def get_animation_tag(style: str) -> str:
     }
     return styles.get(style, styles["fade"])
 
-def generate_ass(transcript, filepath, position="center", font="Impact", font_size=110, use_outline=True, font_color="White", cuts=None, animation_style="fade"):
+def hex_to_ass_color(hex_str: str) -> str:
+    hex_str = hex_str.lstrip('#')
+    if len(hex_str) == 6:
+        r, g, b = hex_str[0:2], hex_str[2:4], hex_str[4:6]
+        return f"&H00{b}{g}{r}"
+    return "&H00FFFFFF"
+
+def generate_ass(transcript, filepath, position="center", font="Impact", font_size=110, use_outline=True, font_color="White", cuts=None, animation_style="fade", template_id=None):
     """Generate ASS subtitle file, adjusting timing for cut_out edits and injecting animation tags."""
+    from app.services.template_service import get_template
     cuts = sorted(cuts or [], key=lambda c: c.get('start', 0))
     
     def remap_time(t):
@@ -78,16 +86,54 @@ def generate_ass(transcript, filepath, position="center", font="Impact", font_si
         alignment = 5
         margin_v = 500
 
-    color_map = {
-        "White":  ("&H00FFFFFF", "&H00A0A0A0"),
-        "Yellow": ("&H0000D7FF", "&H00A0A0A0"),
-        "Green":  ("&H0055FF55", "&H00A0A0A0"),
-        "Red":    ("&H005555FF", "&H00A0A0A0"),
-        "Cyan":   ("&H00FFFF00", "&H00A0A0A0"),
-    }
-    primary_col, unlit_col = color_map.get(font_color, ("&H00FFFFFF", "&H00A0A0A0"))
-    outline = 10 if use_outline else 0
-    shadow = 8 if use_outline else 0
+    use_aesthetic_styling = False
+    base_font = font
+    accent_font = font
+    text_main_color = "&H00FFFFFF"
+    text_accent_color = "&H0000D7FF" # Yellow
+    text_case = "UPPER"
+    max_words = 3
+    shadow_val = 4
+    bold_val = -1
+    
+    if template_id:
+        tpl = get_template(template_id)
+        if tpl and tpl.subtitles:
+            sub = tpl.subtitles
+            if sub.font_management:
+                use_aesthetic_styling = True
+                base_font = sub.font_management.base_sans_font.replace("-Medium.ttf", "").replace(".ttf", "")
+                accent_font = sub.font_management.accent_serif_font.replace("-Italic.ttf", "").replace(".ttf", "").replace("CormorantGaramond", "Cormorant Garamond")
+                font_size = sub.font_management.font_size_px
+                
+                if sub.color_palette:
+                    text_main_color = hex_to_ass_color(sub.color_palette.text_main)
+                    text_accent_color = hex_to_ass_color(sub.color_palette.text_accent)
+                    
+                if sub.layout:
+                    text_case = sub.layout.text_case
+                    max_words = sub.layout.max_words_per_screen
+                    shadow_val = int(sub.layout.shadow_blur_px // 2) if sub.layout.shadow_blur_px else 4
+                bold_val = 0
+
+    if use_aesthetic_styling:
+        primary_col = text_main_color
+        unlit_col = text_main_color
+        outline = 0
+        shadow = shadow_val
+        font = base_font
+    else:
+        color_map = {
+            "White":  ("&H00FFFFFF", "&H00A0A0A0"),
+            "Yellow": ("&H0000D7FF", "&H00A0A0A0"),
+            "Green":  ("&H0055FF55", "&H00A0A0A0"),
+            "Red":    ("&H005555FF", "&H00A0A0A0"),
+            "Cyan":   ("&H00FFFF00", "&H00A0A0A0"),
+        }
+        primary_col, unlit_col = color_map.get(font_color, ("&H00FFFFFF", "&H00A0A0A0"))
+        outline = 10 if use_outline else 0
+        shadow = 8 if use_outline else 0
+        
     outline_col = "&H00000000"
     shadow_col = "&HAA000000"
 
@@ -99,7 +145,7 @@ WrapStyle: 1
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Premium,{font},{font_size},{primary_col},{unlit_col},{outline_col},{shadow_col},-1,0,0,0,100,100,0,0,1,{outline},{shadow},{alignment},{margin_l},{margin_r},{margin_v},1
+Style: Premium,{font},{font_size},{primary_col},{unlit_col},{outline_col},{shadow_col},{bold_val},0,0,0,100,100,0,0,1,{outline},{shadow},{alignment},{margin_l},{margin_r},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -122,7 +168,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 f.write(f"Dialogue: 0,{start},{end},Premium,,0,0,0,,{anim}{text}\n")
             return
 
-        # Group words into chunks of 3, skip cut regions
+        # Group words into chunks of max_words, skip cut regions
         chunks, cur_chunk = [], []
         for w in words:
             ws, we = w.get('start', 0.0), w.get('end', 0.0)
@@ -133,7 +179,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     cur_chunk = []
                 continue
             cur_chunk.append(w)
-            if len(cur_chunk) == 3:
+            if len(cur_chunk) == max_words:
                 chunks.append(cur_chunk)
                 cur_chunk = []
         if cur_chunk:
@@ -143,7 +189,34 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             chunk_start = remap_time(chunk[0].get('start', 0.0))
             chunk_end = remap_time(chunk[-1].get('end', 0.0))
             
-            if animation_style == "typewriter":
+            if use_aesthetic_styling:
+                text_line = ""
+                accent_idx = len(chunk) // 2 if len(chunk) == 3 else 1 if len(chunk) == 2 else -1
+                
+                for idx, w in enumerate(chunk):
+                    word_str = w.get('word', '').strip()
+                    
+                    # Apply text casing
+                    if text_case == "Sentence_Case":
+                        if idx == 0:
+                            word_str = word_str.capitalize()
+                        else:
+                            word_str = word_str.lower()
+                    elif text_case == "UPPER":
+                        word_str = word_str.upper()
+                    elif text_case == "lower":
+                        word_str = word_str.lower()
+                        
+                    # Apply font and color overrides for highlighted word
+                    if idx == accent_idx:
+                        text_line += f"{{\\fn{accent_font}\\i1\\c{text_accent_color}}}{word_str}{{\\fn{base_font}\\i0\\c{text_main_color}}} "
+                    else:
+                        text_line += f"{word_str} "
+                        
+                start_str = format_ass_time(chunk_start)
+                end_str = format_ass_time(chunk_end)
+                f.write(f"Dialogue: 0,{start_str},{end_str},Premium,,0,0,0,,{anim}{text_line.strip()}\n")
+            elif animation_style == "typewriter":
                 # Each word gets its own line, staggered by 100ms
                 for idx, w in enumerate(chunk):
                     ws = remap_time(w.get('start', 0.0))
@@ -322,7 +395,7 @@ def build_drawtext_kwargs(text: str, start: float, end: float,
         "font": "Arial",
     }
 
-def render_video(input_path: str, output_path: str, transcript_data: dict, edits: list, edl: dict = None, font: str = "Arial", font_size: int = 100, use_outline: bool = True, font_color: str = "White"):
+def render_video(input_path: str, output_path: str, transcript_data: dict, edits: list, edl: dict = None, font: str = "Arial", font_size: int = 100, use_outline: bool = True, font_color: str = "White", template_id: str = None):
     """Advanced Rendering Pipeline using FFmpeg Concat, ASS overlays, Zoom, Speed, Text and EDL"""
     ass_path = output_path.replace(".mp4", ".ass")
 
@@ -346,8 +419,8 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
     text_overlays = [e for e in edits if e.get("action") == "add_text_overlay"]
 
     # Generate ASS AFTER parsing cuts so timing can be remapped
-    print(f"[ASS] animation_style={animation_style}, position={position}")
-    generate_ass(transcript_data, ass_path, position=position, font=font, font_size=font_size, use_outline=use_outline, font_color=font_color, cuts=cuts, animation_style=animation_style)
+    print(f"[ASS] animation_style={animation_style}, position={position}, template_id={template_id}")
+    generate_ass(transcript_data, ass_path, position=position, font=font, font_size=font_size, use_outline=use_outline, font_color=font_color, cuts=cuts, animation_style=animation_style, template_id=template_id)
     safe_ass = ass_path.replace("\\", "/")
 
     print(f"[Render] Step 0: Probing video metadata for {input_path}")

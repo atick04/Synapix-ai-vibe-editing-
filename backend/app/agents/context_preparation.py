@@ -248,6 +248,35 @@ async def prepare_context_node(state: VideoEditingState) -> VideoEditingState:
     aspect_ratio = "horizontal" if width > height else "vertical"
     print(f"[PrepareContext] Detected display resolution: {width}x{height} ({aspect_ratio})")
 
+    # ── Override with Manual Format ──
+    target_format = state.get("target_format", "auto")
+    if target_format == "16:9":
+        width, height = 1920, 1080
+        aspect_ratio = "horizontal"
+        print(f"[PrepareContext] Manual override to 16:9 ({width}x{height})")
+    elif target_format == "9:16":
+        width, height = 1080, 1920
+        aspect_ratio = "vertical"
+        print(f"[PrepareContext] Manual override to 9:16 ({width}x{height})")
+
+    # ── Load Media Library ──
+    media_library = []
+    lib_path = os.path.join("uploads", f"{file_id}_media_library.json")
+    duration = session.get("duration", 0.0) if session else 0.0
+    if os.path.exists(lib_path):
+        try:
+            with open(lib_path, "r", encoding="utf-8") as f:
+                media_library = json.load(f)
+        except Exception:
+            pass
+    if not media_library:
+        media_library = [{
+            "id": "main",
+            "filename": "Original Video",
+            "path": f"uploads/{file_id}.mp4",
+            "duration": duration
+        }]
+
     ReasoningManager.complete_analysis(
         f"Анализ завершен. Загружен транскрипт и обнаружено {len(auto_cuts)} пауз для удаления. "
         f"Параметры видео: {aspect_ratio} ({width}x{height})."
@@ -263,5 +292,6 @@ async def prepare_context_node(state: VideoEditingState) -> VideoEditingState:
         "session_id": session.get("session_id"),
         "aspect_ratio": aspect_ratio,
         "width": width,
-        "height": height
+        "height": height,
+        "media_library": media_library
     }

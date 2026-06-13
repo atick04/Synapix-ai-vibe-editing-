@@ -17,17 +17,13 @@ logger = logging.getLogger(__name__)
 MAX_BUDGETS = {
     "create_zoom": 6,
     "add_broll": 8,
-    "generate_vox_graphics": 3,
-    "generate_mograph_graphics": 3,
-    "generate_scene_override": 2,
+    "create_scene": 5,
 }
 
 METRIC_MAP = {
     "create_zoom": "zooms_count",
     "add_broll": "brolls_count",
-    "generate_vox_graphics": "graphics_count",
-    "generate_mograph_graphics": "graphics_count",
-    "generate_scene_override": "scenes_count",
+    "create_scene": "graphics_count",
 }
 
 class ToolExecutor:

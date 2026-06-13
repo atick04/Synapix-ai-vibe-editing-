@@ -161,7 +161,7 @@ function LiveActivityFeed({ steps, logs }: { steps: ReasoningStep[]; logs: strin
             <svg className="w-3 h-3 text-zinc-500 shrink-0" viewBox="0 0 24 24" fill="none">
               <path d="M5 13l4 4L19 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
-            <span className="text-[9px] font-mono text-zinc-500">
+            <span className="text-[11px] font-mono text-zinc-500">
               {completedPrior.length} steps completed
             </span>
           </div>
@@ -169,7 +169,7 @@ function LiveActivityFeed({ steps, logs }: { steps: ReasoningStep[]; logs: strin
         elements.push(
           <div key="last-completed" className="flex items-center gap-2 opacity-50 py-0.5 animate-slide-up pl-5">
             <StepIcon status={completedPrior[completedPrior.length - 1].status} />
-            <span className="text-[10px] font-mono text-zinc-400 truncate">
+            <span className="text-[11px] font-mono text-zinc-400 truncate">
               {completedPrior[completedPrior.length - 1].step}
             </span>
           </div>
@@ -179,7 +179,7 @@ function LiveActivityFeed({ steps, logs }: { steps: ReasoningStep[]; logs: strin
           elements.push(
             <div key={`prior-${idx}`} className="flex items-center gap-2 opacity-50 py-0.5 animate-slide-up pl-5">
               <StepIcon status={s.status} />
-              <span className="text-[10px] font-mono text-zinc-400 truncate">
+              <span className="text-[11px] font-mono text-zinc-400 truncate">
                 {s.step}
               </span>
             </div>
@@ -193,7 +193,7 @@ function LiveActivityFeed({ steps, logs }: { steps: ReasoningStep[]; logs: strin
           <span className="text-[11px] font-mono font-medium text-white flex-1 truncate flex items-center gap-1.5">
             {activeStep.step}
             {activeStep.agent && (
-              <span className="text-[8px] px-1 py-0.2 rounded bg-zinc-900 text-zinc-400 border border-zinc-800">
+              <span className="text-[11px] px-1 py-0.2 rounded bg-zinc-900 text-zinc-400 border border-zinc-800">
                 {activeStep.agent}
               </span>
             )}
@@ -215,7 +215,7 @@ function LiveActivityFeed({ steps, logs }: { steps: ReasoningStep[]; logs: strin
             <svg className="w-3 h-3 text-zinc-500 shrink-0" viewBox="0 0 24 24" fill="none">
               <path d="M5 13l4 4L19 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
-            <span className="text-[9px] font-mono text-zinc-500">
+            <span className="text-[11px] font-mono text-zinc-500">
               {stageSteps.length - 1} steps completed
             </span>
           </div>
@@ -223,7 +223,7 @@ function LiveActivityFeed({ steps, logs }: { steps: ReasoningStep[]; logs: strin
         elements.push(
           <div key="last-one" className="flex items-center gap-2 opacity-60 py-0.5 animate-slide-up pl-5">
             <StepIcon status={stageSteps[stageSteps.length - 1].status} />
-            <span className="text-[10px] font-mono text-zinc-300 truncate">
+            <span className="text-[11px] font-mono text-zinc-300 truncate">
               {stageSteps[stageSteps.length - 1].step}
             </span>
           </div>
@@ -233,7 +233,7 @@ function LiveActivityFeed({ steps, logs }: { steps: ReasoningStep[]; logs: strin
           elements.push(
             <div key={`step-${idx}`} className="flex items-center gap-2 opacity-60 py-0.5 animate-slide-up pl-5">
               <StepIcon status={s.status} />
-              <span className="text-[10px] font-mono text-zinc-300 truncate">
+              <span className="text-[11px] font-mono text-zinc-300 truncate">
                 {s.step}
               </span>
             </div>
@@ -269,7 +269,7 @@ function LiveActivityFeed({ steps, logs }: { steps: ReasoningStep[]; logs: strin
             <div className="flex items-center gap-3 py-0.5">
               {isCompleted ? (
                 <div className="w-3.5 h-3.5 rounded-full flex items-center justify-center shrink-0 bg-zinc-900 border border-zinc-800">
-                  <svg className="w-2.5 h-2.5 text-zinc-300" viewBox="0 0 24 24" fill="none">
+                  <svg className="w-2 h-2 text-zinc-300" viewBox="0 0 24 24" fill="none">
                     <path d="M5 13l4 4L19 7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
                   </svg>
                 </div>
@@ -284,7 +284,7 @@ function LiveActivityFeed({ steps, logs }: { steps: ReasoningStep[]; logs: strin
               )}
               
               <span
-                className="text-[10px] font-mono tracking-wide uppercase"
+                className="text-[11px] font-mono tracking-wide uppercase"
                 style={{
                   color: isActive ? '#FFFFFF' : isCompleted ? '#8E9AAB' : '#3E4656',
                   fontWeight: isActive ? 600 : 400
@@ -321,18 +321,18 @@ function HistoricalReasoning({ steps, index }: { steps: ReasoningStep[]; index: 
     >
       <button
         onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center justify-between px-3 py-2 cursor-pointer group"
+        className="w-full flex items-center justify-between px-4 py-3 cursor-pointer group"
       >
         <div className="flex items-center gap-2">
           <span
             className="w-1.5 h-1.5 rounded-full"
             style={{ background: "rgba(59,130,246,0.5)", display: "inline-block" }}
           />
-          <span className="text-[10px] font-mono" style={{ color: "#4A5568" }}>
+          <span className="text-[11px] font-mono" style={{ color: "#4A5568" }}>
             reasoning #{index}
           </span>
           <span
-            className="text-[9px] px-1.5 py-0.5 rounded-full font-mono"
+            className="text-[11px] px-1 py-0.5 rounded-full font-mono"
             style={{ background: "rgba(59,130,246,0.08)", color: "rgba(59,130,246,0.6)" }}
           >
             {doneCount}/{steps.length} steps
@@ -348,11 +348,11 @@ function HistoricalReasoning({ steps, index }: { steps: ReasoningStep[]; index: 
       </button>
 
       {open && (
-        <div className="px-3 pb-3 flex flex-col gap-1.5 border-t" style={{ borderColor: "rgba(255,255,255,0.04)" }}>
+        <div className="px-4 pb-3 flex flex-col gap-1.5 border-t" style={{ borderColor: "rgba(255,255,255,0.04)" }}>
           {steps.map((step, i) => (
             <div key={i} className="flex items-center gap-2 py-0.5">
               <StepIcon status={step.status} />
-              <span className="text-[10px] font-mono" style={{ color: "#4A5568" }}>
+              <span className="text-[11px] font-mono" style={{ color: "#4A5568" }}>
                 {step.step}
               </span>
             </div>
@@ -432,30 +432,30 @@ function InteractiveChecklist({
   }
 
   return (
-    <div className="flex flex-col gap-2.5 w-full text-[11px] leading-relaxed">
+    <div className="flex flex-col gap-2.5 w-full text-[12px] leading-relaxed">
       {intro && (
-        <div className="text-[13px] leading-relaxed whitespace-pre-wrap" style={{ color: "#9AA4B2" }}>
+        <div className="text-[12px] leading-relaxed whitespace-pre-wrap" style={{ color: "#9AA4B2" }}>
           {intro}
         </div>
       )}
 
       <div
-        className="flex flex-col gap-1.5 py-2 rounded-xl"
+        className="flex flex-col gap-1.5 py-3 rounded-xl"
         style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)" }}
       >
         {items.map((item) => (
-          <div key={item.id} className="flex items-center gap-2.5 px-3 py-0.5 group">
+          <div key={item.id} className="flex items-center gap-2.5 px-4 py-0.5 group">
             <button
               onClick={() => handleToggle(item.id)}
               disabled={isApproved || isProcessing}
-              className="w-4 h-4 rounded-md flex items-center justify-center border transition-all shrink-0 cursor-pointer"
+              className="w-3 h-3 rounded-md flex items-center justify-center border transition-all shrink-0 cursor-pointer"
               style={{
                 background: item.checked ? "rgba(59,130,246,0.9)" : "transparent",
                 borderColor: item.checked ? "rgba(59,130,246,0.9)" : "rgba(255,255,255,0.12)",
               }}
             >
               {item.checked && (
-                <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none">
+                <svg className="w-2 h-2" viewBox="0 0 24 24" fill="none">
                   <path d="M5 13l4 4L19 7" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               )}
@@ -466,7 +466,7 @@ function InteractiveChecklist({
               value={item.text}
               onChange={(e) => handleTextChange(item.id, e.target.value)}
               disabled={isApproved || isProcessing}
-              className="flex-1 bg-transparent text-[12px] focus:outline-none border-none"
+              className="flex-1 bg-transparent text-[13px] focus:outline-none border-none"
               style={{ color: item.checked ? "#F5F7FA" : "#3A4151", textDecoration: item.checked ? "none" : "line-through" }}
             />
 
@@ -487,7 +487,7 @@ function InteractiveChecklist({
         {!isApproved && !isProcessing && (
           <button
             onClick={handleAddItem}
-            className="flex items-center gap-1.5 text-[10px] font-mono px-3 py-1 mt-1 transition-all cursor-pointer w-fit"
+            className="flex items-center gap-1.5 text-[15px] font-mono px-4 py-1 mt-1 transition-all cursor-pointer w-fit"
             style={{ color: "#3A4151" }}
           >
             <span>+ add action</span>
@@ -503,7 +503,7 @@ function InteractiveChecklist({
         <button
           onClick={handleApply}
           disabled={isProcessing || items.filter(i => i.checked).length === 0}
-          className="w-full mt-1 py-2 px-4 rounded-xl text-[11px] font-medium transition-all cursor-pointer flex items-center justify-center gap-2"
+          className="w-full mt-1 py-2 px-3 rounded-lg text-[12px] font-medium transition-all cursor-pointer flex items-center justify-center gap-2"
           style={{
             background: "linear-gradient(135deg, rgba(59,130,246,0.2), rgba(124,58,237,0.15))",
             border: "1px solid rgba(59,130,246,0.25)",
@@ -517,7 +517,7 @@ function InteractiveChecklist({
         </button>
       ) : (
         <div
-          className="flex items-center gap-2 text-[10px] font-mono px-3 py-2 rounded-xl"
+          className="flex items-center gap-2 text-[15px] font-mono px-3 py-2 rounded-lg"
           style={{ background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.15)", color: "rgba(59,130,246,0.8)" }}
         >
           <span className="w-1.5 h-1.5 rounded-full" style={{ background: "#3B82F6", display: "inline-block" }} />
@@ -542,33 +542,25 @@ interface ChatSidebarProps {
   logs: string[];
   chatEndRef: React.RefObject<HTMLDivElement | null>;
   isMobile?: boolean;
+  focusedItem?: any;
+  onClearFocus?: () => void;
+  isFocusSelectionActive?: boolean;
+  onToggleFocusSelection?: () => void;
 }
 
 export default function ChatSidebar({
   chat, message, setMessage, handleSend, isProcessing,
-  isAgentTyping, isRenderingBackground, logs, chatEndRef, isMobile
+  isAgentTyping, isRenderingBackground, logs, chatEndRef, isMobile,
+  focusedItem, onClearFocus, isFocusSelectionActive = false, onToggleFocusSelection
 }: ChatSidebarProps) {
-  const [sidebarWidth, setSidebarWidth] = useState(340);
+
+  const [sidebarWidth, setSidebarWidth] = useState(290);
   const [isResizingWidth, setIsResizingWidth] = useState(false);
   const [inputValue, setInputValue] = useState('');
   const [showTechnicalLogs, setShowTechnicalLogs] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Resizing Horizontal Handler
-  useEffect(() => {
-    if (!isResizingWidth) return;
-    const handlePointerMove = (e: PointerEvent) => {
-      const newWidth = Math.max(280, Math.min(520, e.clientX));
-      setSidebarWidth(newWidth);
-    };
-    const handlePointerUp = () => setIsResizingWidth(false);
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', handlePointerUp);
-    return () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', handlePointerUp);
-    };
-  }, [isResizingWidth]);
+  // Resizing Horizontal Handler - moved inline with pointer capture
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -652,7 +644,7 @@ export default function ChatSidebar({
     <div
       style={{
         width: isMobile ? "100%" : `${sidebarWidth}px`,
-        background: "#0D0D12",
+        background: "rgba(20,20,20,0.65)", backdropFilter: "blur(20px)",
         borderRight: isMobile ? "none" : "1px solid rgba(255,255,255,0.06)",
       }}
       className="shrink-0 flex flex-col overflow-hidden relative w-full h-full"
@@ -660,7 +652,22 @@ export default function ChatSidebar({
       {/* Resize handle */}
       {!isMobile && (
         <div
-          onPointerDown={(e) => { e.preventDefault(); setIsResizingWidth(true); }}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.currentTarget.setPointerCapture(e.pointerId);
+            setIsResizingWidth(true);
+          }}
+          onPointerMove={(e) => {
+            if (!isResizingWidth) return;
+            const newWidth = Math.max(240, Math.min(520, e.clientX));
+            setSidebarWidth(newWidth);
+          }}
+          onPointerUp={(e) => {
+            try {
+              e.currentTarget.releasePointerCapture(e.pointerId);
+            } catch (err) {}
+            setIsResizingWidth(false);
+          }}
           className={`absolute right-0 top-0 bottom-0 w-1 cursor-col-resize z-40 transition-all ${isResizingWidth ? 'opacity-100' : 'opacity-0 hover:opacity-100'}`}
           style={{ background: "rgba(59,130,246,0.3)" }}
         />
@@ -668,27 +675,27 @@ export default function ChatSidebar({
 
       {/* Header */}
       <div
-        className="flex items-center justify-between px-5 py-3.5 shrink-0"
+        className="flex items-center justify-between px-4 py-2 shrink-0"
         style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}
       >
         <div className="flex items-center gap-2.5">
           <div
-            className="w-5 h-5 rounded-md flex items-center justify-center"
+            className="w-3 h-3 rounded-md flex items-center justify-center"
             style={{ background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.2)" }}
           >
-            <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none">
+            <svg className="w-2 h-2" viewBox="0 0 24 24" fill="none">
               <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="rgba(59,130,246,0.9)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </div>
-          <span className="text-[11px] font-medium" style={{ color: "#9AA4B2", letterSpacing: "0.02em" }}>
-            Assistant
+          <span className="text-[12px] font-medium" style={{ color: "#9AA4B2", letterSpacing: "0.02em" }}>
+            AI Editor
           </span>
         </div>
 
         <div className="flex items-center gap-3">
           <button
             onClick={() => setShowTechnicalLogs(v => !v)}
-            className="text-[9px] font-mono px-2 py-0.5 rounded-lg border transition-all cursor-pointer select-none"
+            className="text-[11px] font-mono px-1.5 py-0.5 rounded-md border transition-all cursor-pointer select-none"
             style={{
               background: showTechnicalLogs ? "rgba(59,130,246,0.12)" : "rgba(255,255,255,0.02)",
               borderColor: showTechnicalLogs ? "rgba(59,130,246,0.35)" : "rgba(255,255,255,0.08)",
@@ -717,14 +724,14 @@ export default function ChatSidebar({
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5 flex flex-col">
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 flex flex-col">
         {chat.length === 0 ? (
           <div className="flex-1 flex flex-col items-start justify-center my-auto space-y-3 animate-fade-blur">
             <div
-              className="w-8 h-8 rounded-xl flex items-center justify-center mb-1"
+              className="w-6 h-6 rounded-lg flex items-center justify-center mb-1"
               style={{ background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.15)" }}
             >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none">
+              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none">
                 <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="rgba(59,130,246,0.8)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
             </div>
@@ -770,14 +777,14 @@ export default function ChatSidebar({
                   >
                     {badge && (
                       <span
-                        className="text-[8px] font-mono uppercase tracking-widest mb-1.5 px-2 py-0.5 rounded-full"
+                        className="text-[11px] font-mono uppercase tracking-widest mb-1 px-1.5 py-0.5 rounded-full"
                         style={{ background: "rgba(59,130,246,0.1)", color: "rgba(59,130,246,0.7)", border: "1px solid rgba(59,130,246,0.15)" }}
                       >
                         {badge}
                       </span>
                     )}
                     <div
-                      className="max-w-[88%] px-3.5 py-2.5 rounded-2xl rounded-tr-sm text-[12px] leading-relaxed"
+                      className="max-w-[88%] px-3 py-2 rounded-[16px] rounded-tr-sm text-[13px] leading-relaxed"
                       style={{
                         background: "rgba(255,255,255,0.06)",
                         border: "1px solid rgba(255,255,255,0.08)",
@@ -824,7 +831,7 @@ export default function ChatSidebar({
                         <div className="relative">
                           {msg.text ? (
                             <Markdown 
-                              className="text-[13px] text-[#C4CCD8] font-sans leading-[1.7] whitespace-pre-wrap"
+                              className="text-[13px] text-[#C4CCD8] font-sans leading-[1.6] whitespace-pre-wrap"
                               showCursor={showCursor}
                             >
                               {msg.text}
@@ -845,25 +852,25 @@ export default function ChatSidebar({
             {/* Live reasoning while agent is typing — full pipeline (Logs ON) */}
             {isAgentTyping && visibleSteps.length > 0 && showTechnicalLogs && (
               <div
-                className="w-full rounded-xl px-3.5 py-3 animate-fade-blur"
+                className="w-full rounded-lg px-3 py-2 animate-fade-blur"
                 style={{
                   background: "rgba(255,255,255,0.02)",
                   border: "1px solid rgba(59,130,246,0.1)",
                 }}
               >
-                <div className="flex items-center justify-between mb-2.5">
+                <div className="flex items-center justify-between mb-1.5">
                   <div className="flex items-center gap-2">
                     <span
                       className="w-1.5 h-1.5 rounded-full animate-pulse"
                       style={{ background: "#3B82F6", display: "inline-block" }}
                     />
-                    <span className="text-[9px] font-mono uppercase tracking-widest" style={{ color: "rgba(59,130,246,0.6)" }}>
+                    <span className="text-[11px] font-mono uppercase tracking-widest" style={{ color: "rgba(59,130,246,0.6)" }}>
                       reasoning pipeline
                     </span>
                   </div>
                   <button
                     onClick={() => setShowTechnicalLogs(false)}
-                    className="text-zinc-500 hover:text-zinc-300 border-zinc-700 hover:border-zinc-500 border-b border-dotted text-[9px] font-mono transition-colors focus:outline-none select-none cursor-pointer"
+                    className="text-zinc-500 hover:text-zinc-300 border-zinc-700 hover:border-zinc-500 border-b border-dotted text-[15px] font-mono transition-colors focus:outline-none select-none cursor-pointer"
                   >
                     Hide logs
                   </button>
@@ -900,14 +907,77 @@ export default function ChatSidebar({
 
       {/* Input Area */}
       <div
-        className="shrink-0 p-4"
+        className="shrink-0 p-3"
         style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}
       >
+        {/* Dynamic Focus Mode Glassmorphic Badge */}
+        {focusedItem && (
+          <div 
+            className="mb-3 p-2 rounded-[16px] border transition-all duration-300 animate-fade-blur"
+            style={{
+              background: focusedItem.type === 'broll' ? "rgba(6, 182, 212, 0.04)" :
+                          focusedItem.type === 'music' ? "rgba(16, 185, 129, 0.04)" :
+                          focusedItem.type === 'sfx' ? "rgba(245, 158, 11, 0.04)" :
+                          focusedItem.type === 'subtitles' ? "rgba(59, 130, 246, 0.04)" :
+                          focusedItem.type === 'scene' ? "rgba(168, 85, 247, 0.04)" : "rgba(255, 255, 255, 0.02)",
+              borderColor: focusedItem.type === 'broll' ? "rgba(6, 182, 212, 0.15)" :
+                           focusedItem.type === 'music' ? "rgba(16, 185, 129, 0.15)" :
+                           focusedItem.type === 'sfx' ? "rgba(245, 158, 11, 0.15)" :
+                           focusedItem.type === 'subtitles' ? "rgba(59, 130, 246, 0.15)" :
+                           focusedItem.type === 'scene' ? "rgba(168, 85, 247, 0.15)" : "rgba(255, 255, 255, 0.06)",
+              backdropFilter: "blur(20px)",
+              WebkitBackdropFilter: "blur(20px)",
+            }}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 max-w-[85%]">
+                <span 
+                  className="w-1.5 h-1.5 rounded-full shrink-0 animate-pulse"
+                  style={{
+                    background: focusedItem.type === 'broll' ? "#06B6D4" :
+                                focusedItem.type === 'music' ? "#10B981" :
+                                focusedItem.type === 'sfx' ? "#F59E0B" :
+                                focusedItem.type === 'subtitles' ? "#3B82F6" :
+                                focusedItem.type === 'scene' ? "#A855F7" : "#FFFFFF",
+                    boxShadow: `0 0 6px ${focusedItem.type === 'broll' ? "#06B6D4" :
+                                         focusedItem.type === 'music' ? "#10B981" :
+                                         focusedItem.type === 'sfx' ? "#F59E0B" :
+                                         focusedItem.type === 'subtitles' ? "#3B82F6" :
+                                         focusedItem.type === 'scene' ? "#A855F7" : "#FFFFFF"}`
+                  }}
+                />
+                <span className="text-[11px] font-mono font-semibold uppercase tracking-wider text-zinc-550">
+                  фокус:
+                </span>
+                <span className="text-[12px] font-sans font-bold text-white truncate max-w-[120px] md:max-w-[160px]">
+                  {focusedItem.label}
+                </span>
+                <span className="text-[11px] font-mono font-bold bg-white/5 border border-white/5 rounded px-1 text-zinc-400 select-none">
+                  {focusedItem.start.toFixed(1)}s - {focusedItem.end.toFixed(1)}s
+                </span>
+              </div>
+              <button 
+                onClick={onClearFocus}
+                className="text-zinc-500 hover:text-white text-[11px] font-bold h-4 w-4 rounded-lg flex items-center justify-center cursor-pointer transition-all hover:bg-white/5"
+                title="Сбросить фокус"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="text-[11px] font-sans text-zinc-500 mt-1 pl-3">
+              ИИ применит ваши правки только к этому фрагменту
+            </div>
+          </div>
+        )}
+
         <div
-          className="flex flex-col rounded-2xl overflow-hidden transition-all duration-200"
+          className="flex flex-col rounded-[16px] overflow-hidden transition-all duration-200"
           style={{
             background: "rgba(255,255,255,0.04)",
-            border: "1px solid rgba(255,255,255,0.08)",
+            border: isFocusSelectionActive 
+              ? "1px solid rgba(59, 130, 246, 0.4)" 
+              : "1px solid rgba(255,255,255,0.08)",
+            boxShadow: isFocusSelectionActive ? "0 0 15px rgba(59, 130, 246, 0.08)" : "none"
           }}
         >
           <textarea
@@ -919,25 +989,52 @@ export default function ChatSidebar({
             placeholder={
               isAgentTyping
                 ? 'AI is thinking...'
-                : 'Describe an edit...'
+                : focusedItem
+                  ? 'Что сделать с этим моментом? (например: "сделай громче", "удали", "замени текст")...'
+                  : isFocusSelectionActive
+                    ? 'Выберите фрагмент клипа на таймлайне...'
+                    : 'Describe an edit...'
             }
             rows={3}
-            className="w-full bg-transparent px-4 pt-3.5 text-[12px] leading-relaxed resize-none focus:outline-none"
+            className="w-full bg-transparent px-3 pt-2.5 text-[13px] leading-relaxed resize-none focus:outline-none"
             style={{
               color: "#F5F7FA",
               caretColor: "#3B82F6",
             }}
           />
           <div
-            className="flex items-center justify-between px-4 pb-3 pt-1"
+            className="flex items-center justify-between px-3 pb-2 pt-1"
           >
-            <span className="text-[9px] font-mono" style={{ color: "#3A4151" }}>
-              ↵ send · shift+↵ newline
-            </span>
+            <div className="flex items-center gap-2.5">
+              <span className="text-[15px] font-mono text-zinc-600" style={{ color: "#3A4151" }}>
+                ↵ send · shift+↵ newline
+              </span>
+              {onToggleFocusSelection && (
+                <button
+                  onClick={onToggleFocusSelection}
+                  className="p-1 rounded-lg border flex items-center justify-center transition-all cursor-pointer select-none active:scale-95 hover:text-white"
+                  style={{
+                    background: isFocusSelectionActive 
+                      ? "rgba(59, 130, 246, 0.15)" 
+                      : "rgba(255, 255, 255, 0.02)",
+                    borderColor: isFocusSelectionActive 
+                      ? "rgba(59, 130, 246, 0.4)" 
+                      : "rgba(255, 255, 255, 0.06)",
+                    color: isFocusSelectionActive ? "#60A5FA" : "#4E5668",
+                    boxShadow: isFocusSelectionActive ? "0 0 8px rgba(59,130,246,0.15)" : "none"
+                  }}
+                  title={isFocusSelectionActive ? "Режим выбора активен — кликните фрагмент на таймлайне" : "Выбрать клип на таймлайне (Focus Mode)"}
+                >
+                  <svg className={`w-3 h-3 ${isFocusSelectionActive ? 'animate-pulse' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
+                  </svg>
+                </button>
+              )}
+            </div>
             <button
               onClick={handleSubmit}
               disabled={isProcessing || !inputValue.trim()}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-medium transition-all cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-[12px] font-medium transition-all cursor-pointer"
               style={{
                 background: inputValue.trim() && !isProcessing
                   ? "rgba(59,130,246,0.2)"
@@ -957,6 +1054,7 @@ export default function ChatSidebar({
                 />
               ) : (
                 <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none">
+
                   <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               )}

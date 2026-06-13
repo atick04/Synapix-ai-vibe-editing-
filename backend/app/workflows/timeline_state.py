@@ -47,19 +47,65 @@ class TimelineState:
         self.edits.append(edit)
         return edit
 
-    def set_subtitles(self, font: str, font_size: int, font_color: str, use_outline: bool, animation_style: str) -> Dict[str, Any]:
-        """Apply global kinetic typography configurations."""
-        # Subtitles are global, remove any previous add_subtitles edits
-        self.edits = [e for e in self.edits if e.get("action") != "add_subtitles"]
-        edit = {
-            "action": "add_subtitles",
-            "font": font,
-            "font_size": font_size,
-            "font_color": font_color,
-            "use_outline": use_outline,
-            "animation_style": animation_style
-        }
-        self.edits.append(edit)
+    def set_subtitles(
+        self,
+        font: Optional[str] = None,
+        font_size: Optional[int] = None,
+        font_color: Optional[str] = None,
+        use_outline: Optional[bool] = None,
+        animation_style: Optional[str] = None,
+        position: Optional[str] = None,
+        accent_color: Optional[str] = None,
+        use_shadow: Optional[bool] = None,
+        shadow_blur: Optional[int] = None,
+        text_case: Optional[str] = None,
+        max_words: Optional[int] = None,
+        font_pairing: Optional[str] = None,
+        word_styles: Optional[str] = None,
+        inactive_opacity: Optional[float] = None,
+        active_scale: Optional[float] = None,
+        x: Optional[float] = None,
+        y: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """Apply global kinetic typography configurations (all style parameters, incremental merge)."""
+        # Find existing subtitles edit or create a default one
+        edit = next((e for e in self.edits if e.get("action") == "add_subtitles"), None)
+        if edit is None:
+            edit = {
+                "action": "add_subtitles",
+                "font": "Montserrat-ExtraBold",
+                "font_size": 80,
+                "font_color": "#FFFFFF",
+                "accent_color": "#FACC15",
+                "use_outline": True,
+                "use_shadow": False,
+                "shadow_blur": 18,
+                "animation_style": "pop",
+                "position": "bottom",
+                "text_case": "UPPER",
+                "max_words": 3
+            }
+            self.edits.append(edit)
+
+        # Merge only non-None arguments to preserve state on incremental tool calls
+        if font is not None: edit["font"] = font
+        if font_size is not None: edit["font_size"] = font_size
+        if font_color is not None: edit["font_color"] = font_color
+        if use_outline is not None: edit["use_outline"] = use_outline
+        if animation_style is not None: edit["animation_style"] = animation_style
+        if position is not None: edit["position"] = position
+        if accent_color is not None: edit["accent_color"] = accent_color
+        if use_shadow is not None: edit["use_shadow"] = use_shadow
+        if shadow_blur is not None: edit["shadow_blur"] = shadow_blur
+        if text_case is not None: edit["text_case"] = text_case
+        if max_words is not None: edit["max_words"] = max_words
+        if font_pairing is not None: edit["font_pairing"] = font_pairing
+        if word_styles is not None: edit["word_styles"] = word_styles
+        if inactive_opacity is not None: edit["inactive_opacity"] = inactive_opacity
+        if active_scale is not None: edit["active_scale"] = active_scale
+        if x is not None: edit["x"] = x
+        if y is not None: edit["y"] = y
+
         return edit
 
     def add_asset(self, start: float, end: Optional[float], asset_query: str, volume: float = -22, is_bgm: bool = False) -> Dict[str, Any]:
@@ -83,14 +129,18 @@ class TimelineState:
         self.edits.append(edit)
         return edit
 
-    def add_graphics(self, start: float, duration: float, html_content: str, type: str = "canvas_overlay") -> Dict[str, Any]:
-        """Add highly engaging HTML infographic or styled sticker layers."""
+    def add_graphics(self, start: float, duration: float, data: Any, type: str = "canvas_overlay") -> Dict[str, Any]:
+        """Add highly engaging infographic or styled sticker layers."""
         edit = {
             "action": type,
             "start": round(start, 2),
-            "end": round(start + duration, 2),
-            "html_content": html_content
+            "end": round(start + duration, 2)
         }
+        if type == "semantic_scene":
+            edit["scene_data"] = data
+        else:
+            edit["html_content"] = data
+            
         self.edits.append(edit)
         return edit
 

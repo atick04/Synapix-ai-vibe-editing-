@@ -8,10 +8,9 @@ TRANSLATIONS = {
     "create_zoom": "Adding dynamic camera zooms",
     "cut_clip": "Trimming unnecessary footage",
     "add_broll": "Injecting contextual stock footage (B-roll)",
-    "generate_scene_override": "Optimizing scene transitions and sound effects",
-    "generate_vox_graphics": "Designing rich information graphics",
-    "generate_mograph_graphics": "Applying clean motion graphic overlays",
+    "create_scene": "Designing semantic infographic scenes",
     "build_transition": "Adding stylized scene transitions",
+    "modify_clip": "Modifying specific focused segment on the timeline",
     
     # Common technical status logs
     "prepare_context": "Analyzing source media and script context",

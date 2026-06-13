@@ -1,9 +1,18 @@
 import asyncio
 from contextlib import asynccontextmanager
+import mimetypes
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import video, chat, templates
 from app.services.mcp_client import mcp_client
+
+# Initialize and register media MIME types for proper streaming on Windows
+mimetypes.init()
+mimetypes.add_type("video/mp4", ".mp4")
+mimetypes.add_type("video/quicktime", ".mov")
+mimetypes.add_type("video/webm", ".webm")
+mimetypes.add_type("audio/mpeg", ".mp3")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

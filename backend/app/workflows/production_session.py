@@ -29,7 +29,7 @@ def create_default_session(file_id: str) -> Dict[str, Any]:
         "visual_identity": {
             "dominant_color": "White",
             "font_family": "Montserrat-ExtraBold",
-            "graphics_style": "vox"
+            "graphics_template": "concept_explainer"
         },
         "editing_strategy": {
             "zoom_frequency": "medium",

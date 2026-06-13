@@ -126,7 +126,7 @@ def get_sticker_catalog(max_per_folder=5):
     lines = []
     lines.append("════════════════════════════════════════")
     lines.append("🔥 СУПЕР-КАЧЕСТВЕННЫЕ АНИМИРОВАННЫЕ GIF (Визуализация мыслей):")
-    lines.append("Используй их через тег <img src='/assets/PATH'> для мощного Vox-эффекта:")
+    lines.append("Используй их через asset_id (например, 'rocket') для выразительного визуального эффекта:")
     for key, rel_path in sorted(ANIMATED_GIFS_MAP.items()):
         # Double check path spelling
         clean_path = rel_path.replace("Graphic elements/Друgoe", "Graphic elements/Другое")

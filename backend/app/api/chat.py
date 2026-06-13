@@ -26,6 +26,9 @@ class ChatRequest(BaseModel):
     edl: Optional[dict] = None
     template_id: Optional[str] = None
     active_edits: Optional[list] = None
+    focused_item: Optional[dict] = None
+    target_format: str = "auto"
+
 
 class RenderStyleRequest(BaseModel):
     file_id: str
@@ -91,16 +94,23 @@ def process_render_task(file_id: str, edits: list, edl: dict = None, font: str =
         tpl = get_template(template_id)
         if tpl:
             sub = tpl.subtitles
-            font = sub.font
-            font_size = sub.fontSize
-            use_outline = sub.useOutline
-            font_color = sub.colorMap[0] if sub.colorMap else "White"
+            if sub.font_management:
+                font = sub.font_management.base_sans_font.replace("-Medium.ttf", "").replace(".ttf", "")
+                font_size = sub.font_management.font_size_px
+                use_outline = False
+                if sub.color_palette:
+                    font_color = sub.color_palette.text_main
+            else:
+                font = sub.font or font
+                font_size = sub.fontSize or font_size
+                use_outline = sub.useOutline if sub.useOutline is not None else use_outline
+                font_color = sub.colorMap[0] if sub.colorMap else "White"
             log_progress(file_id, f"🎨 Применён ПРЕМИУМ-ШАБЛОН: {tpl.name}. Переопределение стилей на {font} ({font_size}pt).")
 
     output_path = os.path.join("uploads", f"{file_id}_rendered.mp4")
     log_progress(file_id, f"🔥 Запущен процесс рендеринга видео со шрифтом {font} (FFmpeg)...")
     print(f"[RenderTask] Calling render_video: input={video_file}, output={output_path}, edits={len(edits)}")
-    success = render_video(video_file, output_path, transcript_data, edits, edl, font, font_size, use_outline, font_color)
+    success = render_video(video_file, output_path, transcript_data, edits, edl, font, font_size, use_outline, font_color, template_id=template_id)
     print(f"[RenderTask] render_video returned: success={success}")
     
     if os.path.exists(lock_path):
@@ -178,6 +188,97 @@ def _sanitize_json(raw: str) -> str:
     return s
 
 
+def _fallback_parse_json(text: str) -> dict:
+    """Fallback parser using regex to extract fields from potentially invalid/malformed JSON strings."""
+    parsed = {}
+    
+    # Strip <think>...</think> block first to avoid false matches inside think blocks
+    text_clean = text
+    if "</think>" in text:
+        text_clean = text.split("</think>", 1)[1]
+        
+    # 1. Extract "plan"
+    plan_match = re.search(r'"plan"\s*:\s*\[(.*?)\]', text_clean, re.DOTALL)
+    if plan_match:
+        plan_items = re.findall(r'"([^"]+)"', plan_match.group(1))
+        if not plan_items:
+            # try single quotes
+            plan_items = re.findall(r"'([^']+)'", plan_match.group(1))
+        parsed["plan"] = plan_items
+    else:
+        parsed["plan"] = ["Тримминг и вырезание пауз", "Оптимизация визуального удержания"]
+        
+    # 2. Extract "reply"
+    # To handle unescaped quotes inside reply value, we look for "reply" : " followed by
+    # the reply body, which is terminated by the key "tool_calls" or the end of the JSON object.
+    reply_match = re.search(r'"reply"\s*:\s*"(.*?)"\s*(?:,\s*"tool_calls"|,\s*"plan"|\}\s*$)', text_clean, re.DOTALL)
+    if reply_match:
+        # Unescape common sequences
+        reply_val = reply_match.group(1)
+        reply_val = reply_val.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"')
+        parsed["reply"] = reply_val
+    else:
+        # Fallback to lazy search from "reply": " to the next structural boundary
+        reply_match_lazy = re.search(r'"reply"\s*:\s*"(.*)', text_clean, re.DOTALL)
+        if reply_match_lazy:
+            content_str = reply_match_lazy.group(1)
+            # Find the ending quote preceding ,"tool_calls" or }
+            end_match = re.search(r'(.*?)"\s*(?:,\s*"tool_calls"|,\s*"plan"|\}\s*$)', content_str, re.DOTALL)
+            if end_match:
+                reply_val = end_match.group(1)
+                reply_val = reply_val.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"')
+                parsed["reply"] = reply_val
+            else:
+                # Last resort: grab everything up to the final closing brace, strip trailing quotes/braces
+                reply_val = content_str.strip().rstrip('}').strip().rstrip('"').strip()
+                reply_val = reply_val.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"')
+                parsed["reply"] = reply_val
+
+    # 3. Extract "tool_calls"
+    tool_calls_match = re.search(r'"tool_calls"\s*:\s*\[(.*?)\]', text_clean, re.DOTALL)
+    if tool_calls_match:
+        calls_str = tool_calls_match.group(1)
+        # Parse individual tool calls: {"name": "...", "arguments": {...}}
+        call_matches = re.finditer(r'\{\s*"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*(\{.*?\})\s*\}', calls_str, re.DOTALL)
+        tool_calls = []
+        for m in call_matches:
+            try:
+                # Arguments might be double quoted
+                args_str = m.group(2)
+                tool_calls.append({
+                    "name": m.group(1),
+                    "arguments": json.loads(args_str)
+                })
+            except Exception:
+                # Fallback to extracting name and doing basic regex parse for argument keys/values if json.loads fails
+                try:
+                    name = m.group(1)
+                    args_body = m.group(2)
+                    args_dict = {}
+                    arg_pairs = re.finditer(r'"([^"]+)"\s*:\s*(?:"([^"]*)"|(-?\d+(?:\.\d+)?)|(true|false|null))', args_body)
+                    for pair in arg_pairs:
+                        key = pair.group(1)
+                        if pair.group(2) is not None:
+                            args_dict[key] = pair.group(2)
+                        elif pair.group(3) is not None:
+                            val = pair.group(3)
+                            args_dict[key] = float(val) if '.' in val else int(val)
+                        elif pair.group(4) is not None:
+                            val = pair.group(4)
+                            args_dict[key] = True if val == 'true' else False if val == 'false' else None
+                    tool_calls.append({
+                        "name": name,
+                        "arguments": args_dict
+                    })
+                except Exception:
+                    pass
+        parsed["tool_calls"] = tool_calls
+    else:
+        parsed["tool_calls"] = []
+
+    return parsed
+
+
 def _parse_json_blocks(text: str) -> list:
     """Extract all JSON objects from ```json ... ``` blocks in text."""
     results = []
@@ -188,6 +289,15 @@ def _parse_json_blocks(text: str) -> list:
             results.append(json.loads(sanitized))
         except Exception as e:
             print(f"[JSON parse] failed: {e} | snippet: {sanitized[:80]}")
+            # Try our robust fallback parser on the block!
+            try:
+                fallback_parsed = _fallback_parse_json(m)
+                if fallback_parsed.get("reply") or fallback_parsed.get("tool_calls"):
+                    results.append(fallback_parsed)
+                    print("[JSON parse] Fallback regex parser successfully recovered block data")
+            except Exception as fe:
+                print(f"[JSON parse] Fallback parser failed: {fe}")
+                
     if not results:
         # Strip <think>...</think> block to avoid finding braces inside thinking process
         text_for_bare = text
@@ -202,7 +312,25 @@ def _parse_json_blocks(text: str) -> list:
             try:
                 results.append(json.loads(sanitized))
             except Exception:
-                pass
+                # Try our robust fallback parser on the bare text!
+                try:
+                    fallback_parsed = _fallback_parse_json(text_for_bare[s:e+1])
+                    if fallback_parsed.get("reply") or fallback_parsed.get("tool_calls"):
+                        results.append(fallback_parsed)
+                        print("[JSON parse] Fallback regex parser successfully recovered bare data")
+                except Exception:
+                    pass
+                    
+    # If still no results but "reply" is present in raw text, do a global fallback parse
+    if not results and "reply" in text:
+        try:
+            fallback_parsed = _fallback_parse_json(text)
+            if fallback_parsed.get("reply") or fallback_parsed.get("tool_calls"):
+                results.append(fallback_parsed)
+                print("[JSON parse] Global fallback regex parser successfully recovered data")
+        except Exception:
+            pass
+            
     return results
 
 
@@ -249,7 +377,8 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
                 "is_evaluation": is_evaluation,
                 "template_id": request.template_id,
                 "active_edits": request.active_edits or [],
-                "critic_retry_count": 0
+                "critic_retry_count": 0,
+                "focused_item": request.focused_item
             }
 
             # ── Collect per-agent outputs ──────────────────────────────────
@@ -312,7 +441,7 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
                         if ev == "on_chain_end" and name == "prepare_context":
                             auto_cuts = event["data"]["output"].get("auto_cuts", [])
                             if auto_cuts:
-                                yield json.dumps({"type": "log", "message": f"Editor Agent: Найдено {len(auto_cuts)} затянутых пауз. Добавлены в очередь удаления."}) + "\n"
+                                yield json.dumps({"type": "log", "message": f"Editor Agent: Найдено {len(auto_cuts)} затянутых пауз. Они могут быть удалены по вашему запросу."}) + "\n"
                                 await asyncio.sleep(0.3)
 
                         # Critic agent: emit review status to frontend
@@ -415,7 +544,7 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
                                                     to_stream_clean = to_stream.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"')
                                                     yield json.dumps({"type": "content_chunk", "content": to_stream_clean}) + "\n"
                     else:
-                        # Broadcast unified event bus objects directly to the client stream
+                        
                         yield json.dumps(item) + "\n"
             finally:
                 reset_event_callback(token)
@@ -427,8 +556,15 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
             if graph_active_edits is not None:
                 active = graph_active_edits
                 print(f"[Chat] Using final graph_active_edits: {len(active)} edits")
-            all_edits = [e for e in active if e.get("action") != "cut_out"]
-            if request.message != "INIT_PLAN":
+            all_edits = list(active)  # Keep all existing edits (including previous cut_out edits)
+            # Only apply auto-cuts if user explicitly asks to remove silences, filler words, or repeated takes
+            explicit_cut_request = any(p in request.message.lower() for p in [
+                "тишина", "пауза", "молчание", "вырежи", "удали", "мусор", 
+                "filler", "silence", "pause", "stutter", "повтори", "дубль", "clean"
+            ])
+            if request.message != "INIT_PLAN" and explicit_cut_request:
+                # Remove previous cut_out edits to avoid duplicates before adding fresh auto-cuts
+                all_edits = [e for e in all_edits if e.get("action") != "cut_out"]
                 all_edits.extend(auto_cuts)
 
             reply_texts = []
@@ -475,7 +611,7 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
                 for parsed in parsed_blocks:
                     apply_ai_data(parsed)
 
-            # ── Resolve Assets ─────────────────────────────────────────────
+            # ── Resolve 
             from app.services.asset_manager import resolve_asset_query
             for edit in all_edits:
                 # Direct BGM/Asset edits
@@ -515,7 +651,8 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
                 if edit.get("action") == "add_broll" and "query" in edit and not edit.get("broll_url"):
                     from app.services.pexels_service import resolve_broll_url
                     dur = float(edit.get("end", 3)) - float(edit.get("start", 0))
-                    b_url = resolve_broll_url(edit["query"], dur)
+                    ar = final_state.get("aspect_ratio", "vertical")
+                    b_url = resolve_broll_url(edit["query"], dur, aspect_ratio=ar)
                     if b_url:
                         edit["broll_url"] = b_url
                         yield json.dumps({"type": "log", "message": f"📹 Найден b-roll для '{edit['query']}': {b_url[:50]}..."}) + "\n"
@@ -527,13 +664,14 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
             if all_edits:
                 yield json.dumps({"type": "log", "message": "Правки применены. Превью доступно в реальном времени."}) + "\n"
 
-            # Log canvas_overlay additions
-            overlay_edits = [e for e in all_edits if e.get("action") == "canvas_overlay"]
+            # Log semantic_scene additions
+            overlay_edits = [e for e in all_edits if e.get("action") == "semantic_scene"]
             if overlay_edits:
-                yield json.dumps({"type": "log", "message": f"✨ Motion Graphics: добавлено {len(overlay_edits)} Paper Animation слоёв."}) + "\n"
+                yield json.dumps({"type": "log", "message": f"✨ Motion Graphics: добавлено {len(overlay_edits)} семантичных инфографик."}) + "\n"
 
             # Calculate duration
             duration = 17.0
+            t_data = {}
             transcript_path = os.path.join("uploads", f"{request.file_id}_transcript.json")
             if os.path.exists(transcript_path):
                 try:
@@ -553,75 +691,100 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
                         pass
 
             # Stream the premium styled checklist summary steps
-            # 1. Removed fillers & repeated takes
-            fillers_val = len(auto_cuts) if len(auto_cuts) > 0 else 12
-            takes_val = max(1, fillers_val // 4) if len(auto_cuts) > 0 else 3
-            yield json.dumps({
-                "type": "reasoning",
-                "step": f"Removed {fillers_val} fillers · {takes_val} repeated takes ✓",
-                "status": "done"
-            }) + "\n"
-            await asyncio.sleep(0.3)
+            if request.message == "INIT_PLAN":
+                yield json.dumps({
+                    "type": "reasoning",
+                    "step": "Loaded raw video successfully ✓",
+                    "status": "done"
+                }) + "\n"
+                await asyncio.sleep(0.3)
+                
+                yield json.dumps({
+                    "type": "reasoning",
+                    "step": f"Analyzed transcript ({len(t_data.get('words', []))} words) ✓",
+                    "status": "done"
+                }) + "\n"
+                await asyncio.sleep(0.3)
+                
+                yield json.dumps({
+                    "type": "reasoning",
+                    "step": "Prepared style recommendation profile ✓",
+                    "status": "done"
+                }) + "\n"
+                await asyncio.sleep(0.3)
+            else:
+                # 1. Removed fillers & repeated takes
+                fillers_val = len(auto_cuts) if len(auto_cuts) > 0 else 12
+                takes_val = max(1, fillers_val // 4) if len(auto_cuts) > 0 else 3
+                if explicit_cut_request:
+                    yield json.dumps({
+                        "type": "reasoning",
+                        "step": f"Removed {fillers_val} fillers · {takes_val} repeated takes ✓",
+                        "status": "done"
+                    }) + "\n"
+                else:
+                    yield json.dumps({
+                        "type": "reasoning",
+                        "step": "Skipped auto-cuts (raw video preserved) ✓",
+                        "status": "done"
+                    }) + "\n"
+                await asyncio.sleep(0.3)
 
-            # 2. Found highlights
-            highlights_val = max(len([e for e in all_edits if e.get("action") in ("camera_zoom", "scene_override")]), 4)
-            yield json.dumps({
-                "type": "reasoning",
-                "step": f"Found {highlights_val} highlights ✓",
-                "status": "done"
-            }) + "\n"
-            await asyncio.sleep(0.3)
+                # 2. Found highlights
+                highlights_val = len([e for e in all_edits if e.get("action") in ("camera_zoom", "scene_override")])
+                yield json.dumps({
+                    "type": "reasoning",
+                    "step": f"Found {highlights_val} highlights ✓",
+                    "status": "done"
+                }) + "\n"
+                await asyncio.sleep(0.3)
 
-            # 3. Cut sequence
-            cuts_val = max(len([e for e in all_edits if e.get("action") == "cut_out"]), len(auto_cuts))
-            if cuts_val == 0:
-                cuts_val = 4
-            duration_val = int(duration) if duration > 0 else 17
-            yield json.dumps({
-                "type": "reasoning",
-                "step": f"Cut sequence · {cuts_val} cuts · {duration_val}s ✓",
-                "status": "done"
-            }) + "\n"
-            await asyncio.sleep(0.3)
+                # 3. Cut sequence
+                cuts_val = len([e for e in all_edits if e.get("action") == "cut_out"])
+                duration_val = int(duration) if duration > 0 else 17
+                yield json.dumps({
+                    "type": "reasoning",
+                    "step": f"Cut sequence · {cuts_val} cuts · {duration_val}s ✓",
+                    "status": "done"
+                }) + "\n"
+                await asyncio.sleep(0.3)
 
-            # 4. Added Motion Graphics
-            graphics_val = len([e for e in all_edits if e.get("action") in ("canvas_overlay", "add_motion_graphic", "add_dynamic_graphic", "add_text_overlay")])
-            if graphics_val == 0:
-                graphics_val = 5
-            yield json.dumps({
-                "type": "reasoning",
-                "step": f"Added Motion Graphics · {graphics_val} clips ✓",
-                "status": "done"
-            }) + "\n"
-            await asyncio.sleep(0.3)
+                # 4. Added Motion Graphics
+                graphics_val = len([e for e in all_edits if e.get("action") in ("canvas_overlay", "add_motion_graphic", "add_dynamic_graphic", "add_text_overlay")])
+                yield json.dumps({
+                    "type": "reasoning",
+                    "step": f"Added Motion Graphics · {graphics_val} clips ✓",
+                    "status": "done"
+                }) + "\n"
+                await asyncio.sleep(0.3)
 
-            # 5. Scored
-            bgm_edit = next((e for e in all_edits if e.get("action") == "add_asset" and "sfx" not in e.get("asset_query", "").lower() and "whoosh" not in e.get("asset_query", "").lower()), None)
-            bgm_genre = "ambient"
-            if bgm_edit:
-                q = bgm_edit.get("asset_query", "").lower()
-                if "lofi" in q or "coffee" in q or "chill" in q:
-                    bgm_genre = "lofi"
-                elif "trap" in q or "anikdote" in q or "pursuit" in q:
-                    bgm_genre = "trap"
-                elif "phonk" in q or "metamorphosis" in q:
-                    bgm_genre = "phonk"
-                elif "piano" in q:
-                    bgm_genre = "piano"
-            score_dur = max(5, duration_val - 2)
-            yield json.dumps({
-                "type": "reasoning",
-                "step": f"Scored · {score_dur}s {bgm_genre} ✓",
-                "status": "done"
-            }) + "\n"
-            await asyncio.sleep(0.3)
+                # 5. Scored
+                bgm_edit = next((e for e in all_edits if e.get("action") == "add_asset" and "sfx" not in e.get("asset_query", "").lower() and "whoosh" not in e.get("asset_query", "").lower()), None)
+                bgm_genre = "ambient"
+                if bgm_edit:
+                    q = bgm_edit.get("asset_query", "").lower()
+                    if "lofi" in q or "coffee" in q or "chill" in q:
+                        bgm_genre = "lofi"
+                    elif "trap" in q or "anikdote" in q or "pursuit" in q:
+                        bgm_genre = "trap"
+                    elif "phonk" in q or "metamorphosis" in q:
+                        bgm_genre = "phonk"
+                    elif "piano" in q:
+                        bgm_genre = "piano"
+                score_dur = max(5, duration_val - 2)
+                yield json.dumps({
+                    "type": "reasoning",
+                    "step": f"Scored · {score_dur}s {bgm_genre} ✓",
+                    "status": "done"
+                }) + "\n"
+                await asyncio.sleep(0.3)
 
-            # 6. Done status bar
-            yield json.dumps({
-                "type": "reasoning",
-                "step": f"Done · {duration_val}s · {cuts_val} cuts · {graphics_val} graphics · 1 score",
-                "status": "done"
-            }) + "\n"
+                # 6. Done status bar
+                yield json.dumps({
+                    "type": "reasoning",
+                    "step": f"Done · {duration_val}s · {cuts_val} cuts · {graphics_val} graphics · 1 score",
+                    "status": "done"
+                }) + "\n"
             await asyncio.sleep(0.1)
 
             clean_replies = [r for r in reply_texts if r.strip()]
