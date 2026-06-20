@@ -1486,7 +1486,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     </div>
 
                     {/* Format Toggle UI */}
-                    <div className="flex items-center gap-1 mx-2 bg-neutral-100 dark:bg-neutral-800 rounded-lg p-0.5 border border-neutral-200 dark:border-neutral-700">
+                    <div className="hidden sm:flex items-center gap-1 mx-2 bg-neutral-100 dark:bg-neutral-800 rounded-lg p-0.5 border border-neutral-200 dark:border-neutral-700">
                         {(['auto', '16:9', '9:16'] as const).map(fmt => (
                             <button
                                 key={fmt}
@@ -1546,7 +1546,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                 />
             )}
 
-            <div className="flex-1 flex overflow-hidden flex-row">
+            <div className="flex-1 flex overflow-hidden flex-row min-h-0">
                 {/* ── Desktop Left Side Navigation Bar ── */}
                 <div className="hidden md:flex flex-col w-[64px] border-r border-black/5 dark:border-white/5 bg-white/40 dark:bg-black/20 backdrop-blur-2xl py-4 items-center gap-4 shrink-0 z-20">
                     <button
@@ -1587,11 +1587,11 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                 </div>
 
                 {/* Main Content Area */}
-                <div className="flex-1 flex overflow-hidden flex-col md:flex-row relative p-3 gap-3">
+                <div className="flex-1 flex overflow-hidden flex-col md:flex-row relative p-1.5 md:p-3 gap-1.5 md:gap-3 min-h-0">
                 
                 {/* 1. Left Sidebar: Chat Assistant */}
                 {(!isMobile || activeMobileTab === 'chat') && isChatOpen && (
-                    <div className="w-[290px] flex-shrink-0 rounded-2xl border border-black/5 dark:border-white/5 bg-white/60 dark:bg-neutral-900/40 backdrop-blur-2xl transition-all duration-300 z-10 shadow-sm overflow-hidden flex flex-col">
+                    <div className="w-full md:w-[290px] h-full min-h-0 flex-shrink-0 rounded-2xl border border-black/5 dark:border-white/5 bg-white/60 dark:bg-neutral-900/40 backdrop-blur-2xl transition-all duration-300 z-10 shadow-sm overflow-hidden flex flex-col">
                         <ChatSidebar 
                             chat={chat} 
                             message={message} 
@@ -1612,7 +1612,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                 )}
                 {/* 2. Center: Preview + Timeline */}
                 {(!isMobile || activeMobileTab === 'editor') && (
-                    <div className="flex-1 flex flex-col min-w-0 h-full gap-3">
+                    <div className="flex-1 flex flex-col min-w-0 h-full gap-3 min-h-0">
                         {/* Video Preview */}
                         <div
                             className="flex-1 overflow-hidden relative rounded-2xl bg-black/5 dark:bg-white/5 shadow-sm border border-black/5 dark:border-white/10"
@@ -1762,7 +1762,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
 
                 {/* 3. Right Sidebar: Asset Library */}
                 {(!isMobile || activeMobileTab === 'library') && isLibraryOpen && (
-                    <div className="w-[290px] flex-shrink-0 rounded-2xl border border-black/5 dark:border-white/5 bg-white/60 dark:bg-neutral-900/40 backdrop-blur-2xl transition-all duration-300 z-10 shadow-sm overflow-hidden flex flex-col">
+                    <div className="w-full md:w-[290px] h-full min-h-0 flex-shrink-0 rounded-2xl border border-black/5 dark:border-white/5 bg-white/60 dark:bg-neutral-900/40 backdrop-blur-2xl transition-all duration-300 z-10 shadow-sm overflow-hidden flex flex-col">
                         <ReferencesSidebar 
                             activeEdits={activeEdits} 
                             onActiveEditsChange={setActiveEdits} 

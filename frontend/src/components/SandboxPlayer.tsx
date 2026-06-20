@@ -284,12 +284,54 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
     
     const API_URL = getApiUrl();
 
+    const [proxyFailed, setProxyFailed] = useState(false);
+
+    const isMobile = useMemo(() => {
+        if (typeof window === 'undefined') return false;
+        return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
+    }, []);
+
     const resolveMediaUrl = useCallback((path: string | undefined) => {
         if (!path) return "";
         if (path.startsWith("http://") || path.startsWith("https://")) return path;
         if (path.startsWith("uploads/")) return `${API_URL}/${path}`;
         return `${API_URL}/assets/${path}`;
     }, [API_URL]);
+
+    useEffect(() => {
+        setProxyFailed(false);
+    }, [videoSrc]);
+
+    const activeVideoSrc = useMemo(() => {
+        if (!videoSrc) return null;
+        if (!isMobile || proxyFailed) return videoSrc;
+
+        // Try to find if there is a proxy path in mediaLibrary
+        if (mediaLibrary && mediaLibrary.length > 0) {
+            const filenameFromSrc = videoSrc.split('/').pop()?.toLowerCase();
+            if (filenameFromSrc) {
+                const foundItem = mediaLibrary.find((item: any) => {
+                    const itemPath = item.path || "";
+                    return itemPath.toLowerCase().endsWith(filenameFromSrc);
+                });
+                if (foundItem && foundItem.proxy_path) {
+                    return resolveMediaUrl(foundItem.proxy_path);
+                }
+            }
+        }
+
+        // Fallback: guess proxy name if it's in uploads/ and not a rendered video
+        if (videoSrc.includes('/uploads/') && !videoSrc.includes('_rendered') && !videoSrc.includes('_proxy')) {
+            const parts = videoSrc.split('.');
+            if (parts.length > 1) {
+                const ext = parts.pop();
+                const base = parts.join('.');
+                return `${base}_proxy.${ext}`;
+            }
+        }
+
+        return videoSrc;
+    }, [videoSrc, isMobile, proxyFailed, mediaLibrary, resolveMediaUrl]);
 
     useEffect(() => {
         const fontsToLoad = new Set<string>();
@@ -2904,7 +2946,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
             {/* Hidden video element — always mounted, canvas reads from it */}
             <video
                 ref={videoRef}
-                src={videoSrc || undefined}
+                src={activeVideoSrc || undefined}
                 preload="auto"
                 playsInline
                 style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: 0, left: 0 }}
@@ -2919,7 +2961,14 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                         setVideoAspect(v.videoWidth / v.videoHeight);
                     }
                 }}
-                onError={(e) => console.error('SandboxPlayer video error:', e)}
+                onError={(e) => {
+                    console.error('SandboxPlayer video error:', e);
+                    const video = videoRef.current;
+                    if (video && video.src.includes('_proxy')) {
+                        console.warn('[SandboxPlayer] Proxy video failed to load, falling back to original:', videoSrc);
+                        setProxyFailed(true);
+                    }
+                }}
             />
 
             {/* Canvas — main output */}
@@ -3104,16 +3153,45 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                             ? (edit.resolved_path.startsWith('http') ? edit.resolved_path : `${API_URL}/${edit.resolved_path}`)
                             : edit.broll_url;
                         if (!src) return null;
+
+                        let activeBrollSrc = src;
+                        if (isMobile && src && !src.includes('_proxy')) {
+                            const filenameFromSrc = src.split('/').pop()?.toLowerCase();
+                            if (filenameFromSrc && mediaLibrary) {
+                                const foundItem = mediaLibrary.find((item: any) => {
+                                    const itemPath = item.path || "";
+                                    return itemPath.toLowerCase().endsWith(filenameFromSrc);
+                                });
+                                if (foundItem && foundItem.proxy_path) {
+                                    activeBrollSrc = resolveMediaUrl(foundItem.proxy_path);
+                                } else if (src.includes('/uploads/')) {
+                                    const parts = src.split('.');
+                                    if (parts.length > 1) {
+                                        const ext = parts.pop();
+                                        const base = parts.join('.');
+                                        activeBrollSrc = `${base}_proxy.${ext}`;
+                                    }
+                                }
+                            }
+                        }
+
                         return (
                             <video
                                 key={`broll-${i}`}
                                 ref={el => { brollRefs.current[i] = el; }}
-                                src={src}
+                                src={activeBrollSrc}
                                 preload="auto"
                                 playsInline
                                 muted
                                 className="absolute inset-0 w-full h-full object-contain z-[95]"
                                 style={{ opacity: 0, pointerEvents: 'none' }}
+                                onError={(e) => {
+                                    const el = e.currentTarget;
+                                    if (el.src.includes('_proxy')) {
+                                        console.warn('[SandboxPlayer] B-roll proxy failed, falling back to original:', src);
+                                        el.src = src;
+                                    }
+                                }}
                             />
                         );
                     })}

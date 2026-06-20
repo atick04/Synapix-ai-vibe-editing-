@@ -1,3 +1,4 @@
+import app.core.env_patch  # Apply dotenv patch first
 import asyncio
 from contextlib import asynccontextmanager
 import mimetypes

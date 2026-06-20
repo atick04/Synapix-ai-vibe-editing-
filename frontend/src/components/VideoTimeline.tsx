@@ -55,6 +55,14 @@ export default function VideoTimeline({
     const [zoom, setZoom] = useState(100);
     const editInputRef = useRef<HTMLInputElement>(null);
 
+    const [isMobile, setIsMobile] = useState(false);
+    useEffect(() => {
+        const handleResize = () => setIsMobile(window.innerWidth < 768);
+        handleResize();
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
+
     useEffect(() => {
         if (editingChunk && editInputRef.current) {
             editInputRef.current.focus();
@@ -440,12 +448,12 @@ export default function VideoTimeline({
 
     const [isScrubbing, setIsScrubbing] = useState(false);
 
-    const handleScrubStart = (e: React.MouseEvent) => {
+    const handleScrubStart = (e: React.PointerEvent) => {
         setIsScrubbing(true);
         handleScrub(e);
     };
 
-    const handleScrub = (e: React.MouseEvent | MouseEvent) => {
+    const handleScrub = (e: React.PointerEvent | PointerEvent | React.MouseEvent | MouseEvent) => {
         if (!duration || !videoRef?.current || !containerRef.current) return;
         const rect = containerRef.current.getBoundingClientRect();
         const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
@@ -458,13 +466,13 @@ export default function VideoTimeline({
 
     useEffect(() => {
         if (!isScrubbing) return;
-        const onMouseMove = (e: MouseEvent) => handleScrub(e);
-        const onMouseUp = () => setIsScrubbing(false);
-        window.addEventListener('mousemove', onMouseMove);
-        window.addEventListener('mouseup', onMouseUp);
+        const onPointerMove = (e: PointerEvent) => handleScrub(e);
+        const onPointerUp = () => setIsScrubbing(false);
+        window.addEventListener('pointermove', onPointerMove);
+        window.addEventListener('pointerup', onPointerUp);
         return () => {
-            window.removeEventListener('mousemove', onMouseMove);
-            window.removeEventListener('mouseup', onMouseUp);
+            window.removeEventListener('pointermove', onPointerMove);
+            window.removeEventListener('pointerup', onPointerUp);
         };
     }, [isScrubbing, duration, videoRef]);
 
@@ -920,27 +928,43 @@ export default function VideoTimeline({
                     <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
                         <div className="w-[1px] h-4 bg-zinc-850 mx-1" />
                         <span className="text-[11px] text-zinc-500 lowercase">animation:</span>
-                        {([
-                            { key: 'fade',       label: 'fade' },
-                            { key: 'pop',        label: 'pop' },
-                            { key: 'slide_up',   label: 'slide' },
-                            { key: 'bounce',     label: 'bounce' },
-                            { key: 'glow',       label: 'glow' },
-                            { key: 'typewriter', label: 'type' },
-                            { key: 'karaoke',    label: 'kara' },
-                        ] as const).map(({ key, label }) => (
-                            <button
-                                key={key}
-                                onClick={() => setAndSaveAnimStyle(key)}
-                                className={`px-1 py-0.2 border text-[11px] transition-colors rounded-none cursor-pointer ${
-                                    animStyle === key
-                                        ? 'bg-amber-500/10 border-amber-500/20 text-amber-500 font-bold'
-                                        : 'bg-zinc-950 border-zinc-900 text-zinc-550 hover:border-zinc-800 hover:text-zinc-400'
-                                }`}
+                        {isMobile ? (
+                            <select
+                                value={animStyle}
+                                onChange={(e) => setAndSaveAnimStyle(e.target.value)}
+                                className="bg-zinc-950 border border-zinc-900 text-zinc-300 text-[11px] px-1 py-0.5 rounded focus:outline-none cursor-pointer"
                             >
-                                {label}
-                            </button>
-                        ))}
+                                <option value="fade">fade</option>
+                                <option value="pop">pop</option>
+                                <option value="slide_up">slide</option>
+                                <option value="bounce">bounce</option>
+                                <option value="glow">glow</option>
+                                <option value="typewriter">type</option>
+                                <option value="karaoke">kara</option>
+                            </select>
+                        ) : (
+                            ([
+                                { key: 'fade',       label: 'fade' },
+                                { key: 'pop',        label: 'pop' },
+                                { key: 'slide_up',   label: 'slide' },
+                                { key: 'bounce',     label: 'bounce' },
+                                { key: 'glow',       label: 'glow' },
+                                { key: 'typewriter', label: 'type' },
+                                { key: 'karaoke',    label: 'kara' },
+                            ] as const).map(({ key, label }) => (
+                                <button
+                                    key={key}
+                                    onClick={() => setAndSaveAnimStyle(key)}
+                                    className={`px-1 py-0.2 border text-[11px] transition-colors rounded-none cursor-pointer ${
+                                        animStyle === key
+                                            ? 'bg-amber-500/10 border-amber-500/20 text-amber-500 font-bold'
+                                            : 'bg-zinc-950 border-zinc-900 text-zinc-550 hover:border-zinc-800 hover:text-zinc-400'
+                                    }`}
+                                >
+                                    {label}
+                                </button>
+                            ))
+                        )}
                     </div>
                 )}
             </div>
@@ -1311,24 +1335,24 @@ export default function VideoTimeline({
 
                 return (
                     <div 
-                        className="bg-[#0b0b0f] border-b border-white/5 px-3 py-2 flex flex-wrap md:flex-nowrap items-center justify-between gap-3 z-30 shrink-0 select-none font-sans" 
+                        className="bg-[#0b0b0f] border-b border-white/5 px-2.5 py-1.5 md:py-2 flex flex-wrap md:flex-nowrap items-center justify-between gap-2 md:gap-3 z-30 shrink-0 select-none font-sans" 
                         onClick={e => e.stopPropagation()}
                         style={{ background: 'rgba(11, 11, 15, 0.95)', backdropFilter: 'blur(20px)' }}
                     >
                         {/* 1. Title / Info */}
-                        <div className="flex items-center gap-2 max-w-full">
-                            <div className={`h-5 px-1.5 rounded-md border flex items-center justify-center text-[11px] font-bold uppercase font-mono ${colorTheme} bg-zinc-950/60 shadow-inner`}>
+                        <div className="flex items-center gap-1.5 max-w-full">
+                            <div className={`h-4.5 px-1 md:px-1.5 rounded border flex items-center justify-center text-[9px] md:text-[11px] font-bold uppercase font-mono ${colorTheme} bg-zinc-950/60 shadow-inner`}>
                                 settings
                             </div>
-                            <span className="text-[13px] text-zinc-100 font-bold truncate max-w-[155px] md:max-w-[280px]">
+                            <span className="text-[11px] md:text-[13px] text-zinc-100 font-bold truncate max-w-[130px] md:max-w-[280px]">
                                 {clipTitle}
                             </span>
                         </div>
 
                         {/* 2. Numeric inputs: Start / End / Duration */}
-                        <div className="flex items-center flex-wrap gap-6 text-zinc-350 text-[17px] font-medium">
-                            <div className="flex items-center gap-1.5">
-                                <span className="text-zinc-500 font-mono text-[11px] uppercase">start</span>
+                        <div className="flex items-center flex-wrap gap-3 md:gap-6 text-zinc-350 text-[11px] md:text-[17px] font-medium">
+                            <div className="flex items-center gap-1">
+                                <span className="text-zinc-500 font-mono text-[9px] md:text-[11px] uppercase font-bold">in</span>
                                 <input 
                                     type="number"
                                     step="0.1"
@@ -1336,13 +1360,13 @@ export default function VideoTimeline({
                                     max={duration}
                                     value={Number(clipStart.toFixed(2))}
                                     onChange={(ev) => handleManualUpdate(parseFloat(ev.target.value) || 0, clipEnd)}
-                                    className="w-10 bg-zinc-950/80 border border-white/10 rounded-lg px-1 py-0.5 text-[11px] font-mono text-zinc-100 focus:outline-none focus:border-amber-500/40 text-center shadow-sm"
+                                    className="w-10 bg-zinc-950/80 border border-white/10 rounded px-1 py-0.5 text-[10px] md:text-[11px] font-mono text-zinc-100 focus:outline-none focus:border-amber-500/40 text-center shadow-sm"
                                 />
-                                <span className="text-zinc-650 font-mono text-[11px]">s</span>
+                                <span className="text-zinc-650 font-mono text-[9px] md:text-[11px]">s</span>
                             </div>
 
-                            <div className="flex items-center gap-1.5">
-                                <span className="text-zinc-500 font-mono text-[11px] uppercase">end</span>
+                            <div className="flex items-center gap-1">
+                                <span className="text-zinc-500 font-mono text-[9px] md:text-[11px] uppercase font-bold">out</span>
                                 <input 
                                     type="number"
                                     step="0.1"
@@ -1350,23 +1374,23 @@ export default function VideoTimeline({
                                     max={duration}
                                     value={Number(clipEnd.toFixed(2))}
                                     onChange={(ev) => handleManualUpdate(clipStart, parseFloat(ev.target.value) || duration)}
-                                    className="w-10 bg-zinc-950/80 border border-white/10 rounded-lg px-1 py-0.5 text-[11px] font-mono text-zinc-100 focus:outline-none focus:border-amber-500/40 text-center shadow-sm"
+                                    className="w-10 bg-zinc-950/80 border border-white/10 rounded px-1 py-0.5 text-[10px] md:text-[11px] font-mono text-zinc-100 focus:outline-none focus:border-amber-500/40 text-center shadow-sm"
                                 />
-                                <span className="text-zinc-650 font-mono text-[11px]">s</span>
+                                <span className="text-zinc-650 font-mono text-[9px] md:text-[11px]">s</span>
                             </div>
 
                             <div className="flex items-center gap-1">
-                                <span className="text-zinc-500 font-mono text-[11px] uppercase">len</span>
-                                <span className="text-zinc-300 font-mono font-bold bg-white/5 border border-white/5 rounded-lg px-1.5 py-0.5 select-none">
-                                    {(clipEnd - clipStart).toFixed(2)}s
+                                <span className="text-zinc-500 font-mono text-[9px] md:text-[11px] uppercase font-bold">dur</span>
+                                <span className="text-zinc-300 font-mono font-bold bg-white/5 border border-white/5 rounded px-1.5 py-0.5 text-[10px] md:text-[11px] select-none">
+                                    {(clipEnd - clipStart).toFixed(1)}s
                                 </span>
                             </div>
                         </div>
 
                         {/* 3. Text inputs / Volume Sliders */}
                         {showVolume && (
-                            <div className="flex-1 min-w-[120px] max-w-[280px] flex items-center gap-3">
-                                <span className="text-zinc-500 font-mono text-[11px] uppercase">vol</span>
+                            <div className="flex-1 min-w-[100px] max-w-[280px] flex items-center gap-2">
+                                <span className="text-zinc-500 font-mono text-[9px] md:text-[11px] uppercase font-bold">vol</span>
                                 <input 
                                     type="range" 
                                     min="-40" 
@@ -1375,53 +1399,47 @@ export default function VideoTimeline({
                                     onChange={(ev) => handleManualUpdate(clipStart, clipEnd, parseInt(ev.target.value, 10))}
                                     className="flex-1 accent-white h-[2px] bg-zinc-800 rounded-none appearance-none cursor-pointer focus:outline-none"
                                 />
-                                <span className="text-[11px] font-mono text-zinc-100 bg-zinc-950/80 px-1.5 py-0.5 border border-white/10 rounded-lg min-w-[35px] text-center shadow-sm">
-                                    {currentVolume} dB
+                                <span className="text-[10px] md:text-[11px] font-mono text-zinc-100 bg-zinc-950/80 px-1 py-0.5 border border-white/10 rounded min-w-[30px] md:min-w-[35px] text-center shadow-sm">
+                                    {currentVolume}dB
                                 </span>
                             </div>
                         )}
 
                         {showTextInput && (
-                            <div className="flex-1 min-w-[180px] max-w-[340px] flex items-center gap-2">
-                                <span className="text-zinc-500 font-mono text-[11px] uppercase">text</span>
+                            <div className="flex-1 min-w-[120px] max-w-[340px] flex items-center gap-1.5">
+                                <span className="text-zinc-500 font-mono text-[9px] md:text-[11px] uppercase font-bold">text</span>
                                 <input 
                                     type="text" 
                                     value={textValue} 
                                     onChange={(ev) => handleManualUpdate(clipStart, clipEnd, undefined, ev.target.value)}
-                                    className="flex-1 bg-zinc-950/80 border border-white/10 rounded-xl px-4 py-1 text-[11px] text-zinc-100 focus:outline-none focus:border-amber-500/40 shadow-sm"
-                                    placeholder="Enter subtitle overlay..."
+                                    className="flex-1 bg-zinc-950/80 border border-white/10 rounded px-2 py-0.5 text-[10px] md:text-[11px] text-zinc-100 focus:outline-none focus:border-amber-500/40 shadow-sm"
+                                    placeholder="Enter text..."
                                 />
                             </div>
                         )}
 
                         {/* 4. Delete button */}
-                        <div className="flex items-center gap-2 shrink-0">
+                        <div className="flex items-center gap-1.5 shrink-0">
                             {showSplit && (
                                 <button
                                     onClick={handleManualSplit}
-                                    className="h-6 px-2.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 hover:border-amber-500/40 text-amber-400 rounded-lg text-[11px] font-semibold transition-all cursor-pointer flex items-center justify-center gap-1 active:scale-95 shadow-sm"
-                                    title="Split this clip at playhead position"
+                                    className="h-5 px-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 hover:border-amber-500/40 text-amber-400 rounded text-[10px] font-semibold transition-all cursor-pointer flex items-center justify-center gap-0.5 active:scale-95 shadow-sm"
+                                    title="Split clip"
                                 >
-                                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 11-4.243 4.243 3 3 0 014.243-4.243zm0-5.758a3 3 0 11-4.243-4.243 3 3 0 014.243 4.243z" />
-                                    </svg>
                                     <span>split</span>
                                 </button>
                             )}
                             <button
                                 onClick={handleManualDelete}
-                                className="h-6 px-2.5 bg-red-950/20 hover:bg-red-900/40 border border-red-900/30 hover:border-red-500/50 text-red-400 rounded-lg text-[11px] font-semibold transition-all cursor-pointer flex items-center justify-center gap-1 active:scale-95 shadow-sm"
-                                title="Delete this element from the timeline"
+                                className="h-5 px-1.5 bg-red-950/20 hover:bg-red-900/40 border border-red-900/30 hover:border-red-500/50 text-red-400 rounded text-[10px] font-semibold transition-all cursor-pointer flex items-center justify-center gap-0.5 active:scale-95 shadow-sm"
+                                title="Delete clip"
                             >
-                                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                </svg>
                                 <span>delete</span>
                             </button>
                             <button
                                 onClick={() => setSelectedClipId(null)}
-                                className="h-6 w-6 bg-zinc-900 hover:bg-zinc-800 border border-white/5 text-zinc-400 hover:text-white rounded-lg flex items-center justify-center text-[13px] font-bold cursor-pointer transition-all active:scale-90"
-                                title="Close Inspector"
+                                className="h-5 w-5 bg-zinc-900 hover:bg-zinc-800 border border-white/5 text-zinc-400 hover:text-white rounded flex items-center justify-center text-[10px] font-bold cursor-pointer transition-all active:scale-90"
+                                title="Close"
                             >
                                 ✕
                             </button>
@@ -1432,12 +1450,9 @@ export default function VideoTimeline({
 
             {/* Tracks Container */}
             <div className={`flex flex-1 relative overflow-y-auto overflow-x-auto bg-background scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent transition-all duration-300 ${
-                isFocusSelectionActive ? 'cursor-crosshair bg-[#0f172a]/20 shadow-[inset_0_0_20px_rgba(59,130,246,0.1)]' : ''
+                isFocusSelectionActive ? 'cursor-crosshair' : ''
             }`}>
-
-                
-                {/* 1. Left Sidebar: Track Headers & Add Controls (Premiere/Resolve Style) */}
-                <div className="w-24 bg-[#0a0a0c]/90 border-r border-white/5 flex flex-col z-20 flex-shrink-0 sticky left-0 font-mono text-[17px] text-zinc-500 backdrop-blur-md">
+                <div className="w-16 md:w-24 bg-[#0a0a0c]/90 border-r border-white/5 flex flex-col z-20 flex-shrink-0 sticky left-0 font-mono text-[17px] text-zinc-500 backdrop-blur-md">
                     <div className="h-6 shrink-0 bg-[#08080a] sticky top-0 z-30 border-b border-white/5 flex items-center justify-center">
                         <button
                             onClick={onTogglePlay}
@@ -1453,12 +1468,12 @@ export default function VideoTimeline({
                     
                     {/* S1 Track Header */}
                     {isS1Visible && (
-                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 uppercase hover:bg-white/5 select-none group/track transition-all">
-                            <div className="flex items-center gap-0.5 min-w-0">
-                                <span className="px-1 py-0.2 bg-purple-500/15 text-purple-400 border border-purple-500/20 rounded font-bold text-[7px] font-mono shrink-0">S1</span>
-                                <span className="text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">scenes</span>
+                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 md:px-1.5 uppercase hover:bg-white/5 select-none group/track transition-all">
+                            <div className="flex items-center gap-1 min-w-0">
+                                <span className="px-1 py-0.5 bg-purple-500/15 text-purple-400 border border-purple-500/20 rounded font-bold text-[9px] md:text-[7px] font-mono shrink-0">S1</span>
+                                <span className="hidden md:inline text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">scenes</span>
                             </div>
-                            <div className="flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
+                            <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
                                 <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-250 cursor-pointer transition-colors" title="Toggle visibility">
                                     <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                                 </button>
@@ -1467,7 +1482,7 @@ export default function VideoTimeline({
                                 </button>
                                 <button 
                                     onClick={(ev) => { ev.stopPropagation(); handleAddClip('s1'); }}
-                                    className="w-3.5 h-3.5 bg-zinc-900 hover:bg-zinc-800 active:scale-95 border border-white/10 text-neutral-350 hover:text-white flex items-center justify-center cursor-pointer rounded transition-all font-bold text-[8px]"
+                                    className="w-3.5 h-3.5 bg-zinc-900 hover:bg-zinc-800 active:scale-95 border border-white/10 text-neutral-355 hover:text-white flex items-center justify-center cursor-pointer rounded transition-all font-bold text-[8px]"
                                     title="Add Scene Override"
                                 >
                                     +
@@ -1478,12 +1493,12 @@ export default function VideoTimeline({
 
                     {/* G1 Track Header */}
                     {isG1Visible && (
-                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 uppercase hover:bg-white/5 select-none group/track transition-all">
-                            <div className="flex items-center gap-0.5 min-w-0">
-                                <span className="px-1 py-0.2 bg-fuchsia-500/15 text-fuchsia-400 border border-fuchsia-500/20 rounded font-bold text-[7px] font-mono shrink-0">G1</span>
-                                <span className="text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">graphics</span>
+                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 md:px-1.5 uppercase hover:bg-white/5 select-none group/track transition-all">
+                            <div className="flex items-center gap-1 min-w-0">
+                                <span className="px-1 py-0.5 bg-fuchsia-500/15 text-fuchsia-400 border border-fuchsia-500/20 rounded font-bold text-[9px] md:text-[7px] font-mono shrink-0">G1</span>
+                                <span className="hidden md:inline text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">graphics</span>
                             </div>
-                            <div className="flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
+                            <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
                                 <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-250 cursor-pointer transition-colors" title="Toggle visibility">
                                     <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                                 </button>
@@ -1492,7 +1507,7 @@ export default function VideoTimeline({
                                 </button>
                                 <button 
                                     onClick={(ev) => { ev.stopPropagation(); handleAddClip('g1'); }}
-                                    className="w-3.5 h-3.5 bg-zinc-900 hover:bg-zinc-800 active:scale-95 border border-white/10 text-neutral-350 hover:text-white flex items-center justify-center cursor-pointer rounded transition-all font-bold text-[8px]"
+                                    className="w-3.5 h-3.5 bg-zinc-900 hover:bg-zinc-800 active:scale-95 border border-white/10 text-neutral-355 hover:text-white flex items-center justify-center cursor-pointer rounded transition-all font-bold text-[8px]"
                                     title="Add Motion Graphic"
                                 >
                                     +
@@ -1503,12 +1518,12 @@ export default function VideoTimeline({
 
                     {/* T1 Track Header */}
                     {isT1Visible && (
-                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 uppercase hover:bg-white/5 select-none group/track transition-all">
-                            <div className="flex items-center gap-0.5 min-w-0">
-                                <span className="px-1 py-0.2 bg-blue-500/15 text-blue-400 border border-blue-500/20 rounded font-bold text-[7px] font-mono shrink-0">T1</span>
-                                <span className="text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">text</span>
+                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 md:px-1.5 uppercase hover:bg-white/5 select-none group/track transition-all">
+                            <div className="flex items-center gap-1 min-w-0">
+                                <span className="px-1 py-0.5 bg-blue-500/15 text-blue-400 border border-blue-500/20 rounded font-bold text-[9px] md:text-[7px] font-mono shrink-0">T1</span>
+                                <span className="hidden md:inline text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">text</span>
                             </div>
-                            <div className="flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
+                            <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
                                 <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-255 cursor-pointer transition-colors" title="Toggle visibility">
                                     <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                                 </button>
@@ -1528,12 +1543,12 @@ export default function VideoTimeline({
 
                     {/* V2 Track Header */}
                     {isV2Visible && (
-                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 uppercase hover:bg-white/5 select-none group/track transition-all">
-                            <div className="flex items-center gap-0.5 min-w-0">
-                                <span className="px-1 py-0.2 bg-cyan-500/15 text-cyan-400 border border-cyan-500/20 rounded font-bold text-[7px] font-mono shrink-0">V2</span>
-                                <span className="text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">b-roll</span>
+                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 md:px-1.5 uppercase hover:bg-white/5 select-none group/track transition-all">
+                            <div className="flex items-center gap-1 min-w-0">
+                                <span className="px-1 py-0.5 bg-cyan-500/15 text-cyan-400 border border-cyan-500/20 rounded font-bold text-[9px] md:text-[7px] font-mono shrink-0">V2</span>
+                                <span className="hidden md:inline text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">b-roll</span>
                             </div>
-                            <div className="flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
+                            <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
                                 <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-250 cursor-pointer transition-colors" title="Toggle visibility">
                                     <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                                 </button>
@@ -1542,7 +1557,7 @@ export default function VideoTimeline({
                                 </button>
                                 <button 
                                     onClick={(ev) => { ev.stopPropagation(); handleAddClip('v2'); }}
-                                    className="w-3.5 h-3.5 bg-zinc-900 hover:bg-zinc-800 active:scale-95 border border-white/10 text-neutral-350 hover:text-white flex items-center justify-center cursor-pointer rounded transition-all font-bold text-[8px]"
+                                    className="w-3.5 h-3.5 bg-zinc-900 hover:bg-zinc-800 active:scale-95 border border-white/10 text-neutral-355 hover:text-white flex items-center justify-center cursor-pointer rounded transition-all font-bold text-[8px]"
                                     title="Add Stock B-Roll Video"
                                 >
                                     +
@@ -1553,12 +1568,12 @@ export default function VideoTimeline({
 
                     {/* C1 Track Header */}
                     {isC1Visible && (
-                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 uppercase hover:bg-white/5 select-none group/track transition-all">
-                            <div className="flex items-center gap-0.5 min-w-0">
-                                <span className="px-1 py-0.2 bg-amber-500/15 text-amber-500 border border-amber-500/20 rounded font-bold text-[7px] font-mono shrink-0">C1</span>
-                                <span className="text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">цветокор</span>
+                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 md:px-1.5 uppercase hover:bg-white/5 select-none group/track transition-all">
+                            <div className="flex items-center gap-1 min-w-0">
+                                <span className="px-1 py-0.5 bg-amber-500/15 text-amber-500 border border-amber-500/20 rounded font-bold text-[9px] md:text-[7px] font-mono shrink-0">C1</span>
+                                <span className="hidden md:inline text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">цветокор</span>
                             </div>
-                            <div className="flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
+                            <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
                                 <button 
                                     onClick={(ev) => { ev.stopPropagation(); handleAddClip('c1'); }}
                                     className="w-3.5 h-3.5 bg-zinc-900 hover:bg-zinc-800 active:scale-95 border border-white/10 text-neutral-355 hover:text-white flex items-center justify-center cursor-pointer rounded transition-all font-bold text-[8px]"
@@ -1571,12 +1586,12 @@ export default function VideoTimeline({
                     )}
 
                     {/* V1 Track Header */}
-                    <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 uppercase hover:bg-white/5 select-none group/track transition-all">
-                        <div className="flex items-center gap-0.5 min-w-0">
-                            <span className="px-1 py-0.2 bg-neutral-500/15 text-neutral-400 border border-neutral-500/20 rounded font-bold text-[7px] font-mono shrink-0">V1</span>
-                            <span className="text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">video</span>
+                    <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 md:px-1.5 uppercase hover:bg-white/5 select-none group/track transition-all">
+                        <div className="flex items-center gap-1 min-w-0">
+                            <span className="px-1 py-0.5 bg-neutral-500/15 text-neutral-400 border border-neutral-500/20 rounded font-bold text-[9px] md:text-[7px] font-mono shrink-0">V1</span>
+                            <span className="hidden md:inline text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">video</span>
                         </div>
-                        <div className="flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
+                        <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
                             <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-250 cursor-pointer transition-colors" title="Toggle visibility">
                                 <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                             </button>
@@ -1590,12 +1605,12 @@ export default function VideoTimeline({
                     <div className="h-1 bg-neutral-900/50 border-y border-white/5 shrink-0" />
 
                     {/* A1 Track Header */}
-                    <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 uppercase hover:bg-white/5 select-none group/track transition-all">
-                        <div className="flex items-center gap-0.5 min-w-0">
-                            <span className="px-1 py-0.2 bg-teal-500/15 text-teal-400 border border-teal-500/20 rounded font-bold text-[7px] font-mono shrink-0">A1</span>
-                            <span className="text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">audio</span>
+                    <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 md:px-1.5 uppercase hover:bg-white/5 select-none group/track transition-all">
+                        <div className="flex items-center gap-1 min-w-0">
+                            <span className="px-1 py-0.5 bg-teal-500/15 text-teal-400 border border-teal-500/20 rounded font-bold text-[9px] md:text-[7px] font-mono shrink-0">A1</span>
+                            <span className="hidden md:inline text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">audio</span>
                         </div>
-                        <div className="flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
+                        <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
                             <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-250 cursor-pointer transition-colors" title="Toggle visibility">
                                 <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                             </button>
@@ -1607,12 +1622,12 @@ export default function VideoTimeline({
 
                     {/* SFX Track Header */}
                     {isSFXVisible && (
-                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 uppercase hover:bg-white/5 select-none group/track transition-all">
-                            <div className="flex items-center gap-0.5 min-w-0">
-                                <span className="px-1 py-0.2 bg-amber-500/15 text-amber-400 border border-amber-500/20 rounded font-bold text-[7px] font-mono shrink-0">SFX</span>
-                                <span className="text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">sfx</span>
+                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 md:px-1.5 uppercase hover:bg-white/5 select-none group/track transition-all">
+                            <div className="flex items-center gap-1 min-w-0">
+                                <span className="px-1 py-0.5 bg-amber-500/15 text-amber-400 border border-amber-500/20 rounded font-bold text-[9px] md:text-[7px] font-mono shrink-0">SFX</span>
+                                <span className="hidden md:inline text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">sfx</span>
                             </div>
-                            <div className="flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
+                            <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
                                 <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-255 cursor-pointer transition-colors" title="Toggle visibility">
                                     <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                                 </button>
@@ -1632,12 +1647,12 @@ export default function VideoTimeline({
 
                     {/* M1 Track Header */}
                     {isM1Visible && (
-                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 uppercase hover:bg-white/5 select-none group/track transition-all">
-                            <div className="flex items-center gap-0.5 min-w-0">
-                                <span className="px-1 py-0.2 bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 rounded font-bold text-[7px] font-mono shrink-0">M1</span>
-                                <span className="text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">music</span>
+                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 md:px-1.5 uppercase hover:bg-white/5 select-none group/track transition-all">
+                            <div className="flex items-center gap-1 min-w-0">
+                                <span className="px-1 py-0.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 rounded font-bold text-[9px] md:text-[7px] font-mono shrink-0">M1</span>
+                                <span className="hidden md:inline text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">music</span>
                             </div>
-                            <div className="flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
+                            <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
                                 <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-250 cursor-pointer transition-colors" title="Toggle visibility">
                                     <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                                 </button>
@@ -1668,7 +1683,7 @@ export default function VideoTimeline({
                     {/* Time Ruler / Scrub area */}
                     <div 
                         className="h-6 bg-card border-b border-border flex items-center relative cursor-ew-resize z-20 sticky top-0"
-                        onMouseDown={handleScrubStart}
+                        onPointerDown={handleScrubStart}
                     >
                         {rulerTicks.map((t, i) => (
                             <div 
@@ -1707,7 +1722,7 @@ export default function VideoTimeline({
                                             onPointerDown={(e) => handleDragStart(e, 's1', i, clip.start, clip.end)}
                                             onPointerMove={handleDragMove}
                                             onPointerUp={handleDragEnd}
-                                            className={`absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all ${
+                                            className={`touch-none absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all ${
                                                 isSelected 
                                                     ? 'bg-purple-900 border-purple-300 text-white z-10 font-bold shadow-[0_0_12px_rgba(168,85,247,0.3)]' 
                                                     : 'bg-purple-950/30 border-purple-900/50 hover:border-purple-600 text-purple-200'
@@ -1749,7 +1764,7 @@ export default function VideoTimeline({
                                             onPointerDown={(e) => handleDragStart(e, 'g1', i, clip.start, clip.end)}
                                             onPointerMove={handleDragMove}
                                             onPointerUp={handleDragEnd}
-                                            className={`absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/g1 ${
+                                            className={`touch-none absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/g1 ${
                                                 isSelected 
                                                     ? 'bg-fuchsia-900 border-fuchsia-300 text-white z-10 font-bold shadow-[0_0_12px_rgba(217,70,239,0.3)]' 
                                                     : 'bg-fuchsia-950/30 border-fuchsia-900/50 hover:border-fuchsia-600 text-fuchsia-200'
@@ -1808,7 +1823,7 @@ export default function VideoTimeline({
                                             onPointerDown={(e) => handleDragStart(e, 't1', i, rawStart, rawEnd)}
                                             onPointerMove={handleDragMove}
                                             onPointerUp={handleDragEnd}
-                                            className={`absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/t1 ${
+                                            className={`touch-none absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/t1 ${
                                                 isSelected 
                                                     ? 'bg-blue-900 border-blue-300 text-white z-10 font-bold shadow-[0_0_12px_rgba(59,130,246,0.3)]' 
                                                     : 'bg-blue-950/30 border-blue-900/50 hover:border-blue-600 text-blue-200'
@@ -1849,8 +1864,8 @@ export default function VideoTimeline({
                                             )}
                                             {activeTool === 'pointer' && !isEditing && (
                                                 <>
-                                                    <div className="absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 't1', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                    <div className="absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 't1', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 't1', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 't1', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                                 </>                 
                                             )}
                                         </div>
@@ -1890,7 +1905,7 @@ export default function VideoTimeline({
                                             onPointerMove={handleDragMove}
                                             onPointerUp={handleDragEnd}
                                             title="click to select | delete to remove | drag to move | trim edges"
-                                            className={`absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/v2 ${
+                                            className={`touch-none absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/v2 ${
                                                 isSelected 
                                                     ? 'bg-cyan-900 border-cyan-300 text-white z-10 font-bold shadow-[0_0_12px_rgba(6,182,212,0.3)]' 
                                                     : 'bg-cyan-950/30 border-cyan-900/50 hover:border-cyan-600 text-cyan-200'
@@ -1900,8 +1915,8 @@ export default function VideoTimeline({
                                             <span className="text-[9px] absolute left-2 font-mono pointer-events-none truncate right-2 font-medium">📹 B-Roll: "{query.toLowerCase()}"</span>
                                             {activeTool === 'pointer' && (
                                                 <>
-                                                    <div className="absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'v2', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                    <div className="absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'v2', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'v2', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'v2', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                                 </>
                                             )}
                                         </div>
@@ -1940,7 +1955,7 @@ export default function VideoTimeline({
                                             onPointerMove={handleDragMove}
                                             onPointerUp={handleDragEnd}
                                             title="click to select | delete to remove | drag to move | trim edges"
-                                            className={`absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/c1 ${
+                                            className={`touch-none absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/c1 ${
                                                 isSelected 
                                                     ? 'bg-amber-900 border-amber-300 text-white z-10 font-bold shadow-[0_0_12px_rgba(245,158,11,0.3)]' 
                                                     : 'bg-amber-950/30 border-amber-900/50 hover:border-amber-600 text-amber-200'
@@ -1950,8 +1965,8 @@ export default function VideoTimeline({
                                             <span className="text-[9px] absolute left-2 font-mono pointer-events-none truncate right-2 font-medium">🎨 Цветокор: "{clip.label.toLowerCase()}"</span>
                                             {activeTool === 'pointer' && (
                                                 <>
-                                                    <div className="absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'c1', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                    <div className="absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'c1', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'c1', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'c1', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                                 </>
                                             )}
                                         </div>
@@ -1986,7 +2001,7 @@ export default function VideoTimeline({
                                         onPointerDown={(e) => handleDragStart(e, 'v1', i, clip.start, clip.end)}
                                         onPointerMove={handleDragMove}
                                         onPointerUp={handleDragEnd}
-                                        className={`absolute h-[32px] rounded-md border overflow-hidden flex items-center group/clip ${activeTool === 'pointer' ? 'cursor-pointer' : 'cursor-crosshair'} ${
+                                        className={`touch-none absolute h-[32px] rounded-md border overflow-hidden flex items-center group/clip ${activeTool === 'pointer' ? 'cursor-pointer' : 'cursor-crosshair'} ${
                                             isSelected 
                                                 ? 'bg-zinc-800 border-zinc-400 text-white z-10 font-bold shadow-[0_0_12px_rgba(255,255,255,0.1)]' 
                                                 : 'bg-zinc-900 border-zinc-800 hover:border-zinc-600 text-zinc-300'
@@ -2024,8 +2039,8 @@ export default function VideoTimeline({
                                         </span>
                                         {activeTool === 'pointer' && (
                                             <>
-                                                <div className={`absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'v1', i, 'left', clip.start)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                <div className={`absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'v1', i, 'right', clip.end)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className={`touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'v1', i, 'left', clip.start)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className={`touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'v1', i, 'right', clip.end)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                             </>
                                         )}
                                     </div>
@@ -2067,7 +2082,7 @@ export default function VideoTimeline({
                                         onPointerDown={(e) => handleDragStart(e, 'a1', i, clip.start, clip.end)}
                                         onPointerMove={handleDragMove}
                                         onPointerUp={handleDragEnd}
-                                        className={`absolute h-[32px] rounded-md border overflow-hidden flex items-center group/clip ${activeTool === 'pointer' ? 'cursor-pointer' : 'cursor-crosshair'} ${
+                                        className={`touch-none absolute h-[32px] rounded-md border overflow-hidden flex items-center group/clip ${activeTool === 'pointer' ? 'cursor-pointer' : 'cursor-crosshair'} ${
                                             isSelected 
                                                 ? 'bg-zinc-800 border-zinc-400 text-white z-10 font-bold shadow-[0_0_12px_rgba(255,255,255,0.1)]' 
                                                 : 'bg-zinc-900 border-zinc-800 hover:border-zinc-600 text-zinc-300'
@@ -2095,8 +2110,8 @@ export default function VideoTimeline({
                                         
                                         {activeTool === 'pointer' && (
                                             <>
-                                                <div className={`absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'a1', i, 'left', clip.start)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                <div className={`absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'a1', i, 'right', clip.end)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className={`touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'a1', i, 'left', clip.start)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className={`touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'a1', i, 'right', clip.end)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                             </>
                                         )}
                                     </div>
@@ -2141,7 +2156,7 @@ export default function VideoTimeline({
                                             onPointerDown={(e) => handleDragStart(e, 'sfx', i, rawStart, rawEnd)}
                                             onPointerMove={handleDragMove}
                                             onPointerUp={handleDragEnd}
-                                            className={`absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/sfx ${
+                                            className={`touch-none absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/sfx ${
                                                 isSelected 
                                                     ? 'bg-amber-900 border-amber-300 text-white z-10 font-bold shadow-[0_0_12px_rgba(245,158,11,0.3)]' 
                                                     : 'bg-amber-950/30 border-amber-805/50 hover:border-amber-600 text-amber-200'
@@ -2151,8 +2166,8 @@ export default function VideoTimeline({
                                             <span className="text-[9px] absolute left-2 font-mono pointer-events-none truncate right-2 font-medium">🔊 SFX: "{query.toLowerCase()}"</span>
                                             {activeTool === 'pointer' && (
                                                 <>
-                                                    <div className="absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'sfx', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                    <div className="absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'sfx', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'sfx', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'sfx', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                                 </>
                                             )}
                                         </div>
@@ -2198,7 +2213,7 @@ export default function VideoTimeline({
                                             onPointerDown={(e) => handleDragStart(e, 'm1', i, rawStart, rawEnd)}
                                             onPointerMove={handleDragMove}
                                             onPointerUp={handleDragEnd}
-                                            className={`absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/bgm ${
+                                            className={`touch-none absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/bgm ${
                                                 isSelected 
                                                     ? 'bg-emerald-900 border-emerald-300 text-white z-10 font-bold shadow-[0_0_12px_rgba(16,185,129,0.3)]' 
                                                     : 'bg-emerald-950/30 border-emerald-900/50 hover:border-emerald-600 text-emerald-200'
@@ -2209,8 +2224,8 @@ export default function VideoTimeline({
                                             <span className="text-[9px] font-mono text-white bg-zinc-900 px-1 py-0.2 rounded-none border border-border absolute right-1 pointer-events-none">{asset.volume || -22} dB</span>
                                             {activeTool === 'pointer' && (
                                                 <>
-                                                    <div className="absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'm1', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                    <div className="absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'm1', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'm1', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'm1', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                                 </>
                                             )}
                                         </div>
@@ -2228,7 +2243,7 @@ export default function VideoTimeline({
                         {/* Playhead Handle */}
                         <div 
                             className="absolute -top-[16px] -left-2.5 w-5 h-4 bg-blue-500 rounded-t-sm shadow-md flex items-center justify-center pointer-events-auto cursor-ew-resize hover:bg-blue-400 transition-colors"
-                            onMouseDown={handleScrubStart}
+                            onPointerDown={handleScrubStart}
                         >
                             <div className="w-0 h-0 border-l-[10px] border-r-[10px] border-t-[8px] border-l-transparent border-r-transparent border-t-blue-500 absolute -bottom-[7px]" />
                             <div className="flex gap-[2px] z-10 relative -top-0.5">

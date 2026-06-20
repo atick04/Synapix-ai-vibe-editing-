@@ -1006,9 +1006,11 @@ export default function ChatSidebar({
             className="flex items-center justify-between px-3 pb-2 pt-1"
           >
             <div className="flex items-center gap-2.5">
-              <span className="text-[15px] font-mono text-zinc-600" style={{ color: "#3A4151" }}>
-                ↵ send · shift+↵ newline
-              </span>
+              {!isMobile && (
+                <span className="hidden sm:inline text-[11px] font-mono text-zinc-600" style={{ color: "#3A4151" }}>
+                  ↵ send · shift+↵ newline
+                </span>
+              )}
               {onToggleFocusSelection && (
                 <button
                   onClick={onToggleFocusSelection}

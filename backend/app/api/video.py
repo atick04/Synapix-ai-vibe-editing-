@@ -69,6 +69,27 @@ async def process_video_pipeline(video_path: str, audio_path: str, file_id: str)
     """Фоновая задача: достать аудио, распознать текст и сделать визуальный анализ"""
     video_path = ensure_web_compatible_mp4(video_path, file_id)
     
+    # Создаем прокси-файл (360p) для мобильных устройств
+    dir_name = os.path.dirname(video_path)
+    base_name = os.path.basename(video_path)
+    name, ext = os.path.splitext(base_name)
+    proxy_path = os.path.join(dir_name, f"{name}_proxy.mp4")
+    
+    log_progress(file_id, "⚙️ Создаем легковесный прокси-файл для мобильных устройств (360p)...")
+    proxy_cmd = [
+        "ffmpeg", "-y", "-i", video_path,
+        "-vf", "scale=-2:360",
+        "-c:v", "libx264", "-preset", "ultrafast", "-tune", "fastdecode",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "96k",
+        proxy_path
+    ]
+    try:
+        subprocess.run(proxy_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        log_progress(file_id, "✅ Прокси-видео успешно создано.")
+    except Exception as e:
+        log_progress(file_id, f"⚠️ Ошибка при создании прокси-видео: {e}")
+        
     log_progress(file_id, "⚙️ Извлекаем аудио дорожку (FFmpeg)...")
     extract_audio(video_path, audio_path)
     
@@ -167,7 +188,7 @@ async def get_media_library(file_id: str):
         ext_priority = [".mp4", ".webm", ".mov", ".avi", ".mkv"]
         candidate_files = []
         for f in os.listdir(UPLOAD_DIR):
-            if f.startswith(file_id) and not any(x in f for x in ["_rendered", "_transcript", "_visual", ".log", ".mp3", ".rendering", ".ass", "_media_library"]):
+            if f.startswith(file_id) and not any(x in f for x in ["_rendered", "_transcript", "_visual", ".log", ".mp3", ".rendering", ".ass", "_media_library", "_proxy"]):
                 ext_lower = os.path.splitext(f)[1].lower()
                 if ext_lower in ext_priority:
                     candidate_files.append((f, ext_priority.index(ext_lower)))
@@ -222,6 +243,17 @@ async def get_media_library(file_id: str):
                     item["visual_analysis"] = vis_data
             except Exception:
                 pass
+                
+        # Enrich with proxy information if available
+        item_path = item.get("path", "")
+        if item_path:
+            dir_name = os.path.dirname(item_path)
+            base_name = os.path.basename(item_path)
+            name, ext = os.path.splitext(base_name)
+            proxy_file = f"{name}_proxy.mp4"
+            proxy_filepath = os.path.join(dir_name, proxy_file)
+            if os.path.exists(proxy_filepath):
+                item["proxy_path"] = proxy_filepath.replace("\\", "/")
                 
     return library
 

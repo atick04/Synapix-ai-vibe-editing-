@@ -72,8 +72,12 @@ class ToolExecutor:
             # Validate schema
             validated_args = schema(**arguments).model_dump()
             
-            # Execute local runner directly
-            result = runner(self.timeline, self.memory, validated_args)
+            # Execute local runner directly (supports sync and async runners)
+            import inspect
+            if inspect.iscoroutinefunction(runner):
+                result = await runner(self.timeline, self.memory, validated_args)
+            else:
+                result = runner(self.timeline, self.memory, validated_args)
             logger.info(f"✅ Tool Executor: Completed local execution for '{name}' -> '{result}'")
             
             event_bus.emit("tool_completed", {"tool": name, "message": result})

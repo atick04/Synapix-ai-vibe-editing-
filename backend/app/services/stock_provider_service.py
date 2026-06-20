@@ -176,9 +176,58 @@ def search_stock_music(query: str) -> List[Dict[str, Any]]:
             })
     return results
 
+FALLBACK_SFX_MAP = {
+    "whoosh": "https://remotion.media/whoosh.wav",
+    "swoosh": "https://remotion.media/whoosh.wav",
+    "transition": "https://remotion.media/whoosh.wav",
+    "glitch": "https://remotion.media/whoosh.wav",
+    "click": "https://remotion.media/whoosh.wav",
+    "impact": "https://remotion.media/whoosh.wav"
+}
+
+def search_freesound_sfx(query: str) -> List[Dict[str, Any]]:
+    token = os.getenv("FREESOUND_API_KEY")
+    if not token:
+        print("[StockService] FREESOUND_API_KEY is not set.")
+        return []
+        
+    try:
+        url = "https://freesound.org/apiv2/search/text/"
+        params = {
+            "query": query,
+            "token": token,
+            "filter": "duration:[0.1 TO 4.0]",
+            "fields": "id,name,previews",
+            "page_size": 5
+        }
+        res = requests.get(url, params=params, timeout=10)
+        res.raise_for_status()
+        data = res.json()
+        
+        results = []
+        for item in data.get("results", []):
+            preview_url = item.get("previews", {}).get("preview-hq-mp3")
+            if preview_url:
+                results.append({
+                    "id": f"freesound_{item['id']}",
+                    "title": item["name"],
+                    "url": preview_url,
+                    "type": "sfx"
+                })
+        return results
+    except Exception as e:
+        print(f"[StockService] Freesound search failed: {e}")
+        return []
+
 def download_stock_asset(asset_id: str, download_url: str) -> str:
     os.makedirs("uploads", exist_ok=True)
-    ext = ".mp3" if download_url.lower().endswith(".mp3") else ".png"
+    
+    ext = ".png"
+    if ".mp3" in download_url.lower():
+        ext = ".mp3"
+    elif ".wav" in download_url.lower():
+        ext = ".wav"
+        
     filename = f"uploads/{asset_id}{ext}"
     
     if os.path.exists(filename):
@@ -197,3 +246,4 @@ def download_stock_asset(asset_id: str, download_url: str) -> str:
     except Exception as e:
         print(f"[StockService] Failed to download {download_url}: {e}")
         return None
+

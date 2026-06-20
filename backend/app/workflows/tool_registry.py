@@ -30,12 +30,13 @@ class AddBrollArgs(BaseModel):
 class CreateSceneArgs(BaseModel):
     start_time: float = Field(description="Таймкод начала сцены в секундах")
     duration: float = Field(description="Длительность сцены в секундах")
-    scene_template: str = Field(description="Шаблон композиции сцены: 'comparison' (бок о бок), 'vertical_stack' (стопка по вертикали), 'timeline' (горизонтальный поток), 'concept_explainer' (центральный элемент и ветви)")
+    scene_template: Optional[str] = Field(default=None, description="Шаблон композиции сцены: 'comparison', 'vertical_stack', 'timeline', 'concept_explainer'")
     mood: str = Field(default="neutral", description="Настроение сцены (например: 'analytical', 'energetic', 'dramatic', 'cozy') для подбора Apple-style палитры")
     energy: float = Field(default=0.5, description="Уровень энергии от 0.0 до 1.0")
-    entities: List[Dict[str, Any]] = Field(description="Список сущностей сцены. Каждая сущность должна включать: id (e.g. 'e1'), type ('headline', 'stat_card', 'icon', 'loading_bar'), text (текст на кириллице), icon (emoji-иконка), x, y, width, height в % (если опустить координаты - DesignSkill сгенерирует их автоматически!)")
+    entities: Optional[List[Dict[str, Any]]] = Field(default=None, description="Список сущностей сцены. Каждая сущность должна включать: id (e.g. 'e1'), type ('headline', 'stat_card', 'icon', 'loading_bar'), text (текст на кириллице), icon (emoji-иконка). Если опустить — движок сгенерирует элементы на основе concept_prompt!")
     relations: Optional[List[Dict[str, str]]] = Field(default=None, description="Связи между сущностями для рисования стрелок (список объектов с полями from, to, type)")
     style_profile: Optional[Dict[str, Any]] = Field(default=None, description="Профиль стилей: 'font_family' (кириллические шрифты: 'Inter', 'Montserrat', 'Rubik', 'Manrope', 'Unbounded', 'Comfortaa', 'JetBrains Mono', 'Playfair Display'), 'bg_color' (полупрозрачный фон Apple-glass, например 'rgba(20,20,25,0.65)'), 'border_color' ('rgba(255,255,255,0.15)'), 'color_accent' (цвет полосы загрузки/акцентов, например '#0A84FF')")
+    concept_prompt: Optional[str] = Field(default=None, description="Краткое текстовое описание концепта или идеи сцены (например: 'почему спать 8 часов важно'). Если указано, движок автоматически сгенерирует элементы, иконки, связи и композицию самостоятельно через Graphics LLM!")
 
 class KineticTypographyArgs(BaseModel):
     font: str = Field(default="Montserrat-ExtraBold", description="Имя шрифта. Доступные значения: 'Montserrat-ExtraBold' (универсальный жирный), 'Inter_24pt-Bold' (технологичный), 'BebasNeue-Regular' (TikTok/блогерский), 'Rubik-Bold' (скругленный), 'Oswald-Bold' (строгий сжатый), 'Manrope-Bold' (современный геометричный), 'JetBrainsMono-Bold' (моноширинный), 'Comfortaa-Bold' (мягкий округлый)")
@@ -297,16 +298,78 @@ def add_broll(timeline: TimelineState, memory: ProductionMemory, args: Dict[str,
     event_bus.emit("tool_completed", {"tool": "add_broll", "message": f"Вставлен B-roll '{query}' на {start} - {end}s"})
     return f"Успешно вставлен B-roll по теме '{query}' на {start} - {end}s"
 
-def create_scene(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
+async def create_scene(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
     start = args["start_time"]
     duration = args["duration"]
     
-    scene_template = args["scene_template"]
+    scene_template = args.get("scene_template")
     mood = args.get("mood", "neutral")
-    entities = args["entities"]
+    entities = args.get("entities")
     relations = args.get("relations") or []
     style_profile = args.get("style_profile") or {}
+    concept_prompt = args.get("concept_prompt")
     
+    # If entities are not provided, auto-design them using graphics_llm
+    if not entities and concept_prompt:
+        from app.agents.base_agent import invoke_graphics_llm
+        import json
+        from app.workflows.json_sanitizer import parse_json_blocks_from_text, safe_json_loads
+        
+        system_designer_prompt = """Ты — элитный агент-графический дизайнер (Graphics Design Specialist) в студии монтажа Synapix AI.
+Твоя задача — превратить текстовый концепт/промпт сцены в профессионально структурированную композицию графических элементов (сцену).
+
+На основе концепта ты должен:
+1. Выбрать подходящий шаблон (`scene_template`):
+   - 'comparison' — если сравниваются 2 сущности/понятия.
+   - 'vertical_stack' — если есть вертикальный список, пошаговый процесс или перечисление (3-4 пункта).
+   - 'timeline' — горизонтальный поток шагов или эволюция во времени.
+   - 'concept_explainer' — центральный тезис/понятие и отходящие от него ветви/связи.
+2. Выбрать настроение сцены (`mood`): 'analytical', 'energetic', 'dramatic', 'cozy'.
+3. Сгенерировать список сущностей (`entities`), описывающих этот концепт. Каждая сущность должна иметь:
+   - `id`: уникальный идентификатор (например, 'e1', 'e2', 'e3')
+   - `type`: 'headline' (заголовок всей сцены — обязательно 1 на сцену), 'stat_card' (информационная карточка), 'icon' (отдельная иконка), 'loading_bar' (прогресс-бар).
+   - `text`: лаконичный текст на кириллице (например, "Фаза глубокого сна" или "8 часов отдыха"). Будь кратким, избегай длинных текстов в карточках!
+   - `icon`: подходящая эмодзи-иконка (например, "💤", "🧠", "🔥", "🚀").
+   - (Координаты x, y, width, height указывать НЕ нужно, их автоматически рассчитает DesignSkill!)
+4. Задать логические связи (`relations`) между сущностями для рисования стрелок (например, от центральной карточки к боковым).
+
+Верни результат СТРОГО в формате JSON с ключами:
+- "scene_template": шаблон ('comparison', 'vertical_stack', 'timeline', 'concept_explainer')
+- "mood": настроение ('analytical', 'energetic', 'dramatic', 'cozy')
+- "energy": уровень энергии (float от 0.0 до 1.0, по умолчанию 0.5)
+- "entities": список сущностей (каждая с полями id, type, text, icon)
+- "relations": список связей (объекты с полями from, to, type)
+"""
+        
+        try:
+            logger.info(f"🎨 Auto-Scene Generator: Running graphics_llm for concept: '{concept_prompt}'")
+            llm_response = await invoke_graphics_llm(system_designer_prompt, f"Разработай визуальную композицию для концепта: '{concept_prompt}'")
+            content = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
+            
+            content_clean = content.strip()
+            if "```json" in content_clean:
+                content_clean = content_clean.split("```json")[1].split("```")[0].strip()
+            elif "```" in content_clean:
+                content_clean = content_clean.split("```")[1].split("```")[0].strip()
+                
+            parsed_blocks = parse_json_blocks_from_text(content)
+            parsed_data = parsed_blocks[0] if parsed_blocks else safe_json_loads(content_clean)
+            
+            scene_template = parsed_data.get("scene_template") or scene_template or "concept_explainer"
+            mood = parsed_data.get("mood") or mood
+            entities = parsed_data.get("entities") or []
+            relations = parsed_data.get("relations") or []
+            logger.info(f"🎨 Auto-Scene Generator: Generated {len(entities)} entities and {len(relations)} relations.")
+        except Exception as e:
+            logger.exception(f"⚠️ Auto-Scene Generator failed: {e}")
+            return f"Ошибка автоматической генерации сцены: {e}"
+
+    if not entities:
+        return "Ошибка: Не предоставлены элементы (entities) и отсутствует концепт (concept_prompt) для автогенерации сцены"
+        
+    if not scene_template:
+        scene_template = "concept_explainer"
+        
     # 1. Access DesignSkill to generate layout coordinates if entities are missing spatial data
     from app.services.design_skill import DesignSkill
     
@@ -462,18 +525,62 @@ def create_zoom(timeline: TimelineState, memory: ProductionMemory, args: Dict[st
     return f"Успешно применен зум '{z_type}' на {start} - {end}s"
 
 def build_transition(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
+    file_id = memory.session.get("project_id")
+    if not file_id:
+        return "Ошибка: Не найден ID проекта во временной памяти сессии"
+        
     start = args["start_time"]
     t_type = args.get("transition_type", "swoosh")
     
-    # Dynamic sound transition resolution
-    query = f"{t_type} transition"
-    resolved = resolve_asset_query(query)
-    resolved_path = resolved["rel_path"] if resolved else None
+    from app.services.stock_provider_service import search_freesound_sfx, download_stock_asset, FALLBACK_SFX_MAP
+    from app.api.video import add_to_media_library
+    import time
     
-    edit = timeline.add_asset(start=start, end=start + 1.5, asset_query=query, volume=-12)
-    if resolved_path:
-        edit["resolved_path"] = resolved_path
+    # 1. Search Freesound
+    query = f"{t_type} transition"
+    sfx_results = search_freesound_sfx(query)
+    
+    download_url = None
+    asset_title = f"{t_type} transition"
+    
+    if sfx_results:
+        download_url = sfx_results[0]["url"]
+        asset_title = sfx_results[0]["title"]
+        print(f"[build_transition] Found SFX on Freesound: {asset_title}")
+    else:
+        # Fallback to map
+        fallback_url = FALLBACK_SFX_MAP.get(t_type.lower()) or FALLBACK_SFX_MAP.get("whoosh")
+        download_url = fallback_url
+        print(f"[build_transition] Freesound search returned nothing. Using fallback: {download_url}")
+        
+    asset_id = f"sfx_transition_{t_type}_{int(time.time())}"
+    local_path = None
+    
+    if download_url:
+        local_path = download_stock_asset(asset_id, download_url)
+        
+    if not local_path:
+        # If everything fails, use the hardcoded local default if resolve_asset_query works
+        from app.services.asset_manager import resolve_asset_query
+        resolved = resolve_asset_query(query)
+        resolved_path = resolved["rel_path"] if resolved else None
+        local_path = resolved_path
+        
+    if local_path:
+        # Register in media library
+        add_to_media_library(
+            file_id=file_id,
+            asset_id=asset_id,
+            filename=asset_title,
+            path=local_path.replace("\\", "/"),
+            duration=1.5
+        )
+        
+        edit = timeline.add_asset(start=start, end=start + 1.5, asset_query=asset_title, volume=-12)
+        edit["resolved_path"] = local_path.replace("\\", "/")
         edit["asset_type"] = "audio"
+    else:
+        return "Ошибка: Не удалось найти или загрузить звуковой эффект для перехода."
         
     memory.record_transition(t_type)
     event_bus.emit("tool_completed", {"tool": "build_transition", "message": f"Добавлен переход '{t_type}' на {start}s со звуковым эффектом"})
