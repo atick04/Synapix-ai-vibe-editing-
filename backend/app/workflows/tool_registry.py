@@ -316,7 +316,17 @@ async def create_scene(timeline: TimelineState, memory: ProductionMemory, args: 
         from app.workflows.json_sanitizer import parse_json_blocks_from_text, safe_json_loads
         
         system_designer_prompt = """Ты — элитный агент-графический дизайнер (Graphics Design Specialist) в студии монтажа Synapix AI.
-Твоя задача — превратить текстовый концепт/промпт сцены в профессионально структурированную композицию графических элементов (сцену).
+Твоя задача — превратить текстовый концепт/промпт сцены в профессионально структурированную композицию графических элементов (сцену) с уникальной стилистикой и шрифтовым оформлением.
+
+Доступные кириллические шрифты для тонкой настройки:
+- 'Inter' — нейтральный современный гротеск (по умолчанию для body).
+- 'Montserrat' — геометрический выразительный гротеск (отлично для энергичных заголовков).
+- 'Rubik' — мягкий скругленный гротеск.
+- 'Manrope' — сбалансированный читаемый шрифт.
+- 'Unbounded' — технологичный, футуристичный широкий шрифт (идеален для IT, крипты, ярких акцентов).
+- 'Comfortaa' — округлый дружелюбный шрифт (для уютных, лайфстайл тем).
+- 'JetBrains Mono' — моноширинный шрифт (для кодинга, аналитики, таблиц).
+- 'Playfair Display' — классическая антиква с засечками (для моды, драмы, люкс-сегмента).
 
 На основе концепта ты должен:
 1. Выбрать подходящий шаблон (`scene_template`):
@@ -324,20 +334,33 @@ async def create_scene(timeline: TimelineState, memory: ProductionMemory, args: 
    - 'vertical_stack' — если есть вертикальный список, пошаговый процесс или перечисление (3-4 пункта).
    - 'timeline' — горизонтальный поток шагов или эволюция во времени.
    - 'concept_explainer' — центральный тезис/понятие и отходящие от него ветви/связи.
-2. Выбрать настроение сцены (`mood`): 'analytical', 'energetic', 'dramatic', 'cozy'.
-3. Сгенерировать список сущностей (`entities`), описывающих этот концепт. Каждая сущность должна иметь:
+2. Выбрать настроение сцены (`mood`): 'analytical', 'energetic', 'dramatic', 'cozy', 'tech'.
+3. Настроить глобальный стиль (`style_profile`):
+   - `font_family`: Один из доступных шрифтов выше.
+   - `bg_color`: Цвет фона сцены (например, "rgba(20, 20, 25, 0.65)").
+   - `border_color`: Цвет границ элементов (например, "rgba(255, 255, 255, 0.15)").
+   - `glow_color`: Цвет свечения (например, "rgba(0, 229, 255, 0.18)").
+   - `arrow_color`: Цвет стрелок (например, "rgba(10, 132, 255, 0.65)").
+4. Сгенерировать список сущностей (`entities`), описывающих этот концепт. Каждая сущность должна иметь:
    - `id`: уникальный идентификатор (например, 'e1', 'e2', 'e3')
    - `type`: 'headline' (заголовок всей сцены — обязательно 1 на сцену), 'stat_card' (информационная карточка), 'icon' (отдельная иконка), 'loading_bar' (прогресс-бар).
-   - `text`: лаконичный текст на кириллице (например, "Фаза глубокого сна" или "8 часов отдыха"). Будь кратким, избегай длинных текстов в карточках!
+   - `text`: лаконичный текст на кириллице. Будь кратким, избегай длинных текстов в карточках!
    - `icon`: подходящая эмодзи-иконка (например, "💤", "🧠", "🔥", "🚀").
+   - `styles`: Объект стилей для этой сущности (необязательно, для кастомизации):
+     * `font_family`: Конкретный шрифт из списка выше (например, задай 'Unbounded' для заголовка, а 'Inter' для карточек).
+     * `color`: Цвет текста (например, '#FFFFFF', '#FF007F').
+     * `bg_color`: Цвет фона карточки.
+     * `border_color`: Цвет рамки.
+     * `bold`: boolean.
+     * `italic`: boolean.
    - (Координаты x, y, width, height указывать НЕ нужно, их автоматически рассчитает DesignSkill!)
-4. Задать логические связи (`relations`) между сущностями для рисования стрелок (например, от центральной карточки к боковым).
+5. Задать логические связи (`relations`) между сущностями для рисования стрелок (например, от центральной карточки к боковым).
 
 Верни результат СТРОГО в формате JSON с ключами:
-- "scene_template": шаблон ('comparison', 'vertical_stack', 'timeline', 'concept_explainer')
-- "mood": настроение ('analytical', 'energetic', 'dramatic', 'cozy')
-- "energy": уровень энергии (float от 0.0 до 1.0, по умолчанию 0.5)
-- "entities": список сущностей (каждая с полями id, type, text, icon)
+- "scene_template": шаблон
+- "mood": настроение
+- "style_profile": объект глобальных стилей (font_family, bg_color, border_color, glow_color, arrow_color)
+- "entities": список сущностей (id, type, text, icon, styles)
 - "relations": список связей (объекты с полями from, to, type)
 """
         
@@ -359,7 +382,8 @@ async def create_scene(timeline: TimelineState, memory: ProductionMemory, args: 
             mood = parsed_data.get("mood") or mood
             entities = parsed_data.get("entities") or []
             relations = parsed_data.get("relations") or []
-            logger.info(f"🎨 Auto-Scene Generator: Generated {len(entities)} entities and {len(relations)} relations.")
+            style_profile = parsed_data.get("style_profile") or style_profile or {}
+            logger.info(f"🎨 Auto-Scene Generator: Generated {len(entities)} entities, {len(relations)} relations, and style profile.")
         except Exception as e:
             logger.exception(f"⚠️ Auto-Scene Generator failed: {e}")
             return f"Ошибка автоматической генерации сцены: {e}"

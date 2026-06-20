@@ -279,24 +279,34 @@ class DesignSkill:
         fixes_log = []
         
         # 1. Audit Typography & Cyrillic compliance
+        mood = corrected.get("mood", "neutral")
+        font_pair = cls.get_font_pair(mood)
+        
         base_font = style_profile.get("font_family")
         if base_font:
             validated_base = cls.validate_font(base_font)
+            style_profile["font_family"] = validated_base
             if validated_base != base_font:
-                style_profile["font_family"] = validated_base
                 fixes_log.append(f"Typography: Заменен некириллический шрифт '{base_font}' на '{validated_base}'")
         else:
-            # Standard premium default font family
-            style_profile["font_family"] = CYRILLIC_FONTS["Inter"]
+            # Set default based on mood font pair!
+            style_profile["font_family"] = font_pair["body"]
+            fixes_log.append(f"Typography: Установлен шрифт '{font_pair['body']}' для body на основе настроения '{mood}'")
             
         for entity in entities:
             ent_styles = entity.get("styles", {})
             ent_font = ent_styles.get("font_family")
             if ent_font:
                 validated_ent = cls.validate_font(ent_font)
+                ent_styles["font_family"] = validated_ent
                 if validated_ent != ent_font:
-                    ent_styles["font_family"] = validated_ent
                     fixes_log.append(f"Typography: Заменен шрифт сущности '{ent_font}' на '{validated_ent}'")
+            else:
+                # If font family is not set, set it according to type
+                if entity.get("type") == "headline":
+                    ent_styles["font_family"] = font_pair["header"]
+                else:
+                    ent_styles["font_family"] = font_pair["body"]
             entity["styles"] = ent_styles
 
         # 2. Audit Colors & Contrast

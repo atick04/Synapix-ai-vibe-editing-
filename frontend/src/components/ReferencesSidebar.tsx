@@ -274,7 +274,7 @@ export default function ReferencesSidebar({
     selectedSubIndices,
     subtitleChunks
 }: ReferencesSidebarProps) {
-    const [sidebarTab, setSidebarTab] = useState<'media' | 'music' | 'stock' | 'color' | 'inspect'>('media');
+    const [sidebarTab, setSidebarTab] = useState<'media' | 'color' | 'inspect'>('media');
     const [selectedSubMode, setSelectedSubMode] = useState<'single' | 'all'>('single');
     const [projectSession, setProjectSession] = useState<any>(null);
 
@@ -424,6 +424,53 @@ export default function ReferencesSidebar({
         }
         onActiveEditsChange(updatedEdits);
         triggerAddedFeedback(musicId);
+    };
+
+    const applyGeneratedAudio = (track: any, isBgm: boolean = true) => {
+        if (!onActiveEditsChange) return;
+        const newEdit = {
+            action: "add_asset",
+            start: 0,
+            end: track.duration || duration,
+            asset_query: track.filename,
+            resolved_path: track.path,
+            asset_type: "audio",
+            volume: isBgm ? -22.0 : -10.0,
+            is_bgm: isBgm
+        };
+        const existingIdx = activeEdits.findIndex(e => 
+            e.action === 'add_asset' && e.is_bgm
+        );
+        let updatedEdits = [...activeEdits];
+        if (existingIdx !== -1) {
+            updatedEdits[existingIdx] = newEdit;
+        } else {
+            updatedEdits.push(newEdit);
+        }
+        onActiveEditsChange(updatedEdits);
+        triggerAddedFeedback(track.id);
+    };
+
+    const togglePlayGeneratedAudio = (track: any) => {
+        if (!audioPreviewRef.current) {
+            audioPreviewRef.current = new Audio();
+        }
+        const apiBase = getApiUrl();
+        const cleanPath = track.path.startsWith('/') ? track.path.substring(1) : track.path;
+        const fullUrl = `${apiBase}/${cleanPath}`;
+
+        if (playingTrack === track.id) {
+            audioPreviewRef.current.pause();
+            setPlayingTrack(null);
+        } else {
+            audioPreviewRef.current.src = fullUrl;
+            audioPreviewRef.current.volume = 0.6;
+            audioPreviewRef.current.play().catch(e => console.error("AI audio preview failed:", e));
+            setPlayingTrack(track.id);
+            audioPreviewRef.current.onended = () => {
+                setPlayingTrack(null);
+            };
+        }
     };
 
     const handleStockSearch = async (e?: React.FormEvent) => {
@@ -851,21 +898,21 @@ export default function ReferencesSidebar({
         <div 
             className="w-full h-full flex flex-col overflow-hidden relative font-sans select-none text-neutral-800 dark:text-neutral-200"
             style={{
-                background: "rgba(20, 20, 20, 0.65)",
-                backdropFilter: "blur(20px)",
-                WebkitBackdropFilter: "blur(20px)",
-                borderLeft: "1px solid rgba(255, 255, 255, 0.08)"
+                background: "rgba(18, 18, 18, 0.75)",
+                backdropFilter: "blur(30px)",
+                WebkitBackdropFilter: "blur(30px)",
+                borderLeft: "1px solid rgba(255, 255, 255, 0.06)"
             }}
         >
             
-            {/* Header Tabs */}
-            <div className="bg-transparent border-b border-white/5 flex flex-col shrink-0 px-4 pt-2.5 pb-2">
-                <div className="flex items-center justify-between mb-3.5">
-                    <h2 className="text-[12px] font-bold tracking-widest text-zinc-400 uppercase">control deck</h2>
+            {/* Header Tabs (Sleek Apple Segmented Control) */}
+            <div className="bg-transparent border-b border-white/5 flex flex-col shrink-0 px-4 pt-4 pb-3">
+                <div className="flex items-center justify-between mb-3">
+                    <h2 className="text-[11px] font-bold tracking-widest text-zinc-400 uppercase">control deck</h2>
                     {onClose && (
                         <button 
                             onClick={onClose}
-                            className="w-5 h-5 rounded-full flex items-center justify-center text-[12px] text-zinc-400 hover:text-white hover:bg-white/10 transition-all cursor-pointer bg-white/5 border border-white/10 shadow-sm"
+                            className="w-6 h-6 rounded-full flex items-center justify-center text-[11px] text-zinc-400 hover:text-white hover:bg-white/10 transition-all cursor-pointer bg-white/5 border border-white/10 shadow-sm"
                             title="Hide library"
                         >
                             ✕
@@ -873,35 +920,23 @@ export default function ReferencesSidebar({
                     )}
                 </div>
                 
-                <div className="flex bg-zinc-950/60 p-1 rounded-xl border border-white/5 shadow-inner gap-1">
+                <div className="flex bg-black/45 p-0.5 rounded-full border border-white/5 shadow-inner gap-0.5">
                     <button 
                         onClick={() => setSidebarTab('media')}
-                        className={`flex-1 py-1 rounded-lg text-[11px] font-semibold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${sidebarTab === 'media' ? 'bg-zinc-900 text-amber-500 border border-white/5 shadow-sm' : 'text-zinc-400 hover:text-zinc-350'}`}
+                        className={`flex-1 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all duration-250 flex items-center justify-center gap-1.5 cursor-pointer ${sidebarTab === 'media' ? 'bg-white/10 text-white border border-white/5 shadow-sm' : 'text-zinc-455 hover:text-zinc-200'}`}
                     >
                         <span>library</span>
                     </button>
                     <button 
-                        onClick={() => setSidebarTab('music')}
-                        className={`flex-1 py-1 rounded-lg text-[11px] font-semibold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${sidebarTab === 'music' ? 'bg-zinc-900 text-amber-500 border border-white/5 shadow-sm' : 'text-zinc-400 hover:text-zinc-350'}`}
-                    >
-                        <span>soundtrack</span>
-                    </button>
-                    <button 
-                        onClick={() => setSidebarTab('stock')}
-                        className={`flex-1 py-1 rounded-lg text-[11px] font-semibold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${sidebarTab === 'stock' ? 'bg-zinc-900 text-amber-500 border border-white/5 shadow-sm' : 'text-zinc-400 hover:text-zinc-350'}`}
-                    >
-                        <span>stock</span>
-                    </button>
-                    <button 
                         onClick={() => setSidebarTab('color')}
-                        className={`flex-1 py-1 rounded-lg text-[11px] font-semibold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${sidebarTab === 'color' ? 'bg-zinc-900 text-amber-500 border border-white/5 shadow-sm' : 'text-zinc-400 hover:text-zinc-350'}`}
+                        className={`flex-1 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all duration-250 flex items-center justify-center gap-1.5 cursor-pointer ${sidebarTab === 'color' ? 'bg-white/10 text-white border border-white/5 shadow-sm' : 'text-zinc-455 hover:text-zinc-200'}`}
                     >
                         <span>луты</span>
                     </button>
                     {focusedClipId && (
                         <button 
                             onClick={() => setSidebarTab('inspect')}
-                            className={`flex-1 py-1 rounded-lg text-[11px] font-semibold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${sidebarTab === 'inspect' ? 'bg-zinc-900 text-blue-400 border border-white/5 shadow-sm' : 'text-zinc-400 hover:text-zinc-350'}`}
+                            className={`flex-1 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all duration-250 flex items-center justify-center gap-1.5 cursor-pointer ${sidebarTab === 'inspect' ? 'bg-white/10 text-blue-400 border border-white/5 shadow-sm' : 'text-zinc-455 hover:text-zinc-200'}`}
                         >
                             <span>inspect</span>
                         </button>
@@ -910,25 +945,25 @@ export default function ReferencesSidebar({
             </div>
 
             {/* Content Area */}
-            <div className="flex-1 overflow-y-auto px-4 py-3 scrollbar-hide space-y-4">
+            <div className="flex-1 overflow-y-auto px-4 py-3 scrollbar-hide space-y-5">
                 
                 {sidebarTab === 'media' && (
-                    <div className="space-y-7">
+                    <div className="space-y-6">
                         {isMobile ? (
-                            <div className="bg-white/5 rounded-xl p-3 border border-white/10 text-zinc-350 flex flex-col gap-2 shadow-sm font-sans">
-                                <span className="text-[12px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
+                            <div className="bg-white/[0.02] rounded-2xl p-3 border border-white/5 text-zinc-355 flex flex-col gap-1.5 shadow-md backdrop-blur-md font-sans">
+                                <span className="text-[10px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
                                     💡 Touch Tap-to-Insert
                                 </span>
-                                <span className="text-[12px] leading-relaxed text-zinc-300 font-medium">
+                                <span className="text-[11px] leading-relaxed text-zinc-300 font-medium">
                                     Tap the "+" button or click "select track" on any card to instantly insert the media element into your timeline.
                                 </span>
                             </div>
                         ) : (
-                            <div className="bg-white/5 rounded-xl p-3 border border-white/10 text-zinc-350 flex flex-col gap-2 shadow-sm font-sans">
-                                <span className="text-[12px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
+                            <div className="bg-white/[0.02] rounded-2xl p-3 border border-white/5 text-zinc-355 flex flex-col gap-1.5 shadow-md backdrop-blur-md font-sans">
+                                <span className="text-[10px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
                                     💡 Interactive Drag & Drop
                                 </span>
-                                <span className="text-[12px] leading-relaxed text-zinc-300 font-medium">
+                                <span className="text-[11px] leading-relaxed text-zinc-300 font-medium">
                                     Drag any reference card below and drop it directly onto the timeline tracks to overlay visual pacing elements.
                                 </span>
                             </div>
@@ -942,29 +977,29 @@ export default function ReferencesSidebar({
                                         videoRef.current.currentTime = projectSession.narrative_arc.hook_start || 0;
                                     }
                                 }}
-                                className="group relative cursor-pointer overflow-hidden rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 shadow-[0_8px_32px_rgba(245,158,11,0.05)] backdrop-blur-md transition-all duration-300 hover:bg-amber-500/10 hover:border-amber-500/50 hover:shadow-[0_8px_32px_rgba(245,158,11,0.15)] font-sans"
+                                className="group relative cursor-pointer overflow-hidden rounded-2xl border border-amber-500/20 bg-amber-500/[0.03] p-4 shadow-[0_8px_32px_rgba(245,158,11,0.02)] backdrop-blur-md transition-all duration-300 hover:bg-amber-500/[0.06] hover:border-amber-500/40 font-sans"
                             >
-                                <div className="absolute -inset-px bg-gradient-to-r from-amber-500/10 to-orange-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500 rounded-xl" />
+                                <div className="absolute -inset-px bg-gradient-to-r from-amber-500/5 to-orange-500/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500 rounded-2xl" />
                                 
-                                <div className="relative flex items-start gap-3">
-                                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-amber-400 border border-amber-500/20 group-hover:scale-110 transition-transform duration-300 text-xl">
+                                <div className="relative flex items-start gap-3.5">
+                                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-500/10 text-amber-450 border border-amber-500/15 group-hover:scale-105 transition-transform duration-300 text-lg">
                                         🪝
                                     </div>
                                     <div className="flex-1 min-w-0">
                                         <div className="flex items-center justify-between gap-2 mb-1">
-                                            <span className="text-[10px] font-bold text-amber-400 uppercase tracking-widest bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/10">
+                                            <span className="text-[9px] font-bold text-amber-450 uppercase tracking-widest bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/10">
                                                 Фраза-хук
                                             </span>
-                                            <span className="text-[11px] font-semibold text-zinc-400 font-mono">
+                                            <span className="text-[10px] font-semibold text-zinc-400 font-mono">
                                                 {projectSession.narrative_arc.hook_start?.toFixed(1)}с - {projectSession.narrative_arc.hook_end?.toFixed(1)}с
                                             </span>
                                         </div>
-                                        <p className="text-[13px] text-zinc-200 font-medium italic leading-relaxed line-clamp-2">
+                                        <p className="text-[12.5px] text-zinc-200 font-medium italic leading-relaxed line-clamp-2">
                                             «{projectSession.narrative_arc.hook}»
                                         </p>
-                                        <div className="flex items-center gap-1 mt-2 text-[10px] text-amber-500/70 font-semibold uppercase tracking-wider group-hover:text-amber-400 transition-colors">
+                                        <div className="flex items-center gap-1 mt-2 text-[9.5px] text-amber-500/70 font-bold uppercase tracking-wider group-hover:text-amber-400 transition-colors">
                                             <span>Перемотать к хуку</span>
-                                            <svg className="w-3 h-3 transform group-hover:translate-x-0.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                            <svg className="w-2.5 h-2.5 transform group-hover:translate-x-0.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                                                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                                             </svg>
                                         </div>
@@ -974,8 +1009,8 @@ export default function ReferencesSidebar({
                         )}
 
                         {/* Project Media Section */}
-                        <div>
-                            <div className="flex items-center justify-between mb-3">
+                        <div className="space-y-3">
+                            <div className="flex items-center justify-between">
                                 <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">project media library</h3>
                             </div>
                             
@@ -985,10 +1020,10 @@ export default function ReferencesSidebar({
                                 onDragLeave={handleDragLeave}
                                 onDrop={handleDrop}
                                 onClick={() => fileInputRef.current?.click()}
-                                className={`relative border border-dashed rounded-xl p-3 flex flex-col items-center justify-center cursor-pointer transition-all duration-300 ${
+                                className={`relative border border-dashed rounded-2xl p-4 flex flex-col items-center justify-center cursor-pointer transition-all duration-300 ${
                                     isDragging 
-                                        ? 'border-amber-500 bg-amber-500/10 shadow-[0_0_15px_rgba(245,158,11,0.2)]' 
-                                        : 'border-white/10 bg-zinc-950/40 hover:bg-zinc-950/60 hover:border-white/20'
+                                        ? 'border-amber-500/50 bg-amber-500/5 shadow-[0_0_15px_rgba(245,158,11,0.1)]' 
+                                        : 'border-white/10 bg-black/25 hover:bg-black/35 hover:border-white/20'
                                 }`}
                             >
                                 <input 
@@ -1000,9 +1035,9 @@ export default function ReferencesSidebar({
                                 />
                                 
                                 {isUploading ? (
-                                    <div className="flex flex-col items-center gap-3 w-full">
-                                        <div className="w-8 h-8 rounded-full border-[1.5px] border-white/10 border-t-amber-500 animate-spin" />
-                                        <span className="text-[16px] text-zinc-400 font-sans font-semibold">
+                                    <div className="flex flex-col items-center gap-3.5 w-full">
+                                        <div className="w-7 h-7 rounded-full border-[1.5px] border-white/10 border-t-amber-500 animate-spin" />
+                                        <span className="text-[11.5px] text-zinc-400 font-sans font-semibold">
                                             Uploading video... {uploadProgress}%
                                         </span>
                                         <div className="w-full bg-white/5 h-1 rounded-full overflow-hidden">
@@ -1014,30 +1049,30 @@ export default function ReferencesSidebar({
                                     </div>
                                 ) : (
                                     <div className="flex flex-col items-center gap-2 text-center">
-                                        <svg className="w-6 h-6 text-zinc-400 group-hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <svg className="w-5.5 h-5.5 text-zinc-450 group-hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                                         </svg>
-                                        <span className="text-[12.5px] font-bold text-zinc-200">
+                                        <span className="text-[11.5px] font-bold text-zinc-200">
                                             Stitch additional video
                                         </span>
-                                        <span className="text-[15px] text-zinc-450 font-medium">
-                                            Drag and drop or click to browse
+                                        <span className="text-[10px] text-zinc-500 font-medium">
+                                            Drag & drop or click to browse
                                         </span>
                                     </div>
                                 )}
                             </div>
                             
                             {uploadError && (
-                                <div className="mt-2 text-[15px] text-rose-500 bg-rose-950/20 border border-rose-500/20 rounded-xl p-2.5 font-sans">
+                                <div className="text-[11px] text-rose-455 bg-rose-950/20 border border-rose-500/20 rounded-2xl p-2.5 font-sans">
                                     ⚠️ {uploadError}
                                 </div>
                             )}
 
                             {/* Video List */}
-                            <div className="mt-4 space-y-2.5">
+                            <div className="space-y-2">
                                 {additionalAssets.length === 0 ? (
-                                    <div className="text-center p-6 bg-white/3 border border-white/5 rounded-2xl">
-                                        <span className="text-[11.5px] text-zinc-500 font-medium">
+                                    <div className="text-center p-6 bg-white/[0.01] border border-white/5 rounded-2xl">
+                                        <span className="text-[11px] text-zinc-550 font-medium">
                                             No additional videos uploaded.
                                         </span>
                                     </div>
@@ -1052,15 +1087,15 @@ export default function ReferencesSidebar({
                                                 draggable="true"
                                                 onDragStart={(e) => handleDragStart(e, "stitch", asset)}
                                                 onDragEnd={() => onDragStateChange?.(null)}
-                                                className={`p-2 rounded-xl border flex items-center justify-between gap-2.5 group transition-all duration-200 shadow-sm cursor-grab active:cursor-grabbing ${
+                                                className={`p-2.5 rounded-2xl border flex items-center justify-between gap-3 group transition-all duration-200 shadow-sm cursor-grab active:cursor-grabbing ${
                                                     isJustAdded 
-                                                        ? 'border-emerald-500/50 bg-emerald-950/20 shadow-[0_0_12px_rgba(16,185,129,0.2)] scale-[0.98]' 
-                                                        : 'border-white/5 bg-white/[0.03] hover:bg-white/[0.08] hover:border-white/10 shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)]'
+                                                        ? 'border-emerald-500/40 bg-emerald-950/10 shadow-[0_0_12px_rgba(16,185,129,0.1)] scale-[0.98]' 
+                                                        : 'border-white/5 bg-white/[0.02] hover:bg-white/[0.05] hover:border-white/10'
                                                 }`}
                                             >
-                                                <div className="flex items-center gap-2 min-w-0">
+                                                <div className="flex items-center gap-2.5 min-w-0">
                                                     {/* Video Icon */}
-                                                    <div className="w-7 h-7 rounded-lg bg-zinc-950 border border-white/5 flex items-center justify-center shrink-0">
+                                                    <div className="w-7 h-7 rounded-xl bg-zinc-950 border border-white/5 flex items-center justify-center shrink-0">
                                                         <svg className="w-3.5 h-3.5 text-amber-500" fill="currentColor" viewBox="0 0 20 20">
                                                             <path fillRule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm11 9l-3.5-3.5L10 11l-3-3L4 11V5h12v7z" clipRule="evenodd" />
                                                         </svg>
@@ -1071,16 +1106,16 @@ export default function ReferencesSidebar({
                                                             {asset.filename}
                                                         </p>
                                                         <div className="flex items-center gap-1.5 mt-0.5">
-                                                            <span className="text-[9.5px] font-bold text-zinc-400">
+                                                            <span className="text-[9px] font-bold text-zinc-400 font-mono">
                                                                 {asset.duration ? `${asset.duration.toFixed(1)}s` : '0.0s'}
                                                             </span>
                                                             <span className="w-0.5 h-0.5 rounded-full bg-white/20" />
                                                             {hasTranscript ? (
-                                                                <span className="text-[8.5px] font-semibold text-emerald-400 bg-emerald-950/30 px-1 py-0.5 rounded border border-emerald-500/20">
+                                                                <span className="text-[8.5px] font-semibold text-emerald-400 bg-emerald-950/20 px-1.5 py-0.5 rounded border border-emerald-500/10">
                                                                     AI Ready
                                                                 </span>
                                                             ) : (
-                                                                <span className="text-[8.5px] font-semibold text-amber-400 bg-amber-950/30 px-1 py-0.5 rounded border border-amber-500/20 animate-pulse">
+                                                                <span className="text-[8.5px] font-semibold text-amber-400 bg-amber-950/20 px-1.5 py-0.5 rounded border border-amber-500/10 animate-pulse">
                                                                     AI Processing...
                                                                 </span>
                                                             )}
@@ -1098,10 +1133,10 @@ export default function ReferencesSidebar({
                                                                 triggerAddedFeedback(asset.id);
                                                             }
                                                         }}
-                                                        className={`h-6 px-1.5 rounded-lg bg-zinc-950 border flex items-center justify-center text-[9.5px] font-sans font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 shrink-0 ${
+                                                        className={`h-6 px-2 rounded-lg bg-black border flex items-center justify-center text-[9px] font-sans font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 shrink-0 ${
                                                             isJustAdded 
                                                                 ? 'border-emerald-500 text-emerald-400 bg-emerald-950/80' 
-                                                                : 'border-white/10 hover:border-amber-500 hover:text-amber-500 text-zinc-350'
+                                                                : 'border-white/10 hover:border-amber-500 hover:text-amber-500 text-zinc-300'
                                                         }`}
                                                         title="Stitch clip onto main timeline (V1)"
                                                     >
@@ -1114,10 +1149,10 @@ export default function ReferencesSidebar({
                                                             e.stopPropagation();
                                                             insertCustomBroll(asset);
                                                         }}
-                                                        className={`h-6 px-1.5 rounded-lg bg-zinc-950 border flex items-center justify-center text-[9.5px] font-sans font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 shrink-0 ${
+                                                        className={`h-6 px-2 rounded-lg bg-black border flex items-center justify-center text-[9px] font-sans font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 shrink-0 ${
                                                             isJustAdded 
                                                                 ? 'border-emerald-500 text-emerald-400 bg-emerald-950/80' 
-                                                                : 'border-white/10 hover:border-amber-500 hover:text-amber-500 text-zinc-350'
+                                                                : 'border-white/10 hover:border-amber-500 hover:text-amber-500 text-zinc-300'
                                                         }`}
                                                         title="Overlay clip as B-Roll (V2)"
                                                     >
@@ -1131,9 +1166,190 @@ export default function ReferencesSidebar({
                             </div>
                         </div>
 
+                        {/* AI Stable Audio Generator (Apple-inspired Glassmorphic panel) */}
+                        <div className="bg-white/[0.02] rounded-2xl p-4 border border-white/5 shadow-md backdrop-blur-md space-y-4">
+                            <div className="flex items-center justify-between">
+                                <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                    AI Stable Audio Generator
+                                </h3>
+                            </div>
+                            
+                            <form onSubmit={handleGenerateAiAudio} className="space-y-4">
+                                <div className="flex flex-col gap-1.5">
+                                    <span className="text-[9.5px] font-semibold text-zinc-400 uppercase tracking-wider">Prompt / Описание</span>
+                                    <textarea
+                                        value={aiPrompt}
+                                        onChange={(e) => setAiPrompt(e.target.value)}
+                                        placeholder="e.g. 80s retro lofi study beat, or cinematic deep riser whoosh..."
+                                        rows={2}
+                                        className="w-full bg-black/40 border border-white/5 rounded-xl px-3 py-2 text-[11px] text-white placeholder-zinc-555 focus:outline-none focus:border-white/20 transition-all resize-none font-sans"
+                                    />
+                                </div>
+
+                                <div className="flex gap-4">
+                                    <div className="flex-1 flex flex-col gap-1.5">
+                                        <span className="text-[9.5px] font-semibold text-zinc-400 uppercase tracking-wider">Type</span>
+                                        <div className="flex bg-black/40 p-0.5 rounded-xl border border-white/5 gap-0.5">
+                                            <button
+                                                type="button"
+                                                onClick={() => setAiIsBgm(false)}
+                                                className={`flex-1 py-1 rounded-lg text-[9.5px] font-bold uppercase transition-all duration-200 cursor-pointer ${
+                                                    !aiIsBgm ? 'bg-white/10 text-white border border-white/5' : 'text-zinc-455 hover:text-zinc-200'
+                                                }`}
+                                            >
+                                                sfx
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setAiIsBgm(true)}
+                                                className={`flex-1 py-1 rounded-lg text-[9.5px] font-bold uppercase transition-all duration-200 cursor-pointer ${
+                                                    aiIsBgm ? 'bg-white/10 text-white border border-white/5' : 'text-zinc-455 hover:text-zinc-200'
+                                                }`}
+                                            >
+                                                music
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div className="flex-1 flex flex-col gap-1.5">
+                                        <span className="text-[9.5px] font-semibold text-zinc-400 uppercase tracking-wider">Duration: {aiDuration}s</span>
+                                        <input
+                                            type="range"
+                                            min="3"
+                                            max="45"
+                                            value={aiDuration}
+                                            onChange={(e) => setAiDuration(parseInt(e.target.value))}
+                                            className="w-full accent-white h-1 bg-black/40 rounded-lg appearance-none cursor-pointer mt-2"
+                                        />
+                                    </div>
+                                </div>
+
+                                {aiAudioError && (
+                                    <div className="text-[10px] text-rose-455 bg-rose-950/20 border border-rose-500/20 rounded-xl p-2.5 font-sans leading-tight">
+                                        ⚠️ {aiAudioError}
+                                    </div>
+                                )}
+
+                                <button
+                                    type="submit"
+                                    disabled={isGeneratingAudio || !aiPrompt.trim()}
+                                    className="w-full bg-white text-black hover:bg-neutral-250 disabled:bg-white/10 disabled:text-neutral-500 py-2 rounded-xl text-[11px] font-bold transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 shadow-sm font-sans"
+                                >
+                                    {isGeneratingAudio ? (
+                                        <>
+                                            <div className="w-3.5 h-3.5 rounded-full border-[1.5px] border-zinc-900 border-t-transparent animate-spin" />
+                                            <span>Generating via Replicate...</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                                                <path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" />
+                                            </svg>
+                                            <span>Generate Audio Track</span>
+                                        </>
+                                    )}
+                                </button>
+                            </form>
+                        </div>
+
+                        {/* AI Generated History & Library */}
+                        <div className="space-y-3">
+                            <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
+                                AI Generated History
+                            </h3>
+                            
+                            {mediaLibrary.filter(item => item.id?.startsWith('ai_audio') || item.filename?.startsWith('AI:')).length === 0 ? (
+                                <div className="text-center p-6 bg-white/[0.01] border border-white/5 rounded-2xl">
+                                    <span className="text-[11px] text-zinc-550 font-medium">
+                                        No generated audio tracks yet.
+                                    </span>
+                                </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    {mediaLibrary
+                                        .filter(item => item.id?.startsWith('ai_audio') || item.filename?.startsWith('AI:'))
+                                        .map((track) => {
+                                            const isPlaying = playingTrack === track.id;
+                                            const isJustAdded = justAddedIds.includes(track.id);
+                                            
+                                            // Check if it is currently added in activeEdits
+                                            const isApplied = activeEdits.some(e => 
+                                                e.action === 'add_asset' && e.resolved_path === track.path
+                                            );
+
+                                            return (
+                                                <div 
+                                                    key={track.id}
+                                                    draggable="true"
+                                                    onDragStart={(e) => handleDragStart(e, "music", {
+                                                        name: track.filename,
+                                                        title: track.filename,
+                                                        artist: "AI Model",
+                                                        category: "AI Generated",
+                                                        rel_path: track.path,
+                                                        description: "AI generated soundtrack"
+                                                    })}
+                                                    onDragEnd={() => onDragStateChange?.(null)}
+                                                    className={`p-2.5 border rounded-2xl flex items-center justify-between gap-3 transition-all duration-250 cursor-grab active:cursor-grabbing shadow-sm ${
+                                                        isApplied 
+                                                            ? 'border-amber-500/30 bg-amber-500/[0.02]' 
+                                                            : isJustAdded
+                                                                ? 'border-emerald-500 bg-emerald-950/10 scale-[0.98]'
+                                                                : 'border-white/5 bg-white/[0.02] hover:bg-white/[0.05] hover:border-white/10'
+                                                    }`}
+                                                >
+                                                    <div className="flex items-center gap-2.5 min-w-0">
+                                                        {/* Play Button */}
+                                                        <button 
+                                                            onClick={(e) => { e.stopPropagation(); togglePlayGeneratedAudio(track); }}
+                                                            className={`w-7 h-7 rounded-full flex items-center justify-center transition-all border cursor-pointer hover:scale-105 active:scale-95 shrink-0 ${
+                                                                isPlaying 
+                                                                    ? 'bg-white text-black border-white shadow-sm' 
+                                                                    : 'bg-black/40 border-white/10 text-zinc-400 hover:border-white/20 hover:text-white'
+                                                            }`}
+                                                        >
+                                                            {isPlaying ? (
+                                                                <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                                                            ) : (
+                                                                <svg className="w-2.5 h-2.5 translate-x-px" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                                                            )}
+                                                        </button>
+
+                                                        <div className="min-w-0 font-sans">
+                                                            <p className={`text-[11.5px] font-bold truncate ${isApplied ? 'text-amber-400' : 'text-zinc-205'}`} title={track.filename}>
+                                                                {track.filename}
+                                                            </p>
+                                                            <div className="flex items-center gap-1.5 mt-0.5">
+                                                                <span className="text-[9px] font-mono text-zinc-450">
+                                                                    {track.duration ? `${track.duration.toFixed(1)}s` : '0.0s'}
+                                                                </span>
+                                                                <span className="w-0.5 h-0.5 rounded-full bg-white/20" />
+                                                                <span className="text-[9px] text-zinc-500 font-medium">AI Generated</span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <button 
+                                                        onClick={(e) => { e.stopPropagation(); applyGeneratedAudio(track, true); }}
+                                                        disabled={isApplied}
+                                                        className={`h-6.5 px-2.5 rounded-lg text-[9.5px] font-semibold tracking-wide transition-all flex items-center justify-center cursor-pointer ${
+                                                            isApplied 
+                                                                ? 'bg-amber-500/10 border border-amber-500/20 text-amber-500 cursor-default' 
+                                                                : 'bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-200 active:scale-98'
+                                                        }`}
+                                                    >
+                                                        {isApplied ? 'active' : 'add'}
+                                                    </button>
+                                                </div>
+                                            );
+                                        })}
+                                </div>
+                            )}
+                        </div>
+
                         {/* Video B-Rolls Library */}
-                        <div>
-                            <div className="flex items-center justify-between mb-3">
+                        <div className="space-y-3">
+                            <div className="flex items-center justify-between">
                                 <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">video b-roll library</h3>
                             </div>
                             
@@ -1148,9 +1364,9 @@ export default function ReferencesSidebar({
                                             onDragEnd={() => onDragStateChange?.(null)}
                                             onMouseEnter={() => setHoveredBroll(item.id)}
                                             onMouseLeave={() => setHoveredBroll(null)}
-                                            className={`relative aspect-video bg-zinc-950 border rounded-xl overflow-hidden cursor-grab active:cursor-grabbing transition-all group flex flex-col items-center justify-center shadow-sm ${
+                                            className={`relative aspect-video bg-black border rounded-2xl overflow-hidden cursor-grab active:cursor-grabbing transition-all duration-300 group flex flex-col items-center justify-center shadow-md ${
                                                 isJustAdded 
-                                                    ? 'border-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.3)] scale-[0.98]' 
+                                                    ? 'border-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.2)] scale-[0.98]' 
                                                     : 'border-white/5 bg-white/[0.01]'
                                             }`}
                                         >
@@ -1170,7 +1386,7 @@ export default function ReferencesSidebar({
                                             <div className="absolute top-1.5 right-1.5 z-10">
                                                 <button 
                                                     onClick={() => insertLibraryBroll(item)}
-                                                    className={`w-5.5 h-5.5 rounded-full bg-black/60 backdrop-blur-md border flex items-center justify-center text-[12px] font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 ${
+                                                    className={`w-5.5 h-5.5 rounded-full bg-black/60 backdrop-blur-md border flex items-center justify-center text-[11px] font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 ${
                                                         isJustAdded 
                                                             ? 'border-emerald-500 text-emerald-400 bg-emerald-950/85' 
                                                             : 'border-white/15 hover:border-amber-500 hover:text-amber-500 text-zinc-200'
@@ -1181,11 +1397,11 @@ export default function ReferencesSidebar({
                                                 </button>
                                             </div>
                                             
-                                            <div className="absolute bottom-2 left-2 right-2 z-10 flex flex-col font-sans">
-                                                <span className="text-[11.5px] font-semibold text-white truncate text-shadow leading-tight">
+                                            <div className="absolute bottom-2.5 left-2.5 right-2.5 z-10 flex flex-col font-sans">
+                                                <span className="text-[11px] font-semibold text-white truncate text-shadow leading-tight">
                                                     {item.name}
                                                 </span>
-                                                <span className="text-[9.5px] text-zinc-350 truncate mt-[1px] font-medium leading-none">
+                                                <span className="text-[9px] text-zinc-400 truncate mt-[2px] font-medium leading-none">
                                                     {item.description}
                                                 </span>
                                             </div>
@@ -1196,8 +1412,8 @@ export default function ReferencesSidebar({
                         </div>
 
                         {/* SFX Sounds Library */}
-                        <div>
-                            <div className="flex items-center justify-between mb-3">
+                        <div className="space-y-3">
+                            <div className="flex items-center justify-between">
                                 <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">sfx click & sweeps</h3>
                             </div>
                             
@@ -1211,29 +1427,29 @@ export default function ReferencesSidebar({
                                             draggable="true"
                                             onDragStart={(e) => handleDragStart(e, "sfx", item)}
                                             onDragEnd={() => onDragStateChange?.(null)}
-                                            className={`p-2 rounded-xl border cursor-grab active:cursor-grabbing flex items-center gap-2.5 group transition-all duration-200 shadow-sm ${
+                                            className={`p-2.5 rounded-2xl border cursor-grab active:cursor-grabbing flex items-center gap-3 group transition-all duration-200 shadow-sm ${
                                                 isJustAdded 
-                                                    ? 'border-emerald-500/50 bg-emerald-950/20 shadow-[0_0_12px_rgba(16,185,129,0.2)] scale-[0.98]' 
-                                                    : 'border-white/5 bg-white/[0.03] hover:bg-white/[0.08] hover:border-white/10 shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)]'
+                                                    ? 'border-emerald-500/40 bg-emerald-950/10 shadow-[0_0_12px_rgba(16,185,129,0.1)] scale-[0.98]' 
+                                                    : 'border-white/5 bg-white/[0.02] hover:bg-white/[0.05] hover:border-white/10'
                                             }`}
                                         >
                                             <button 
                                                 onClick={() => togglePlaySfx(item)}
-                                                className={`w-7 h-7 bg-zinc-950 border rounded-full flex items-center justify-center shrink-0 cursor-pointer transition-all hover:scale-105 active:scale-95 ${isPlaying ? 'border-amber-500 text-amber-500 bg-amber-500/10' : 'border-white/10 text-zinc-450 hover:text-white hover:border-white/20'}`}
+                                                className={`w-7 h-7 bg-black border rounded-full flex items-center justify-center shrink-0 cursor-pointer transition-all hover:scale-105 active:scale-95 ${isPlaying ? 'border-amber-500 text-amber-500 bg-amber-500/10' : 'border-white/10 text-zinc-400 hover:text-white hover:border-white/20'}`}
                                             >
                                                 {isPlaying ? (
-                                                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                                                    <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
                                                 ) : (
-                                                    <svg className="w-3 h-3 translate-x-px" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                                                    <svg className="w-2.5 h-2.5 translate-x-px" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                                                 )}
                                             </button>
                                             
                                             <div className="flex-1 min-w-0 font-sans">
-                                                <div className="flex items-center justify-between gap-1.5">
-                                                    <p className="text-[11.5px] font-bold text-zinc-150 truncate">{item.name}</p>
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <p className="text-[11.5px] font-bold text-zinc-200 truncate">{item.name}</p>
                                                     <button 
                                                         onClick={() => insertLibrarySfx(item)}
-                                                        className={`text-[9.5px] font-bold px-2 py-0.5 rounded-lg border transition-all cursor-pointer shrink-0 ${
+                                                        className={`text-[9px] font-bold px-2 py-0.5 rounded-lg border transition-all cursor-pointer shrink-0 ${
                                                             isJustAdded 
                                                                 ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' 
                                                                 : 'text-amber-500 hover:text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/15'
@@ -1243,7 +1459,7 @@ export default function ReferencesSidebar({
                                                         {isJustAdded ? '✓' : '+ add'}
                                                     </button>
                                                 </div>
-                                                <p className="text-[9.5px] text-zinc-350 mt-0.5 leading-normal truncate font-medium">{item.description}</p>
+                                                <p className="text-[9.5px] text-zinc-450 mt-0.5 leading-normal truncate font-medium">{item.description}</p>
                                             </div>
                                         </div>
                                     );
@@ -1252,8 +1468,8 @@ export default function ReferencesSidebar({
                         </div>
 
                         {/* Motion Graphics Library */}
-                        <div>
-                            <div className="flex items-center justify-between mb-3">
+                        <div className="space-y-3">
+                            <div className="flex items-center justify-between">
                                 <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">motion designs & layouts</h3>
                             </div>
                             
@@ -1266,30 +1482,30 @@ export default function ReferencesSidebar({
                                             draggable="true"
                                             onDragStart={(e) => handleDragStart(e, "graphics", item)}
                                             onDragEnd={() => onDragStateChange?.(null)}
-                                            className={`relative rounded-xl border cursor-grab active:cursor-grabbing flex flex-col group overflow-hidden transition-all duration-200 shadow-sm ${
+                                            className={`relative rounded-2xl border cursor-grab active:cursor-grabbing flex flex-col group overflow-hidden transition-all duration-200 shadow-sm ${
                                                 isJustAdded 
-                                                    ? 'border-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.3)] scale-[0.98]' 
-                                                    : 'border-white/5 bg-white/[0.03] hover:border-white/10 shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)]'
+                                                    ? 'border-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.2)] scale-[0.98]' 
+                                                    : 'border-white/5 bg-white/[0.02] hover:border-white/10'
                                             }`}
                                         >
-                                            <div className="w-full h-15 bg-zinc-950 pointer-events-none overflow-hidden opacity-60 group-hover:opacity-90 transition-opacity">
+                                            <div className="w-full h-14 bg-black pointer-events-none overflow-hidden opacity-60 group-hover:opacity-90 transition-opacity">
                                                 <iframe
                                                     srcDoc={`<!doctype html><html><head><meta charset="UTF-8"/><script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script><style>*{margin:0;padding:0;box-sizing:border-box;}html,body{width:100%;height:100%;overflow:hidden;background:#050507;display:flex;align-items:center;justify-content:center;}.clip{position:absolute;}#root{width:1080px;height:1920px;position:relative;transform-origin:top left;transform:scale(0.074);}</style></head><body><div id="root">${item.html}</div></body></html>`}
-                                                    className="w-full h-full border-none rounded-t-xl"
+                                                    className="w-full h-full border-none rounded-t-2xl"
                                                     style={{ background: 'transparent' }}
                                                     title={`lib-graphic-${item.id}`}
                                                 />
                                             </div>
                                             
-                                            <div className="flex items-center justify-between px-2.5 py-1.5 border-t border-white/5 bg-[#08080a]/90 font-sans">
+                                            <div className="flex items-center justify-between px-3 py-2 border-t border-white/5 bg-black/40 font-sans">
                                                 <div className="flex flex-col min-w-0">
                                                     <span className="text-[11.5px] font-bold text-zinc-200 truncate">{item.name}</span>
-                                                    <span className="text-[9.5px] text-zinc-355 truncate font-medium mt-0.5">{item.description}</span>
+                                                    <span className="text-[9.5px] text-zinc-450 truncate font-medium mt-0.5">{item.description}</span>
                                                 </div>
                                                 
                                                 <button 
                                                     onClick={() => insertLibraryGraphic(item)}
-                                                    className={`w-6 h-6 rounded-full bg-zinc-950 border flex items-center justify-center text-[13px] font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 shrink-0 ml-1.5 ${
+                                                    className={`w-5.5 h-5.5 rounded-full bg-black border flex items-center justify-center text-[12px] font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 shrink-0 ml-1.5 ${
                                                         isJustAdded 
                                                             ? 'border-emerald-500 text-emerald-400 bg-emerald-950/80' 
                                                             : 'border-white/10 hover:border-amber-500 hover:text-amber-500 text-zinc-200'
@@ -1307,397 +1523,33 @@ export default function ReferencesSidebar({
 
                         {/* Applied Edits Tracker */}
                         {activeEdits.length > 0 && (
-                            <div className="pt-5 border-t border-white/5 space-y-4">
+                            <div className="pt-5 border-t border-white/5 space-y-3">
                                 <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">currently active edits ({activeEdits.length})</h3>
-                                <div className="space-y-2.5 max-h-[220px] overflow-y-auto pr-1 scrollbar-thin">
+                                <div className="space-y-2 max-h-[180px] overflow-y-auto pr-1 scrollbar-thin">
                                     {activeEdits.map((e, i) => {
                                         let label = e.action.replace("add_", "").replace("_overlay", "");
                                         if (e.action === 'add_broll') label = `broll: ${e.query}`;
                                         else if (e.action === 'add_asset') label = `${e.asset_query?.toLowerCase().includes('sfx') ? 'sfx' : 'music'}: ${e.asset_query}`;
                                         return (
-                                            <div key={i} className="flex items-center justify-between p-3.5 bg-white/5 border border-white/10 rounded-2xl text-[12.5px] text-zinc-200 font-sans shadow-md">
-                                                <span className="truncate max-w-[200px] font-medium">{label}</span>
-                                                <span className="text-zinc-400 shrink-0 font-sans text-[15px] font-semibold">{e.start != null ? `${e.start.toFixed(1)}s` : '0s'}</span>
+                                            <div key={i} className="flex items-center justify-between p-3 bg-white/[0.02] border border-white/5 rounded-2xl text-[12px] text-zinc-250 font-sans shadow-sm">
+                                                <span className="truncate max-w-[180px] font-medium">{label}</span>
+                                                <span className="text-zinc-500 shrink-0 font-semibold">{e.start != null ? `${e.start.toFixed(1)}s` : '0s'}</span>
                                             </div>
                                         );
                                     })}
                                 </div>
                             </div>
-                        )}
-                    </div>
-                )}
-
-                {sidebarTab === 'music' && (
-                    <div className="space-y-7">
-                        {isMobile ? (
-                            <div className="bg-white/5 rounded-xl p-3 border border-white/10 text-zinc-350 flex flex-col gap-2 font-sans shadow-sm">
-                                <span className="text-[12px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
-                                    💡 Soundtrack Management
-                                </span>
-                                <span className="text-[12px] leading-relaxed text-zinc-300 font-medium">
-                                    Tap "select track" below to overlay the selected audio track onto your timeline.
-                                </span>
-                            </div>
-                        ) : (
-                            <div className="bg-white/5 rounded-xl p-3 border border-white/10 text-zinc-350 flex flex-col gap-2 font-sans shadow-sm">
-                                <span className="text-[12px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
-                                    💡 Soundtrack Management
-                                </span>
-                                <span className="text-[12px] leading-relaxed text-zinc-300 font-medium">
-                                    Select a track below. You can also **drag and drop** the card onto the **music m1** track of the timeline.
-                                </span>
-                            </div>
-                        )}
-                        
-                        {Object.entries(categories).map(([catName, tracks]) => (
-                            <div key={catName}>
-                                <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest mb-3.5 flex items-center gap-2">
-                                    <span className="w-1 h-3 bg-amber-500 shrink-0 rounded-full" />
-                                    {catName.toLowerCase()}
-                                </h3>
-                                
-                                <div className="space-y-2">
-                                    {tracks.map(track => {
-                                        const isApplied = activeBgmName.toLowerCase().includes(track.name.split(" - ").pop()?.toLowerCase() || "___non_existent___") || activeBgmName.toLowerCase().includes(track.title.toLowerCase());
-                                        const isPlaying = playingTrack === track.name;
-                                        const isJustAdded = justAddedIds.includes(track.name);
-                                        return (
-                                            <div 
-                                                key={track.name} 
-                                                draggable="true"
-                                                onDragStart={(e) => handleDragStart(e, "music", track)}
-                                                onDragEnd={() => onDragStateChange?.(null)}
-                                                className={`p-2 border flex flex-col gap-1.5 transition-all duration-200 rounded-xl cursor-grab active:cursor-grabbing shadow-sm ${
-                                                    isApplied 
-                                                        ? 'border-amber-500/40 bg-amber-500/5' 
-                                                        : isJustAdded
-                                                            ? 'border-emerald-500 bg-emerald-950/10 shadow-[0_0_12px_rgba(16,185,129,0.2)] scale-[0.98]'
-                                                            : 'border-white/5 bg-white/[0.03] hover:bg-white/[0.08] hover:border-white/10 shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)]'
-                                                }`}
-                                            >
-                                                <div className="flex items-center justify-between gap-2">
-                                                    <div className="min-w-0">
-                                                        <h4 className={`text-[12px] font-bold truncate ${isApplied ? 'text-amber-500' : isJustAdded ? 'text-emerald-400' : 'text-zinc-150'}`}>
-                                                            {track.title}
-                                                        </h4>
-                                                        <p className="text-[10px] text-zinc-450 font-sans">{track.artist}</p>
-                                                    </div>
-                                                    
-                                                    <div className="flex items-center gap-1">
-                                                        <button 
-                                                            onClick={(ev) => { ev.stopPropagation(); togglePlayTrack(track); }}
-                                                            className={`w-7 h-7 rounded-full flex items-center justify-center transition-all border cursor-pointer hover:scale-105 active:scale-95 shrink-0 ${
-                                                                isPlaying 
-                                                                    ? 'bg-amber-500/10 border-amber-500 text-amber-500' 
-                                                                    : 'bg-zinc-950 border-white/10 text-zinc-400 hover:border-white/20 hover:text-white'
-                                                            }`}
-                                                        >
-                                                            {isPlaying ? (
-                                                                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-                                                            ) : (
-                                                                <svg className="w-3 h-3 translate-x-px" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                                                            )}
-                                                        </button>
-                                                        <button 
-                                                            onClick={(ev) => { ev.stopPropagation(); applyMusicTrack(track.name); }}
-                                                            disabled={isApplied}
-                                                            className={`h-7 px-3 rounded-lg text-[11px] font-semibold tracking-wide transition-all flex items-center justify-center cursor-pointer ${
-                                                                isApplied 
-                                                                    ? 'bg-amber-500/10 border border-amber-500/30 text-amber-500 cursor-default shadow-sm' 
-                                                                    : isJustAdded
-                                                                        ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 shadow-sm'
-                                                                        : 'bg-white/5 hover:bg-white/10 border border-white/15 text-zinc-200 active:scale-98 shadow-sm'
-                                                            }`}
-                                                        >
-                                                            {isApplied ? 'applied' : isJustAdded ? 'added' : 'select'}
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                )}
-
-                {sidebarTab === 'stock' && (
-                    <div className="space-y-4 animate-fadeIn">
-                        <div className="bg-white/[0.02] border border-white/5 shadow-[inset_0_1px_1px_rgba(255,255,255,0.03)] rounded-lg p-2 flex flex-col gap-1 shadow-sm">
-                            <span className="text-[9.5px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1">
-                                🔍 Global Stock Engine
-                            </span>
-                            <span className="text-[9px] leading-relaxed text-zinc-400 font-medium font-sans">
-                                Search and download copyright-free background soundtracks or vector emoji stickers.
-                            </span>
-                        </div>
-
-                        {/* Search Mode Switcher */}
-                        <div className="flex bg-white/[0.02] backdrop-blur-md p-0.5 rounded-lg border border-white/5 shadow-inner gap-0.5">
-                            <button
-                                onClick={() => setStockType('stickers')}
-                                className={`flex-1 py-0.5 rounded-md text-[8.5px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                                    stockType === 'stickers' ? 'bg-zinc-900/80 text-amber-500 border border-white/5 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
-                                }`}
-                            >
-                                stickers
-                            </button>
-                            <button
-                                onClick={() => setStockType('music')}
-                                className={`flex-1 py-0.5 rounded-md text-[8.5px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                                    stockType === 'music' ? 'bg-zinc-900/80 text-amber-500 border border-white/5 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
-                                }`}
-                            >
-                                music
-                            </button>
-                            <button
-                                onClick={() => setStockType('ai_audio')}
-                                className={`flex-1 py-0.5 rounded-md text-[8.5px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                                    stockType === 'ai_audio' ? 'bg-zinc-900/80 text-amber-500 border border-white/5 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
-                                }`}
-                            >
-                                AI stable-audio
-                            </button>
-                        </div>
-
-                        {stockType !== 'ai_audio' ? (
-                            <>
-                                {/* Search Input Bar */}
-                                <form onSubmit={handleStockSearch} className="flex gap-1">
-                                    <input
-                                        type="text"
-                                        value={stockQuery}
-                                        onChange={(e) => setStockQuery(e.target.value)}
-                                        placeholder={stockType === 'stickers' ? "Search stickers (fire, subscribe)..." : "Search music (cozy, lofi)..."}
-                                        className="flex-1 bg-white/[0.02] backdrop-blur-md border border-white/5 rounded-lg px-2 py-1 text-[9.5px] text-white placeholder-zinc-500 focus:outline-none focus:border-amber-500/20 transition-colors font-sans"
-                                    />
-                                    <button
-                                        type="submit"
-                                        disabled={isSearchingStock}
-                                        className="bg-amber-500 hover:bg-amber-400 disabled:bg-amber-500/50 text-black px-2.5 py-1 rounded-lg text-[9.5px] font-bold transition-all shadow-md active:scale-95 cursor-pointer shrink-0 font-sans"
-                                    >
-                                        {isSearchingStock ? '...' : 'Search'}
-                                    </button>
-                                </form>
-
-                                {/* Search Results Display */}
-                                {stockError && (
-                                    <div className="text-[10px] text-rose-500 bg-rose-950/20 border border-rose-500/20 rounded-lg p-1.5 font-sans">
-                                        ⚠️ {stockError}
-                                    </div>
-                                )}
-
-                                <div className="space-y-1.5">
-                                    {isSearchingStock ? (
-                                        <div className="text-center py-4">
-                                            <div className="w-4 h-4 rounded-full border-[1.5px] border-white/10 border-t-amber-500 animate-spin mx-auto mb-1" />
-                                            <span className="text-[9.5px] text-zinc-450 font-medium font-sans">Searching stock catalog...</span>
-                                        </div>
-                                    ) : stockResults.length === 0 ? (
-                                        <div className="text-center py-4 bg-white/[0.01] border border-white/5 rounded-lg">
-                                            <span className="text-[9.5px] text-zinc-550 font-medium font-sans">
-                                                {stockQuery.trim() ? "No assets matched your search." : "Type a query and click Search."}
-                                            </span>
-                                        </div>
-                                    ) : (
-                                        <div className="space-y-1.5">
-                                            {stockResults.map((item) => {
-                                                const assetId = stockType === 'stickers' ? `stock_sticker_${item.id}` : `stock_music_${item.id}`;
-                                                const isDownloading = downloadingAssetId === assetId;
-                                                const isDownloaded = !!downloadedAssets[assetId];
-                                                const isTrackPlaying = playingTrack === item.name || (stockType === 'music' && playingTrack === item.title);
-
-                                                return (
-                                                    <div
-                                                        key={item.id}
-                                                        className="p-1 border rounded-lg flex flex-col gap-1 transition-all shadow-sm border-white/5 bg-white/[0.02] hover:bg-white/[0.05] hover:border-white/10 backdrop-blur-md shadow-[inset_0_1px_1px_rgba(255,255,255,0.03)]"
-                                                    >
-                                                        <div className="flex items-center gap-1.5">
-                                                            {stockType === 'stickers' && item.url && (
-                                                                <div className="w-6 h-6 bg-zinc-950/80 border border-white/5 rounded-md flex items-center justify-center p-0.5 shrink-0 shadow-inner">
-                                                                    <img
-                                                                        src={item.url}
-                                                                        alt={item.name}
-                                                                        className="w-full h-full object-contain"
-                                                                        onError={(e) => {
-                                                                            (e.target as any).src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%233f3f46'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z'/%3E%3C/svg%3E";
-                                                                        }}
-                                                                    />
-                                                                </div>
-                                                            )}
-
-                                                            <div className="flex-1 min-w-0 font-sans">
-                                                                <h4 className="text-[10px] font-bold text-zinc-150 truncate leading-tight">
-                                                                    {stockType === 'stickers' ? item.name : item.title}
-                                                                </h4>
-                                                                <div className="flex items-center justify-between gap-1 mt-0.5">
-                                                                    {item.artist && (
-                                                                        <p className="text-[8.5px] text-zinc-400 font-sans truncate">by {item.artist}</p>
-                                                                    )}
-                                                                    <p className="text-[8px] text-zinc-450 font-medium truncate leading-none">{item.description}</p>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-
-                                                        <div className="flex items-center gap-1 mt-0.5">
-                                                            {stockType === 'music' && (
-                                                                <button
-                                                                    onClick={() => {
-                                                                        if (!audioPreviewRef.current) {
-                                                                            audioPreviewRef.current = new Audio();
-                                                                        }
-                                                                        if (isTrackPlaying) {
-                                                                            audioPreviewRef.current.pause();
-                                                                            setPlayingTrack(null);
-                                                                        } else {
-                                                                            audioPreviewRef.current.src = item.url;
-                                                                            audioPreviewRef.current.volume = 0.5;
-                                                                            audioPreviewRef.current.play().catch(err => console.error("Audio preview failed:", err));
-                                                                            setPlayingTrack(item.title);
-                                                                            audioPreviewRef.current.onended = () => {
-                                                                                setPlayingTrack(null);
-                                                                            };
-                                                                        }
-                                                                    }}
-                                                                    className={`w-5.5 h-5.5 rounded-full flex items-center justify-center transition-all border cursor-pointer shrink-0 ${
-                                                                        isTrackPlaying
-                                                                            ? 'bg-amber-500/10 border-amber-500 text-amber-500 shadow-sm'
-                                                                            : 'bg-zinc-950 border-white/10 text-zinc-400 hover:border-white/20 hover:text-white'
-                                                                    }`}
-                                                                    title="Preview audio track"
-                                                                >
-                                                                    {isTrackPlaying ? (
-                                                                        <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-                                                                    ) : (
-                                                                        <svg className="w-2.5 h-2.5 translate-x-px" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                                                                    )}
-                                                                </button>
-                                                            )}
-
-                                                    <button
-                                                        onClick={() => handleDownloadAsset(item)}
-                                                        disabled={isDownloading || isDownloaded}
-                                                        className={`flex-1 h-5.5 rounded-lg text-[8.5px] font-semibold tracking-wide transition-all flex items-center justify-center gap-0.5 cursor-pointer ${
-                                                            isDownloaded
-                                                                ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 cursor-default'
-                                                                : isDownloading
-                                                                    ? 'bg-zinc-900/50 border border-white/5 text-zinc-400 cursor-default'
-                                                                    : 'bg-amber-500 hover:bg-amber-400 text-black font-bold active:scale-[0.98]'
-                                                        }`}
-                                                    >
-                                                        {isDownloading ? (
-                                                            <>
-                                                                <div className="w-2.5 h-2.5 rounded-full border-[1.2px] border-zinc-400 border-t-white animate-spin" />
-                                                                <span>Downloading...</span>
-                                                            </>
-                                                        ) : isDownloaded ? (
-                                                            <>
-                                                                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3.5} d="M5 13l4 4L19 7" /></svg>
-                                                                <span>Downloaded & Active</span>
-                                                            </>
-                                                        ) : (
-                                                            <>
-                                                                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3"><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" /></svg>
-                                                                <span>Download & Add</span>
-                                                            </>
-                                                        )}
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            )}
-                        </div>
-                    </>
-                ) : (
-                            <form onSubmit={handleGenerateAiAudio} className="space-y-3 font-sans animate-fadeIn">
-                                <div className="flex flex-col gap-1">
-                                    <span className="text-[8.5px] font-bold text-zinc-400 uppercase tracking-wide">Sound/Music prompt</span>
-                                    <textarea
-                                        value={aiPrompt}
-                                        onChange={(e) => setAiPrompt(e.target.value)}
-                                        placeholder="e.g. 80s synthwave retro beat or cinematic deep impact whoosh..."
-                                        rows={2}
-                                        className="w-full bg-white/[0.02] backdrop-blur-md border border-white/5 rounded-lg px-2 py-1 text-[9.5px] text-white placeholder-zinc-500 focus:outline-none focus:border-amber-500/20 transition-colors resize-none font-sans"
-                                    />
-                                </div>
-
-                                <div className="flex gap-2">
-                                    <div className="flex-1 flex flex-col gap-1">
-                                        <span className="text-[8.5px] font-bold text-zinc-400 uppercase tracking-wide">Type</span>
-                                        <div className="flex bg-zinc-950/40 p-0.5 rounded-lg border border-white/5 gap-0.5">
-                                            <button
-                                                type="button"
-                                                onClick={() => setAiIsBgm(false)}
-                                                className={`flex-1 py-1 rounded-md text-[8.5px] font-bold uppercase transition-all cursor-pointer ${
-                                                    !aiIsBgm ? 'bg-zinc-900 text-amber-500 border border-white/5' : 'text-zinc-400 hover:text-zinc-200'
-                                                }`}
-                                            >
-                                                sfx
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => setAiIsBgm(true)}
-                                                className={`flex-1 py-1 rounded-md text-[8.5px] font-bold uppercase transition-all cursor-pointer ${
-                                                    aiIsBgm ? 'bg-zinc-900 text-amber-500 border border-white/5' : 'text-zinc-400 hover:text-zinc-200'
-                                                }`}
-                                            >
-                                                music
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <div className="flex-1 flex flex-col gap-1">
-                                        <span className="text-[8.5px] font-bold text-zinc-450 uppercase tracking-wide">Seconds: {aiDuration}s</span>
-                                        <input
-                                            type="range"
-                                            min="3"
-                                            max="45"
-                                            value={aiDuration}
-                                            onChange={(e) => setAiDuration(parseInt(e.target.value))}
-                                            className="w-full accent-amber-500 h-1.5 bg-zinc-950/60 rounded-lg appearance-none cursor-pointer mt-1.5"
-                                        />
-                                    </div>
-                                </div>
-
-                                {aiAudioError && (
-                                    <div className="text-[9px] text-rose-500 bg-rose-950/20 border border-rose-500/20 rounded-lg p-1.5 font-sans leading-tight">
-                                        ⚠️ {aiAudioError}
-                                    </div>
-                                )}
-
-                                <button
-                                    type="submit"
-                                    disabled={isGeneratingAudio || !aiPrompt.trim()}
-                                    className="w-full bg-amber-500 hover:bg-amber-400 disabled:bg-amber-500/50 text-black py-1.5 rounded-lg text-[9.5px] font-bold transition-all shadow-md active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1.5 font-sans"
-                                >
-                                    {isGeneratingAudio ? (
-                                        <>
-                                            <div className="w-3.5 h-3.5 rounded-full border-[1.5px] border-zinc-900 border-t-transparent animate-spin" />
-                                            <span>Generating via Replicate...</span>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3">
-                                                <path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" />
-                                            </svg>
-                                            <span>Generate Audio with Stable AI</span>
-                                        </>
-                                    )}
-                                </button>
-                            </form>
                         )}
                     </div>
                 )}
 
                 {sidebarTab === 'color' && (
-                    <div className="space-y-7">
-                        <div className="bg-white/5 rounded-xl p-3 border border-white/10 text-zinc-350 flex flex-col gap-2 font-sans shadow-sm">
-                            <span className="text-[12px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
+                    <div className="space-y-6">
+                        <div className="bg-white/[0.02] rounded-2xl p-3 border border-white/5 text-zinc-355 flex flex-col gap-1.5 font-sans shadow-md">
+                            <span className="text-[10px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
                                 💡 Цветокоррекция и LUTs
                             </span>
-                            <span className="text-[12px] leading-relaxed text-zinc-300 font-medium">
+                            <span className="text-[11px] leading-relaxed text-zinc-300 font-medium">
                                 Перетащите пресет на дорожку «Цветокор» (C1) или нажмите кнопку «+» на карточке пресета для добавления на позицию плейхеда.
                             </span>
                         </div>
@@ -1711,16 +1563,16 @@ export default function ReferencesSidebar({
                                         draggable="true"
                                         onDragStart={(e) => handleDragStart(e, "color", item)}
                                         onDragEnd={() => onDragStateChange?.(null)}
-                                        className={`relative aspect-video bg-zinc-950 border rounded-xl overflow-hidden cursor-grab active:cursor-grabbing transition-all group flex flex-col items-center justify-center shadow-sm ${
+                                        className={`relative aspect-video bg-black border rounded-2xl overflow-hidden cursor-grab active:cursor-grabbing transition-all duration-300 group flex flex-col items-center justify-center shadow-md ${
                                             isJustAdded 
-                                                ? 'border-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.3)] scale-[0.98]' 
+                                                ? 'border-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.2)] scale-[0.98]' 
                                                 : 'border-white/5 bg-white/[0.01] hover:border-white/20'
                                         }`}
                                     >
-                                        <div className="absolute inset-0 bg-gradient-to-tr from-zinc-900 to-zinc-950 opacity-90 z-0" />
+                                        <div className="absolute inset-0 bg-gradient-to-tr from-neutral-900 to-black opacity-90 z-0" />
                                         
                                         <div 
-                                            className="absolute top-3 left-3 w-4 h-4 rounded-full border border-white/20 shadow z-10" 
+                                            className="absolute top-3 left-3 w-3.5 h-3.5 rounded-full border border-white/10 shadow z-10" 
                                             style={{
                                                 background: item.id === 'cinema' ? 'linear-gradient(135deg, #1e3a8a, #b45309)' :
                                                             item.id === 'vintage' ? 'linear-gradient(135deg, #78350f, #d97706)' :
@@ -1736,7 +1588,7 @@ export default function ReferencesSidebar({
                                         <div className="absolute top-1.5 right-1.5 z-10">
                                             <button 
                                                 onClick={() => insertLutPreset(item)}
-                                                className={`w-5.5 h-5.5 rounded-full bg-black/60 backdrop-blur-md border flex items-center justify-center text-[12px] font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 ${
+                                                className={`w-5.5 h-5.5 rounded-full bg-black/65 backdrop-blur-md border flex items-center justify-center text-[11px] font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 ${
                                                     isJustAdded 
                                                         ? 'border-emerald-500 text-emerald-400 bg-emerald-950/85' 
                                                         : 'border-white/15 hover:border-amber-500 hover:text-amber-500 text-zinc-200'
@@ -1747,11 +1599,11 @@ export default function ReferencesSidebar({
                                             </button>
                                         </div>
                                         
-                                        <div className="absolute bottom-2 left-2 right-2 z-10 flex flex-col font-sans">
-                                            <span className="text-[11.5px] font-semibold text-white truncate text-shadow leading-tight">
+                                        <div className="absolute bottom-2.5 left-2.5 right-2.5 z-10 flex flex-col font-sans">
+                                            <span className="text-[11px] font-semibold text-white truncate text-shadow leading-tight">
                                                 {item.name}
                                             </span>
-                                            <span className="text-[9.5px] text-zinc-355 truncate mt-[1px] font-medium leading-none">
+                                            <span className="text-[9px] text-zinc-400 truncate mt-[2px] font-medium leading-none">
                                                 {item.description}
                                             </span>
                                         </div>

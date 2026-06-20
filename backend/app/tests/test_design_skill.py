@@ -111,5 +111,57 @@ class TestDesignSkill(unittest.TestCase):
         rel_corrected = polished["relations"][0]
         self.assertTrue(rel_corrected["animation"]["delay"] >= e1_corrected["animation"]["delay"] + 0.3)
 
+    def test_dynamic_font_pairing(self):
+        scene_data = {
+            "scene_template": "concept_explainer",
+            "mood": "tech",  # tech mood maps to header: Unbounded, body: Inter
+            "entities": [
+                {
+                    "id": "e1",
+                    "type": "headline",
+                    "text": "Технологический заголовок"
+                },
+                {
+                    "id": "e2",
+                    "type": "stat_card",
+                    "text": "Карточка 1"
+                }
+            ],
+            "duration": 5.0
+        }
+        polished, fixes = DesignSkill.audit_and_correct(scene_data, "vertical")
+        
+        # Headline e1 should get Unbounded font (header)
+        e1 = next(e for e in polished["entities"] if e["id"] == "e1")
+        self.assertEqual(e1["styles"]["font_family"], CYRILLIC_FONTS["Unbounded"])
+        
+        # Stat card e2 should get Inter font (body)
+        e2 = next(e for e in polished["entities"] if e["id"] == "e2")
+        self.assertEqual(e2["styles"]["font_family"], CYRILLIC_FONTS["Inter"])
+        
+        # Cozy mood check
+        scene_data_cozy = {
+            "scene_template": "comparison",
+            "mood": "cozy",  # cozy maps to header: Comfortaa, body: Rubik
+            "entities": [
+                {
+                    "id": "e1",
+                    "type": "headline",
+                    "text": "Уютный заголовок"
+                },
+                {
+                    "id": "e2",
+                    "type": "stat_card",
+                    "text": "Карточка 2"
+                }
+            ],
+            "duration": 5.0
+        }
+        polished_cozy, fixes_cozy = DesignSkill.audit_and_correct(scene_data_cozy, "vertical")
+        e1_cozy = next(e for e in polished_cozy["entities"] if e["id"] == "e1")
+        e2_cozy = next(e for e in polished_cozy["entities"] if e["id"] == "e2")
+        self.assertEqual(e1_cozy["styles"]["font_family"], CYRILLIC_FONTS["Comfortaa"])
+        self.assertEqual(e2_cozy["styles"]["font_family"], CYRILLIC_FONTS["Rubik"])
+
 if __name__ == "__main__":
     unittest.main()

@@ -69,16 +69,16 @@ async def process_video_pipeline(video_path: str, audio_path: str, file_id: str)
     """Фоновая задача: достать аудио, распознать текст и сделать визуальный анализ"""
     video_path = ensure_web_compatible_mp4(video_path, file_id)
     
-    # Создаем прокси-файл (360p) для мобильных устройств
+    # Создаем прокси-файл (480p) для мобильных устройств
     dir_name = os.path.dirname(video_path)
     base_name = os.path.basename(video_path)
     name, ext = os.path.splitext(base_name)
     proxy_path = os.path.join(dir_name, f"{name}_proxy.mp4")
     
-    log_progress(file_id, "⚙️ Создаем легковесный прокси-файл для мобильных устройств (360p)...")
+    log_progress(file_id, "⚙️ Создаем легковесный прокси-файл для мобильных устройств (480p)...")
     proxy_cmd = [
         "ffmpeg", "-y", "-i", video_path,
-        "-vf", "scale=-2:360",
+        "-vf", "scale=-2:480",
         "-c:v", "libx264", "-preset", "ultrafast", "-tune", "fastdecode",
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "96k",
