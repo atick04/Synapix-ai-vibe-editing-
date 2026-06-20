@@ -296,6 +296,16 @@ async def get_transcript(file_id: str):
             return {"status": "error", "detail": str(e)}
     return {"status": "processing"}
 
+@router.get("/{file_id}/session")
+async def get_project_session(file_id: str):
+    from app.workflows.production_session import load_session
+    try:
+        session = load_session(file_id)
+        return session
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка загрузки сессии: {str(e)}")
+
+
 from pydantic import BaseModel
 from typing import Optional, List, Any
 from app.services.video_service import render_video
@@ -377,6 +387,7 @@ async def run_export_task(file_id: str, settings: ExportSettings):
             font_size=settings.font_size or 100,
             use_outline=settings.use_outline if settings.use_outline is not None else True,
             font_color=settings.font_color or "white",
+            template_id=settings.template_id,
         )
         log_progress(file_id, f"✅ Экспорт завершён! Файл готов к скачиванию.")
     except Exception as e:

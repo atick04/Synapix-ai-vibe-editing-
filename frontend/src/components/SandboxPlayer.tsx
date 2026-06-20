@@ -1,5 +1,6 @@
 "use client";
 import { useRef, useEffect, useState, useCallback, useImperativeHandle, useMemo, forwardRef } from "react";
+import { getApiUrl } from "@/utils/api";
 
 // ──────────────────────────────────────────────────────────────────
 //  Types
@@ -46,8 +47,17 @@ interface Edit {
     active_scale?: number;
     x?: number;
     y?: number;
+    width?: number;
+    height?: number;
     letter_spacing?: number;
     line_spacing?: number;
+    scene_data?: any;
+    preset?: string;
+    lut?: string;
+    brightness?: number;
+    contrast?: number;
+    saturation?: number;
+    hue?: number;
 }
 
 interface EDL {
@@ -92,6 +102,9 @@ interface DrawnTextBox {
     height: number;
     x: number;
     y: number;
+    isEntity?: boolean;
+    entityId?: string;
+    sceneEditIndex?: number;
 }
 
 interface Props {
@@ -110,6 +123,8 @@ interface Props {
     focusedClipId?: string | null;
     onUpdateEdit?: (index: number, updates: Record<string, any>) => void;
     onUpdateSubtitleGlobal?: (field: string, value: any) => void;
+    onUpdateSubtitleGlobalMultiple?: (fields: Record<string, any>) => void;
+    onUpdateSubtitleChunk?: (chunkIndex: number, text: string) => void;
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -128,6 +143,17 @@ const FONT_URLS: Record<string, string> = {
     'JetBrainsMono': 'https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.8/files/jetbrains-mono-latin-700-normal.woff2',
     'IBMPlexSans': 'https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.8/files/ibm-plex-sans-latin-700-normal.woff2',
     'BebasNeue': 'https://cdn.jsdelivr.net/npm/@fontsource/bebas-neue@5.0.8/files/bebas-neue-latin-400-normal.woff2'
+};
+
+const LUT_PRESETS: Record<string, { brightness: number; contrast: number; saturation: number; hue: number }> = {
+    cinema: { brightness: 1.0, contrast: 1.1, saturation: 1.1, hue: 0 },
+    vintage: { brightness: 0.95, contrast: 0.9, saturation: 0.8, hue: 5 },
+    cyberpunk: { brightness: 1.0, contrast: 1.2, saturation: 1.4, hue: -10 },
+    monochrome: { brightness: 1.0, contrast: 1.2, saturation: 0.0, hue: 0 },
+    teal_orange: { brightness: 1.0, contrast: 1.1, saturation: 1.2, hue: 10 },
+    vibrant: { brightness: 1.0, contrast: 1.1, saturation: 1.3, hue: 0 },
+    cold: { brightness: 1.0, contrast: 1.05, saturation: 0.9, hue: -15 },
+    warm: { brightness: 1.05, contrast: 1.0, saturation: 1.1, hue: 15 }
 };
 
 function getNormalizedFontName(fontName: string): string {
@@ -177,6 +203,26 @@ function drawRoundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w:
     ctx.closePath();
 }
 
+function getEmojiForIcon(id: string): string {
+    const mapping: Record<string, string> = {
+        'rocket': '🚀', 'fire': '🔥', 'warning': '⚠️', 'check': '✅',
+        'star': '⭐', 'lightning': '⚡', 'chart': '📊', 'crm': '💻',
+        'sales': '📈', 'money': '💰', 'arrow': '➡️', 'brain': '🧠'
+    };
+    return mapping[id] || id;
+}
+
+function drawArrowhead(ctx: CanvasRenderingContext2D, fromX: number, fromY: number, toX: number, toY: number, size: number) {
+    const angle = Math.atan2(toY - fromY, toX - fromX);
+    ctx.beginPath();
+    ctx.moveTo(toX, toY);
+    ctx.lineTo(toX - size * Math.cos(angle - Math.PI / 6), toY - size * Math.sin(angle - Math.PI / 6));
+    ctx.lineTo(toX - size * Math.cos(angle + Math.PI / 6), toY - size * Math.sin(angle + Math.PI / 6));
+    ctx.closePath();
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.fill();
+}
+
 function fmtTime(s: number): string {
     const m = Math.floor(s / 60);
     const sec = Math.floor(s % 60);
@@ -201,6 +247,8 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
     focusedClipId,
     onUpdateEdit,
     onUpdateSubtitleGlobal,
+    onUpdateSubtitleGlobalMultiple,
+    onUpdateSubtitleChunk,
 }, ref) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -210,6 +258,19 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
     const edlRef = useRef(edl);
     const editsRef = useRef(edits);
     const drawnTextBoxesRef = useRef<DrawnTextBox[]>([]);
+    const [selectedEntity, setSelectedEntity] = useState<{ sceneEditIndex: number; entityId: string } | null>(null);
+    const [editingEntity, setEditingEntity] = useState<{
+        sceneEditIndex: number;
+        entityId: string;
+        left: number;
+        top: number;
+        width: number;
+        height: number;
+        text: string;
+    } | null>(null);
+    const dragStartDimsRef = useRef({ width: 0, height: 0, fontSize: 0 });
+    const dragModeRef = useRef<'move' | 'resize-TL' | 'resize-TR' | 'resize-BL' | 'resize-BR' | 'resize-T' | 'resize-B' | 'resize-L' | 'resize-R' | null>(null);
+
     const [currentTime, setCurrentTime] = useState(0);
     const [dur, setDur] = useState(duration || 0);
     const [videoReady, setVideoReady] = useState(false);
@@ -221,7 +282,7 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
     }, [targetFormat, videoAspect]);
     const [loadedFonts, setLoadedFonts] = useState<Set<string>>(new Set());
     
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    const API_URL = getApiUrl();
 
     const resolveMediaUrl = useCallback((path: string | undefined) => {
         if (!path) return "";
@@ -326,7 +387,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Graphics]', e); }
 <head>
   <meta charset="UTF-8"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Inter:wght@400;700;900&family=Playfair+Display:ital,wght@0,700;1,700&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Inter:wght@400;700;900&family=Marck+Script&family=Playfair+Display:ital,wght@0,700;1,700&display=swap" rel="stylesheet"/>
   <style>
     *{margin:0;padding:0;box-sizing:border-box;}
     html,body{width:100%;height:100%;overflow:hidden;background:transparent;}
@@ -398,7 +459,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
 <head>
   <meta charset="UTF-8"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Inter:wght@400;700;900&family=Playfair+Display:ital,wght@0,700;1,700&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Inter:wght@400;700;900&family=Marck+Script&family=Playfair+Display:ital,wght@0,700;1,700&display=swap" rel="stylesheet"/>
   <style>
     *{margin:0;padding:0;box-sizing:border-box;}
     html,body{width:100%;height:100%;overflow:hidden;background:transparent;}
@@ -797,6 +858,84 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
         let currentY = baseY - totalBlockHeight / 2;
         let globalWordIdx = 0;
 
+        // Calculate entrance/exit animation metrics
+        const animStyle = ov.animation_style || 'fade';
+        const duration = (ov.end || 0) - (ov.start || 0);
+        const dt = t - (ov.start || 0);
+        const dt_end = (ov.end || 0) - t;
+        
+        let blockOpacity = 1.0;
+        let blockScale = 1.0;
+        let blockTranslateX = 0;
+        let blockTranslateY = 0;
+        let blockBlur = 0;
+
+        const entranceDur = 0.35;
+        const exitDur = 0.25;
+
+        let animProgress = 1.0;
+        let isAnimating = false;
+
+        if (dt >= 0 && dt < entranceDur) {
+            animProgress = dt / entranceDur;
+            isAnimating = true;
+        } else if (dt_end >= 0 && dt_end < exitDur) {
+            animProgress = dt_end / exitDur;
+            isAnimating = true;
+        }
+
+        if (isAnimating) {
+            if (animStyle === 'fade') {
+                blockOpacity = animProgress;
+            } else if (animStyle === 'pop') {
+                blockOpacity = animProgress;
+                blockScale = 0.82 + 0.18 * animProgress;
+            } else if (animStyle === 'slide_up') {
+                blockOpacity = animProgress;
+                blockTranslateY = (1 - animProgress) * 40 * scaleMul;
+            } else if (animStyle === 'bounce') {
+                blockOpacity = animProgress;
+                blockScale = 0.3 + 0.7 * Math.sin(animProgress * Math.PI * 0.65);
+            } else if (animStyle === 'glow') {
+                blockOpacity = animProgress;
+                blockBlur = (1 - animProgress) * 16 * scaleMul;
+            } else if (animStyle === 'slide_left') {
+                blockOpacity = animProgress;
+                blockTranslateX = -(1 - animProgress) * 60 * scaleMul;
+            } else if (animStyle === 'slide_right') {
+                blockOpacity = animProgress;
+                blockTranslateX = (1 - animProgress) * 60 * scaleMul;
+            }
+        }
+
+        ctx.save();
+        
+        if (blockOpacity !== 1.0) {
+            ctx.globalAlpha = ctx.globalAlpha * blockOpacity;
+        }
+        
+        if (blockBlur > 0) {
+            try {
+                ctx.filter = `blur(${Math.round(blockBlur)}px)`;
+            } catch (err) {
+                // fallback if not supported
+            }
+        }
+
+        const blockCenterX = (minLineX + maxLineRight) / 2;
+        const blockCenterY = baseY;
+
+        if (blockTranslateX !== 0 || blockTranslateY !== 0 || blockScale !== 1.0) {
+            ctx.translate(blockCenterX, blockCenterY);
+            if (blockScale !== 1.0) {
+                ctx.scale(blockScale, blockScale);
+            }
+            if (blockTranslateX !== 0 || blockTranslateY !== 0) {
+                ctx.translate(blockTranslateX / blockScale, blockTranslateY / blockScale);
+            }
+            ctx.translate(-blockCenterX, -blockCenterY);
+        }
+
         lines.forEach((line, j) => {
             let currentX = W / 2 - lineWidths[j] / 2;
             if (customX !== undefined) {
@@ -810,11 +949,19 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
             }
 
             line.forEach((w) => {
-                const isActive = isSub ? (globalWordIdx === activeIdx) : false;
+                // For typewriter animation, only show words that have started!
+                if (ov.animation_style === 'typewriter' && w.start > t) {
+                    currentX += w.measuredWidth + spaceW;
+                    globalWordIdx++;
+                    return;
+                }
+
+                const useKaraokeHighlight = isSub && ov.animation_style === 'karaoke';
+                const isActive = useKaraokeHighlight ? (globalWordIdx === activeIdx) : false;
                 
                 // Active word pop animation
                 let scaleFactor = 1.0;
-                if (isActive && isSub) {
+                if (isActive && useKaraokeHighlight) {
                     const wordStart = w.start;
                     const dt = t - wordStart;
                     const baseActiveScale = 1.15; // Hold at a slightly larger size for a premium kinetic look
@@ -847,13 +994,24 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 setCtxFontAndSpacing(`${w.italic ? 'italic ' : ''}${w.bold ? 'bold ' : ''}${w.fontSize}px '${w.fontFamily}', Inter, sans-serif`);
 
                 // Fill style & Opacity mapping
-                const isAccentWord = isSub 
-                    ? isActive 
-                    : (w.color !== null || (wordsList.length === 3 && globalWordIdx === 1) || (wordsList.length === 2 && globalWordIdx === 1));
+                let isAccentWord = false;
+                if (useKaraokeHighlight) {
+                    isAccentWord = isActive;
+                } else if (isSub) {
+                    // Statically highlight the accent word (2nd word of 3, or 2nd of 2)
+                    const totalWordsInChunk = wordsList.length;
+                    const accentIdx = totalWordsInChunk === 3 ? 1 : totalWordsInChunk === 2 ? 1 : -1;
+                    isAccentWord = (w.color !== null || globalWordIdx === accentIdx);
+                } else {
+                    isAccentWord = (w.color !== null || (wordsList.length === 3 && globalWordIdx === 1) || (wordsList.length === 2 && globalWordIdx === 1));
+                }
 
-                if (isSub) {
+                if (useKaraokeHighlight) {
                     ctx.fillStyle = w.color || (isActive ? accentColor : mainColor);
                     ctx.globalAlpha = isActive ? 1.0 : inactiveOpacity;
+                } else if (isSub) {
+                    ctx.fillStyle = w.color || (isAccentWord ? accentColor : mainColor);
+                    ctx.globalAlpha = 1.0;
                 } else {
                     ctx.fillStyle = w.color || (isAccentWord ? accentColor : mainColor);
                     ctx.globalAlpha = 1.0;
@@ -863,7 +1021,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 const useOutline = ov.use_outline !== false;
                 const useShadow = ov.use_shadow !== false;
 
-                if (w.glow || (isSub && isActive && ov.animation_style === 'glow')) {
+                if (w.glow || (useKaraokeHighlight && isActive && ov.animation_style === 'glow')) {
                     ctx.shadowColor = w.color || accentColor || '#00E5FF';
                     ctx.shadowBlur = 25;
                     ctx.shadowOffsetX = 0;
@@ -893,6 +1051,8 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
 
             currentY += lineHeights[j] + lineSpacing;
         });
+
+        ctx.restore();
 
         const boxLeft = minLineX;
         const boxTop = baseY - totalBlockHeight / 2;
@@ -924,6 +1084,841 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
         if (!activeSub) return;
         drawStyledTextOverlay(ctx, activeSub, t, W, H, true);
     }, [drawStyledTextOverlay]);
+
+    // ── Direct Semantic Scene Canvas Renderer (No Iframe) ──────────
+    const drawSemanticSceneDirect = useCallback((
+        ctx: CanvasRenderingContext2D,
+        sceneData: any,
+        start: number,
+        end: number,
+        t: number,
+        W: number,
+        H: number,
+        sceneEditIndex: number
+    ) => {
+        if (t < start || t >= end) return;
+        const styleProfile = sceneData.style_profile || {};
+        const entities = sceneData.entities || [];
+        const relations = sceneData.relations || [];
+        const bgColor = styleProfile.bg_color || 'rgba(20, 20, 25, 0.65)';
+        const borderColor = styleProfile.border_color || 'rgba(255, 255, 255, 0.15)';
+        const glowColor = styleProfile.glow_color || 'rgba(255, 255, 255, 0.04)';
+        const baseFontFamily = styleProfile.font_family || 'Inter, sans-serif';
+        const elapsed = t - start;
+
+        entities.forEach((entity: any) => {
+            const xPercent = entity.x ?? 50;
+            const yPercent = entity.y ?? 50;
+            const wPercent = entity.width ?? 28;
+            const hPercent = entity.height ?? 12;
+            const targetX = (xPercent / 100) * W;
+            const targetY = (yPercent / 100) * H;
+            const targetW = (wPercent / 100) * W;
+            const targetH = (hPercent / 100) * H;
+            const anim = entity.animation || {};
+            const animType = anim.type || 'fade';
+            const animDuration = anim.duration || 0.6;
+            const animDelay = anim.delay || 0.0;
+            const progress = Math.min(1, Math.max(0, (elapsed - animDelay) / animDuration));
+            let easeProgress = progress;
+            if (anim.easing === 'linear') {
+                easeProgress = progress;
+            } else if (anim.easing === 'bounce' || anim.easing === 'ease-out-back') {
+                const c4 = (2 * Math.PI) / 3;
+                easeProgress = progress === 0 ? 0 : progress === 1 ? 1 : Math.pow(2, -10 * progress) * Math.sin((progress * 10 - 0.75) * c4) + 1;
+            } else if (anim.easing === 'ease-out-expo' || anim.easing === 'expo-out') {
+                easeProgress = progress === 0 ? 0 : progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
+            } else if (anim.easing === 'ease-out') {
+                easeProgress = 1 - (1 - progress) * (1 - progress);
+            } else if (anim.easing === 'ease-in') {
+                easeProgress = progress * progress;
+            } else {
+                easeProgress = progress * progress * (3 - 2 * progress);
+            }
+            let currentX = targetX;
+            let currentY = targetY;
+            let currentOpacity = 1.0;
+            let currentScale = 1.0;
+            let currentRotation = 0;
+            const startOpacity = anim.opacity_start !== undefined ? anim.opacity_start : (animType === 'fade' || animType === 'pop' || animType === 'slide_in' ? 0.0 : 1.0);
+            const endOpacity = anim.opacity_end !== undefined ? anim.opacity_end : 1.0;
+            currentOpacity = startOpacity + (endOpacity - startOpacity) * easeProgress;
+            const startScale = anim.scale_start !== undefined ? anim.scale_start : (animType === 'pop' ? 0.5 : 1.0);
+            const endScale = anim.scale_end !== undefined ? anim.scale_end : 1.0;
+            currentScale = startScale + (endScale - startScale) * easeProgress;
+            const startRotation = anim.rotation_start !== undefined ? anim.rotation_start : 0;
+            const endRotation = anim.rotation_end !== undefined ? anim.rotation_end : 0;
+            currentRotation = startRotation + (endRotation - startRotation) * easeProgress;
+            const xOffsetPercent = anim.x_offset !== undefined ? anim.x_offset : (animType === 'slide_in' ? -10 : 0);
+            const yOffsetPercent = anim.y_offset !== undefined ? anim.y_offset : 0;
+            const startX = targetX + (xOffsetPercent / 100) * W;
+            const startY = targetY + (yOffsetPercent / 100) * H;
+            currentX = startX + (targetX - startX) * easeProgress;
+            currentY = startY + (targetY - startY) * easeProgress;
+
+            // Push coordinates for interaction hit test and selection outline
+            drawnTextBoxesRef.current.push({
+                id: `entity-${sceneEditIndex}-${entity.id}`,
+                isSub: false,
+                editIndex: sceneEditIndex,
+                left: currentX - targetW / 2,
+                top: currentY - targetH / 2,
+                width: targetW,
+                height: targetH,
+                x: entity.x ?? 50,
+                y: entity.y ?? 50,
+                isEntity: true,
+                entityId: entity.id,
+                sceneEditIndex: sceneEditIndex
+            });
+            ctx.save();
+            ctx.globalAlpha = currentOpacity;
+            if (currentScale !== 1.0) {
+                ctx.translate(currentX, currentY);
+                ctx.scale(currentScale, currentScale);
+                ctx.translate(-currentX, -currentY);
+            }
+            if (currentRotation !== 0) {
+                ctx.translate(currentX, currentY);
+                ctx.rotate(currentRotation * Math.PI / 180);
+                ctx.translate(-currentX, -currentY);
+            }
+            const styles = entity.styles || {};
+            const itemBg = styles.bg_color || bgColor;
+            const itemBorder = styles.border_color || borderColor;
+            const itemGlow = styles.glow_color || glowColor;
+            const itemFont = styles.font_family || baseFontFamily;
+            
+            if (entity.type === 'loading_bar' || entity.is_loading_bar) {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+                ctx.strokeStyle = itemBorder;
+                ctx.lineWidth = 1.0;
+                drawRoundedRect(ctx, currentX - targetW / 2, currentY - targetH / 2, targetW, targetH, targetH / 2);
+                ctx.fill();
+                ctx.stroke();
+                
+                ctx.fillStyle = styleProfile.color_accent || '#0A84FF';
+                const activeW = targetW * easeProgress;
+                drawRoundedRect(ctx, currentX - targetW / 2, currentY - targetH / 2, activeW, targetH, targetH / 2);
+                ctx.fill();
+                
+                const textVal = entity.text || '';
+                if (textVal) {
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.font = 'bold ' + Math.round(targetH * 0.5) + 'px "' + itemFont + '", sans-serif';
+                    ctx.fillText(textVal + ' ' + Math.round(easeProgress * 100) + '%', currentX, currentY);
+                }
+            } else if (entity.type === 'navbar') {
+                // Draw Glassmorphic Capsule Navbar
+                ctx.shadowColor = itemGlow;
+                ctx.shadowBlur = 24;
+                ctx.shadowOffsetY = 4;
+                ctx.fillStyle = itemBg;
+                ctx.strokeStyle = itemBorder;
+                ctx.lineWidth = 1.5;
+                const r = targetH / 2;
+                drawRoundedRect(ctx, currentX - targetW / 2, currentY - targetH / 2, targetW, targetH, r);
+                ctx.fill();
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
+                ctx.stroke();
+
+                // 1. Logo / Title (Left-aligned)
+                const logoText = entity.text || 'Logo';
+                const logoSize = Math.round(targetH * 0.38);
+                ctx.fillStyle = styles.color || '#FFFFFF';
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'middle';
+                ctx.font = 'bold ' + logoSize + 'px "' + itemFont + '", sans-serif';
+                ctx.fillText(logoText, currentX - targetW / 2 + targetH * 0.6, currentY);
+
+                // 2. Navigation items (Center-aligned)
+                const navItems = entity.items || ["Home", "Features", "Pricing"];
+                if (navItems.length > 0) {
+                    const navSize = Math.round(targetH * 0.28);
+                    ctx.font = '500 ' + navSize + 'px "' + itemFont + '", sans-serif';
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
+                    ctx.textAlign = 'center';
+                    const linkSpacing = targetW * 0.15;
+                    const totalLinksW = (navItems.length - 1) * linkSpacing;
+                    const startLinkX = currentX - totalLinksW / 2;
+                    navItems.forEach((item: string, idx: number) => {
+                        ctx.fillText(item, startLinkX + idx * linkSpacing, currentY);
+                    });
+                }
+
+                // 3. Action Button (Right-aligned CTA)
+                const actText = entity.action_text || 'Get Started';
+                const actSize = Math.round(targetH * 0.28);
+                const actBtnW = targetW * 0.18;
+                const actBtnH = targetH * 0.64;
+                const actBtnX = currentX + targetW / 2 - actBtnW - targetH * 0.4;
+                const actBtnY = currentY - actBtnH / 2;
+                ctx.fillStyle = styleProfile.color_accent || '#0A84FF';
+                drawRoundedRect(ctx, actBtnX, actBtnY, actBtnW, actBtnH, actBtnH / 2);
+                ctx.fill();
+                
+                ctx.fillStyle = '#FFFFFF';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.font = 'bold ' + actSize + 'px "' + itemFont + '", sans-serif';
+                ctx.fillText(actText, actBtnX + actBtnW / 2, currentY);
+
+            } else if (entity.type === 'input_field') {
+                // Draw Figma-style Input field
+                const labelText = (entity.label || 'INPUT FIELD').toUpperCase();
+                const labelSize = Math.round(targetH * 0.22);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'bottom';
+                ctx.font = 'bold ' + labelSize + 'px "' + itemFont + '", sans-serif';
+                ctx.fillText(labelText, currentX - targetW / 2 + 4, currentY - targetH / 2 - 4);
+
+                ctx.shadowColor = 'rgba(0,0,0,0.15)';
+                ctx.shadowBlur = 12;
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+                ctx.strokeStyle = itemBorder;
+                ctx.lineWidth = 1.5;
+                drawRoundedRect(ctx, currentX - targetW / 2, currentY - targetH / 2, targetW, targetH, 8);
+                ctx.fill();
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
+                ctx.stroke();
+
+                let textOffset = targetH * 0.4;
+                const iconId = entity.icon || entity.asset_id;
+                if (iconId) {
+                    ctx.font = Math.round(targetH * 0.45) + 'px "' + itemFont + '", sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(getEmojiForIcon(iconId), currentX - targetW / 2 + targetH * 0.5, currentY);
+                    textOffset = targetH * 1.0;
+                }
+
+                const textVal = entity.text || 'Enter text...';
+                const textCol = entity.text ? '#FFFFFF' : 'rgba(255,255,255,0.45)';
+                ctx.fillStyle = textCol;
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'middle';
+                ctx.font = 'normal ' + Math.round(targetH * 0.34) + 'px "' + itemFont + '", sans-serif';
+                ctx.fillText(textVal, currentX - targetW / 2 + textOffset, currentY);
+
+            } else if (entity.type === 'button') {
+                const btnStyle = entity.style_variant || 'filled';
+                ctx.shadowColor = 'rgba(0,0,0,0.1)';
+                ctx.shadowBlur = 8;
+                
+                if (btnStyle === 'filled') {
+                    ctx.fillStyle = styleProfile.color_accent || '#0A84FF';
+                    ctx.strokeStyle = 'transparent';
+                } else if (btnStyle === 'outline') {
+                    ctx.fillStyle = 'rgba(255,255,255,0.02)';
+                    ctx.strokeStyle = styleProfile.color_accent || '#0A84FF';
+                } else {
+                    ctx.fillStyle = itemBg;
+                    ctx.strokeStyle = itemBorder;
+                }
+                ctx.lineWidth = 1.5;
+                drawRoundedRect(ctx, currentX - targetW / 2, currentY - targetH / 2, targetW, targetH, targetH / 2);
+                ctx.fill();
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
+                if (btnStyle !== 'filled') ctx.stroke();
+
+                const textVal = entity.text || 'Button';
+                const iconId = entity.icon || entity.asset_id;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.font = 'bold ' + Math.round(targetH * 0.38) + 'px "' + itemFont + '", sans-serif';
+                ctx.fillStyle = btnStyle === 'outline' ? (styleProfile.color_accent || '#0A84FF') : '#FFFFFF';
+                
+                if (iconId) {
+                    const iconEmoji = getEmojiForIcon(iconId);
+                    ctx.fillText(iconEmoji + ' ' + textVal, currentX, currentY);
+                } else {
+                    ctx.fillText(textVal, currentX, currentY);
+                }
+
+            } else if (entity.type === 'tab_bar') {
+                ctx.fillStyle = 'rgba(20, 20, 25, 0.45)';
+                ctx.strokeStyle = itemBorder;
+                ctx.lineWidth = 1.0;
+                drawRoundedRect(ctx, currentX - targetW / 2, currentY - targetH / 2, targetW, targetH, targetH / 2);
+                ctx.fill();
+                ctx.stroke();
+
+                const tabs = entity.items || ["Overview", "Settings"];
+                const activeIndex = entity.active_index ?? 0;
+                const tabW = targetW / tabs.length;
+                const tabH = targetH - 6;
+
+                const activeX = currentX - targetW / 2 + activeIndex * tabW + 3;
+                const activeY = currentY - tabH / 2;
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
+                drawRoundedRect(ctx, activeX, activeY, tabW - 6, tabH, tabH / 2);
+                ctx.fill();
+
+                ctx.textBaseline = 'middle';
+                ctx.textAlign = 'center';
+                const tabSize = Math.round(targetH * 0.34);
+                
+                tabs.forEach((tabText: string, idx: number) => {
+                    const labelX = currentX - targetW / 2 + idx * tabW + tabW / 2;
+                    ctx.fillStyle = idx === activeIndex ? '#FFFFFF' : 'rgba(255,255,255,0.6)';
+                    ctx.font = (idx === activeIndex ? 'bold ' : 'normal ') + tabSize + 'px "' + itemFont + '", sans-serif';
+                    ctx.fillText(tabText, labelX, currentY);
+                });
+
+            } else if (entity.type === 'code_block') {
+                // macOS Terminal window backdrop
+                ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+                ctx.shadowBlur = 32;
+                ctx.shadowOffsetY = 8;
+                ctx.fillStyle = '#0F0F12'; // Sleek dark theme
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+                ctx.lineWidth = 1.5;
+                drawRoundedRect(ctx, currentX - targetW / 2, currentY - targetH / 2, targetW, targetH, 12);
+                ctx.fill();
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
+                ctx.stroke();
+
+                // Draw top bar header line separator
+                const headerH = Math.min(32, targetH * 0.22);
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(currentX - targetW / 2, currentY - targetH / 2 + headerH);
+                ctx.lineTo(currentX + targetW / 2, currentY - targetH / 2 + headerH);
+                ctx.stroke();
+
+                // Draw window controls (macOS red/yellow/green dots)
+                const dotRadius = Math.max(3, headerH * 0.16);
+                const dotY = currentY - targetH / 2 + headerH / 2;
+                const dotSpacing = dotRadius * 3;
+                const startDotX = currentX - targetW / 2 + dotSpacing * 1.5;
+
+                const colors = ['#FF5F56', '#FFBD2E', '#27C93F'];
+                colors.forEach((col, idx) => {
+                    ctx.beginPath();
+                    ctx.arc(startDotX + idx * dotSpacing, dotY, dotRadius, 0, 2 * Math.PI);
+                    ctx.fillStyle = col;
+                    ctx.fill();
+                });
+
+                // Monospace window title label
+                const labelText = entity.label || entity.title || 'terminal.sh';
+                const labelSize = Math.max(8, Math.round(headerH * 0.45));
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.font = `bold ${labelSize}px "JetBrains Mono", monospace`;
+                ctx.fillText(labelText, currentX, dotY);
+
+            } else if (entity.type !== 'headline') {
+                ctx.shadowColor = itemGlow;
+                ctx.shadowBlur = 28;
+                ctx.shadowOffsetY = 4;
+                ctx.fillStyle = itemBg;
+                ctx.strokeStyle = itemBorder;
+                ctx.lineWidth = 1.5;
+                drawRoundedRect(ctx, currentX - targetW / 2, currentY - targetH / 2, targetW, targetH, 16);
+                ctx.fill();
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
+                ctx.stroke();
+            }
+            
+            if (entity.type !== 'loading_bar' && !entity.is_loading_bar && entity.type !== 'navbar' && entity.type !== 'input_field' && entity.type !== 'button' && entity.type !== 'tab_bar' && entity.type !== 'code_block' && entity.type !== 'metric_card' && entity.type !== 'circular_progress' && entity.type !== 'audio_waveform' && entity.type !== 'sparkline' && entity.type !== 'toggle_card' && entity.type !== 'profile_card') {
+                const textVal = entity.text || '';
+                if (textVal) {
+                    const lines = textVal.split('\\n');
+                    const textColor = styles.color || '#F5F7FA';
+                    const fontSize = styles.font_size || Math.round(H * 0.024);
+                    ctx.fillStyle = textColor;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.font = (styles.bold ? 'bold ' : '') + (styles.italic ? 'italic ' : '') + fontSize + 'px "' + itemFont + '", sans-serif';
+                    const totalTextHeight = lines.length * (fontSize * 1.35);
+                    const startY = currentY - (totalTextHeight / 2) + (fontSize / 2);
+                    
+                    const isDarkText = textColor.startsWith('#1') || textColor.startsWith('#2') || textColor.startsWith('#3') || textColor === 'black';
+                    
+                    lines.forEach((lineText: string, lIdx: number) => {
+                        const lineY = startY + lIdx * (fontSize * 1.35);
+                        if (entity.type === 'headline') {
+                            ctx.save();
+                            ctx.strokeStyle = isDarkText ? 'rgba(255, 255, 255, 0.8)' : 'rgba(0, 0, 0, 0.8)';
+                            ctx.lineWidth = Math.max(2, fontSize * 0.06);
+                            ctx.strokeText(lineText, currentX, lineY);
+                            
+                            ctx.shadowColor = isDarkText ? 'rgba(255, 255, 255, 0.5)' : 'rgba(0, 0, 0, 0.7)';
+                            ctx.shadowBlur = 8;
+                            ctx.shadowOffsetY = 2;
+                            ctx.shadowOffsetX = 1;
+                            
+                            ctx.fillText(lineText, currentX, lineY);
+                            ctx.restore();
+                        } else {
+                            ctx.fillText(lineText, currentX, lineY);
+                        }
+                    });
+                }
+                const iconId = entity.asset_id || entity.icon;
+                if (entity.type === 'icon' && iconId) {
+                    ctx.fillStyle = styles.color || '#3B82F6';
+                    ctx.font = Math.round(targetH * 0.5) + 'px "' + itemFont + '", sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(getEmojiForIcon(iconId), currentX, currentY);
+                }
+            }
+
+            // Draw customized text content for code_block
+            if (entity.type === 'code_block') {
+                const textVal = entity.text || '';
+                if (textVal) {
+                    const rawLines = textVal.split('\\n');
+                    const headerH = Math.min(32, targetH * 0.22);
+                    const clientAreaH = targetH - headerH;
+                    
+                    const lineCount = rawLines.length;
+                    const maxLines = Math.max(1, lineCount);
+                    const fontSize = Math.max(9, Math.min(18, Math.round(clientAreaH * 0.72 / maxLines)));
+                    
+                    ctx.font = `${fontSize}px "JetBrains Mono", monospace`;
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'middle';
+                    
+                    const padX = Math.max(12, targetW * 0.06);
+                    const startX = currentX - targetW / 2 + padX;
+                    const startY = currentY - targetH / 2 + headerH + (clientAreaH / (maxLines + 1));
+                    const stepY = clientAreaH / (maxLines + 1);
+
+                    rawLines.forEach((lineText: string, lIdx: number) => {
+                        const lineY = startY + lIdx * stepY;
+                        if (lineText.trim().startsWith('//')) {
+                            ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+                        } else {
+                            ctx.fillStyle = '#F4F4F5';
+                        }
+                        ctx.fillText(lineText, startX, lineY);
+                    });
+                }
+            }
+
+            // Draw customized text content for metric_card
+            if (entity.type === 'metric_card') {
+                const valueText = entity.value || entity.number || entity.text || '$12,450';
+                const subLabel = entity.label || entity.sublabel || entity.text_label || 'Metric';
+                const trendVal = entity.trend || '';
+                const accentColor = styleProfile.color_accent || '#0A84FF';
+                
+                const valFontSize = Math.round(targetH * 0.32);
+                const subFontSize = Math.round(targetH * 0.15);
+                
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'middle';
+                ctx.font = `bold ${valFontSize}px "${itemFont}", sans-serif`;
+                const valW = ctx.measureText(valueText).width;
+                
+                let trendW = 0;
+                let trendBadgeH = 0;
+                if (trendVal) {
+                    trendBadgeH = Math.round(valFontSize * 0.45);
+                    ctx.font = `bold ${Math.round(trendBadgeH * 0.7)}px "${itemFont}", sans-serif`;
+                    trendW = ctx.measureText(trendVal).width + trendBadgeH * 1.2;
+                }
+                
+                const gap = 16;
+                const totalRowW = valW + (trendVal ? gap + trendW : 0);
+                
+                const rowStartX = currentX - totalRowW / 2;
+                const rowY = currentY - targetH * 0.12;
+                const subY = currentY + targetH * 0.24;
+                
+                // Draw value
+                ctx.fillStyle = styles.color || accentColor;
+                ctx.font = `bold ${valFontSize}px "${itemFont}", sans-serif`;
+                ctx.textAlign = 'left';
+                ctx.fillText(valueText, rowStartX, rowY);
+                
+                // Draw trend badge
+                if (trendVal) {
+                    const trendX = rowStartX + valW + gap;
+                    const trendY = rowY - trendBadgeH * 0.08;
+                    const isPositive = trendVal.startsWith('+') || !trendVal.startsWith('-');
+                    const badgeBg = isPositive ? 'rgba(52, 199, 89, 0.15)' : 'rgba(255, 59, 48, 0.15)';
+                    const badgeFg = isPositive ? '#34C759' : '#FF3B30';
+                    
+                    ctx.fillStyle = badgeBg;
+                    drawRoundedRect(ctx, trendX, trendY - trendBadgeH / 2, trendW, trendBadgeH, trendBadgeH / 2);
+                    ctx.fill();
+                    
+                    ctx.fillStyle = badgeFg;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.font = `bold ${Math.round(trendBadgeH * 0.65)}px "${itemFont}", sans-serif`;
+                    ctx.fillText(trendVal, trendX + trendW / 2, trendY);
+                }
+                
+                // Draw sublabel
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+                ctx.font = `500 ${subFontSize}px "${itemFont}", sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.fillText(subLabel, currentX, subY);
+            }
+
+            // Draw customized content for circular_progress
+            if (entity.type === 'circular_progress') {
+                const accentColor = styleProfile.color_accent || '#0A84FF';
+                
+                const staticProgress = entity.progress !== undefined ? Number(entity.progress) : undefined;
+                let currentProgress = 0;
+                if (staticProgress !== undefined) {
+                    currentProgress = easeProgress * staticProgress;
+                } else {
+                    currentProgress = easeProgress * 100;
+                }
+                currentProgress = Math.max(0, Math.min(100, currentProgress));
+
+                const subLabel = entity.text || entity.label || 'Progress';
+                
+                const radius = Math.min(targetW, targetH) * 0.28;
+                const circleX = currentX;
+                const circleY = currentY - targetH * 0.08;
+                const subY = currentY + targetH * 0.32;
+                
+                // Draw track ring
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+                ctx.lineWidth = Math.max(4, radius * 0.12);
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.arc(circleX, circleY, radius, 0, 2 * Math.PI);
+                ctx.stroke();
+                
+                // Draw active progress arc
+                ctx.strokeStyle = styles.color || accentColor;
+                ctx.lineWidth = Math.max(4, radius * 0.12);
+                ctx.beginPath();
+                const startAngle = -Math.PI / 2;
+                const endAngle = -Math.PI / 2 + (currentProgress / 100) * 2 * Math.PI;
+                ctx.arc(circleX, circleY, radius, startAngle, endAngle);
+                ctx.stroke();
+                
+                // Draw percentage text
+                const textVal = Math.round(currentProgress) + '%';
+                const pctFontSize = Math.round(radius * 0.45);
+                ctx.fillStyle = '#FFFFFF';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.font = `bold ${pctFontSize}px "${itemFont}", sans-serif`;
+                ctx.fillText(textVal, circleX, circleY);
+                
+                // Draw sublabel text
+                const subFontSize = Math.round(targetH * 0.14);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+                ctx.font = `500 ${subFontSize}px "${itemFont}", sans-serif`;
+                ctx.fillText(subLabel, currentX, subY);
+            }
+
+            // Draw customized content for audio_waveform
+            if (entity.type === 'audio_waveform') {
+                const accentColor = styleProfile.color_accent || '#0A84FF';
+                const barCount = 12;
+                const barW = Math.max(3, targetW * 0.035);
+                const gap = (targetW - barCount * barW) / (barCount + 1);
+                const startX = currentX - targetW / 2 + gap;
+                
+                ctx.fillStyle = styles.color || accentColor;
+                for (let i = 0; i < barCount; i++) {
+                    const waveVal = Math.abs(Math.sin(elapsed * 5 + i * 0.65));
+                    const barH = targetH * 0.15 + targetH * 0.65 * waveVal;
+                    const barX = startX + i * (barW + gap);
+                    const barY = currentY - barH / 2;
+                    
+                    drawRoundedRect(ctx, barX, barY, barW, barH, barW / 2);
+                    ctx.fill();
+                }
+            }
+
+            // Draw customized content for sparkline
+            if (entity.type === 'sparkline') {
+                const accentColor = styleProfile.color_accent || '#0A84FF';
+                let data = entity.data || [20, 45, 30, 80, 60, 95];
+                if (typeof data === 'string') {
+                    try {
+                        data = JSON.parse(data);
+                    } catch (e) {
+                        data = [20, 45, 30, 80, 60, 95];
+                    }
+                }
+                if (!Array.isArray(data) || data.length < 2) {
+                    data = [20, 45, 30, 80, 60, 95];
+                }
+                
+                const startX = currentX - targetW / 2 + targetW * 0.08;
+                const endX = currentX + targetW / 2 - targetW * 0.08;
+                const chartW = endX - startX;
+                const chartH = targetH * 0.5;
+                const baseY = currentY + targetH * 0.22;
+                
+                const points = data.map((val: number, i: number) => {
+                    const px = startX + (i / (data.length - 1)) * chartW;
+                    const py = baseY - (val / 100) * chartH;
+                    return { x: px, y: py };
+                });
+                
+                const currentWidth = easeProgress * chartW;
+                const limitX = startX + currentWidth;
+                
+                const activePoints: {x: number, y: number}[] = [];
+                for (let i = 0; i < points.length; i++) {
+                    const p = points[i];
+                    if (p.x <= limitX) {
+                        activePoints.push(p);
+                    } else {
+                        const prev = points[i - 1];
+                        if (prev) {
+                            const ratio = (limitX - prev.x) / (p.x - prev.x);
+                            const interY = prev.y + (p.y - prev.y) * ratio;
+                            activePoints.push({ x: limitX, y: interY });
+                        }
+                        break;
+                    }
+                }
+                
+                if (activePoints.length > 0) {
+                    ctx.save();
+                    ctx.strokeStyle = styles.color || accentColor;
+                    ctx.lineWidth = Math.max(3, targetH * 0.05);
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    
+                    ctx.shadowColor = accentColor;
+                    ctx.shadowBlur = 15;
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(activePoints[0].x, activePoints[0].y);
+                    for (let i = 1; i < activePoints.length; i++) {
+                        ctx.lineTo(activePoints[i].x, activePoints[i].y);
+                    }
+                    ctx.stroke();
+                    ctx.restore();
+                    
+                    const tip = activePoints[activePoints.length - 1];
+                    ctx.save();
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.shadowColor = accentColor;
+                    ctx.shadowBlur = 12;
+                    ctx.beginPath();
+                    ctx.arc(tip.x, tip.y, Math.max(5, targetH * 0.06), 0, 2 * Math.PI);
+                    ctx.fill();
+                    ctx.restore();
+                }
+                
+                const subLabel = entity.text || entity.label || '';
+                if (subLabel) {
+                    const subFontSize = Math.round(targetH * 0.12);
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+                    ctx.font = `500 ${subFontSize}px "${itemFont}", sans-serif`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillText(subLabel, currentX, currentY - targetH * 0.3);
+                }
+            }
+
+            // Draw customized content for toggle_card
+            if (entity.type === 'toggle_card') {
+                const accentColor = styleProfile.color_accent || '#0A84FF';
+                
+                const labelText = entity.text || entity.label || 'Enable Setting';
+                const fontSize = Math.round(targetH * 0.22);
+                ctx.fillStyle = '#FFFFFF';
+                ctx.font = `bold ${fontSize}px "${itemFont}", sans-serif`;
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(labelText, currentX - targetW / 2 + targetW * 0.08, currentY);
+                
+                const tw = targetH * 0.62 * 1.7;
+                const th = targetH * 0.62;
+                const trx = currentX + targetW / 2 - targetW * 0.08 - tw;
+                const try_ = currentY - th / 2;
+                
+                const r = Math.round(57 + (52 - 57) * easeProgress);
+                const g = Math.round(57 + (199 - 57) * easeProgress);
+                const b = Math.round(60 + (89 - 60) * easeProgress);
+                ctx.fillStyle = `rgb(${r},${g},${b})`;
+                
+                drawRoundedRect(ctx, trx, try_, tw, th, th / 2);
+                ctx.fill();
+                
+                const radius = th * 0.42;
+                const startThumbX = trx + th / 2;
+                const endThumbX = trx + tw - th / 2;
+                const thumbX = startThumbX + (endThumbX - startThumbX) * easeProgress;
+                
+                ctx.save();
+                ctx.shadowColor = 'rgba(0, 0, 0, 0.35)';
+                ctx.shadowBlur = 4;
+                ctx.shadowOffsetY = 1;
+                ctx.fillStyle = '#FFFFFF';
+                ctx.beginPath();
+                ctx.arc(thumbX, currentY, radius, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.restore();
+            }
+
+            // Draw customized content for profile_card
+            if (entity.type === 'profile_card') {
+                const d = targetH * 0.46;
+                const ax = currentX - targetW / 2 + targetW * 0.08 + d / 2;
+                const ay = currentY - targetH * 0.16;
+                
+                ctx.save();
+                const grad = ctx.createLinearGradient(ax - d / 2, ay - d / 2, ax + d / 2, ay + d / 2);
+                grad.addColorStop(0, '#FF5E3A');
+                grad.addColorStop(1, '#FF2A68');
+                ctx.fillStyle = grad;
+                ctx.beginPath();
+                ctx.arc(ax, ay, d / 2, 0, 2 * Math.PI);
+                ctx.fill();
+                
+                const initials = entity.initials || entity.label?.substring(0, 2).toUpperCase() || 'AI';
+                ctx.fillStyle = '#FFFFFF';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.font = `bold ${Math.round(d * 0.42)}px "${itemFont}", sans-serif`;
+                ctx.fillText(initials, ax, ay);
+                ctx.restore();
+                
+                const nameText = entity.name || entity.username || '@user_account';
+                const nameSize = Math.round(targetH * 0.16);
+                ctx.fillStyle = '#FFFFFF';
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'middle';
+                ctx.font = `bold ${nameSize}px "${itemFont}", sans-serif`;
+                const nx = currentX - targetW / 2 + targetW * 0.08 + d + 12;
+                ctx.fillText(nameText, nx, ay);
+                
+                const nameW = ctx.measureText(nameText).width;
+                const bx = nx + nameW + 16;
+                const by = ay;
+                const br = targetH * 0.075;
+                
+                ctx.fillStyle = '#0A84FF';
+                ctx.beginPath();
+                ctx.arc(bx, by, br, 0, 2 * Math.PI);
+                ctx.fill();
+                
+                ctx.strokeStyle = '#FFFFFF';
+                ctx.lineWidth = Math.max(1.5, br * 0.25);
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.beginPath();
+                ctx.moveTo(bx - br * 0.4, by + br * 0.1);
+                ctx.lineTo(bx - br * 0.1, by + br * 0.4);
+                ctx.lineTo(bx + br * 0.4, by - br * 0.3);
+                ctx.stroke();
+                
+                const bodyText = entity.text || 'This tool changed how I edit videos!';
+                const bodySize = Math.round(targetH * 0.125);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.72)';
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'top';
+                ctx.font = `italic 500 ${bodySize}px "${itemFont}", sans-serif`;
+                
+                const bxText = currentX - targetW / 2 + targetW * 0.08;
+                const byText = currentY + targetH * 0.16;
+                const maxTextW = targetW * 0.84;
+                
+                const words = bodyText.split(' ');
+                let line = '';
+                let currentYOffset = 0;
+                const lineHeight = bodySize * 1.35;
+                
+                words.forEach((word: string) => {
+                    const testLine = line + word + ' ';
+                    const testW = ctx.measureText(testLine).width;
+                    if (testW > maxTextW && line !== '') {
+                        ctx.fillText(line, bxText, byText + currentYOffset);
+                        line = word + ' ';
+                        currentYOffset += lineHeight;
+                    } else {
+                        line = testLine;
+                    }
+                });
+                if (line) {
+                    ctx.fillText(line, bxText, byText + currentYOffset);
+                }
+            }
+
+            // Draw common capsule status badge on any entity
+            if (entity.badge) {
+                const badgeText = String(entity.badge).toUpperCase();
+                const badgeSize = Math.max(8, Math.round(targetH * 0.14));
+                ctx.font = `bold ${badgeSize}px "${itemFont}", sans-serif`;
+                const textW = ctx.measureText(badgeText).width;
+                const badgeH = badgeSize * 1.6;
+                const badgeW = textW + badgeSize * 1.5;
+                
+                const badgeX = currentX + targetW / 2 - badgeW / 2;
+                const badgeY = currentY - targetH / 2 - badgeH / 2;
+                const badgeBg = entity.badge_color || styleProfile.color_accent || '#5856D6';
+                
+                ctx.save();
+                ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+                ctx.shadowBlur = 6;
+                ctx.shadowOffsetY = 2;
+                
+                ctx.fillStyle = badgeBg;
+                drawRoundedRect(ctx, badgeX, badgeY, badgeW, badgeH, badgeH / 2);
+                ctx.fill();
+                ctx.restore();
+                
+                ctx.save();
+                ctx.fillStyle = '#FFFFFF';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.font = `bold ${badgeSize}px "${itemFont}", sans-serif`;
+                ctx.fillText(badgeText, badgeX + badgeW / 2, badgeY + badgeH / 2);
+                ctx.restore();
+            }
+
+            ctx.restore();
+        });
+        relations.forEach((rel: any) => {
+            const fromEnt = entities.find((e: any) => e.id === rel.from);
+            const toEnt = entities.find((e: any) => e.id === rel.to);
+            if (!fromEnt || !toEnt) return;
+            const fromX = ( (fromEnt.x ?? 50) / 100 ) * W;
+            const fromY = ( (fromEnt.y ?? 50) / 100 ) * H;
+            const toX = ( (toEnt.x ?? 50) / 100 ) * W;
+            const toY = ( (toEnt.y ?? 50) / 100 ) * H;
+            ctx.save();
+            ctx.strokeStyle = styleProfile.arrow_color || styleProfile.border_color || 'rgba(59, 130, 246, 0.6)';
+            ctx.lineWidth = styleProfile.arrow_width || 3.0;
+            const anim = styleProfile.relation_animation || {};
+            const rDelay = anim.delay || 0.4;
+            const rDur = anim.duration || 0.8;
+            const rProgress = Math.min(1, Math.max(0, (elapsed - rDelay) / rDur));
+            const rEase = rProgress * rProgress * (3 - 2 * rProgress);
+            if (rProgress > 0) {
+                const currentEndX = fromX + (toX - fromX) * rEase;
+                const currentEndY = fromY + (toY - fromY) * rEase;
+                ctx.beginPath();
+                ctx.moveTo(fromX, fromY);
+                ctx.lineTo(currentEndX, currentEndY);
+                ctx.stroke();
+                if (rProgress >= 0.95) {
+                    drawArrowhead(ctx, fromX, fromY, toX, toY, 12);
+                }
+            }
+            ctx.restore();
+        });
+    }, []);
 
     // ── Draw current video frame + overlays to canvas ─────────────
     const drawFrame = useCallback(() => {
@@ -966,6 +1961,28 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
             ctx.translate(-W / 2, -H / 2);
         }
 
+        // Apply color correction filter if active
+        const activeColor = editsRef.current.find(e => 
+            e.action === 'color_correction' && e.start != null && e.end != null && t >= e.start && t < e.end
+        );
+        if (activeColor) {
+            const presetKey = activeColor.preset || activeColor.lut || 'cinema';
+            const base = LUT_PRESETS[presetKey] || { brightness: 1.0, contrast: 1.0, saturation: 1.0, hue: 0 };
+            const userB = activeColor.brightness !== undefined ? activeColor.brightness : 100;
+            const userC = activeColor.contrast !== undefined ? activeColor.contrast : 100;
+            const userS = activeColor.saturation !== undefined ? activeColor.saturation : 100;
+            const userH = activeColor.hue !== undefined ? activeColor.hue : 0;
+
+            const finalB = base.brightness * (userB / 100);
+            const finalC = base.contrast * (userC / 100);
+            const finalS = base.saturation * (userS / 100);
+            const finalH = base.hue + userH;
+
+            ctx.filter = `brightness(${finalB}) contrast(${finalC}) saturate(${finalS}) hue-rotate(${finalH}deg)`;
+        } else {
+            ctx.filter = 'none';
+        }
+
         // Draw cropped and centered video
         let sWidth = VW;
         let sHeight = VH;
@@ -999,6 +2016,15 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
         );
         for (const ov of activeTexts) {
             drawStyledTextOverlay(ctx, ov, t, W, H, false);
+        }
+
+        // ── Direct Semantic Scene Canvas Drawing ──────
+        const activeSemanticScenes = editsRef.current.filter(
+            e => e.action === 'semantic_scene' && e.scene_data && e.start != null && e.end != null && t >= (e.start as number) && t < (e.end as number)
+        );
+        for (const se of activeSemanticScenes) {
+            const seIndex = editsRef.current.indexOf(se);
+            drawSemanticSceneDirect(ctx, se.scene_data, se.start!, se.end!, t, W, H, seIndex);
         }
 
         // Draw selection box around selected element if focused
@@ -1063,20 +2089,31 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                     focusedBox.height + pad * 2
                 );
                 
-                // 4. Circular corner handles
+                // 4. Circular handles (4 corners + 4 edge centers)
                 ctx.fillStyle = '#FFFFFF';
                 ctx.strokeStyle = '#3B82F6';
                 ctx.lineWidth = 2;
                 const hs = 10;
-                const corners = [
-                    { x: focusedBox.left - pad, y: focusedBox.top - pad },
-                    { x: focusedBox.left + focusedBox.width + pad, y: focusedBox.top - pad },
-                    { x: focusedBox.left - pad, y: focusedBox.top + focusedBox.height + pad },
-                    { x: focusedBox.left + focusedBox.width + pad, y: focusedBox.top + focusedBox.height + pad }
+                const xMin = focusedBox.left - pad;
+                const xMax = focusedBox.left + focusedBox.width + pad;
+                const yMin = focusedBox.top - pad;
+                const yMax = focusedBox.top + focusedBox.height + pad;
+                const xMid = (xMin + xMax) / 2;
+                const yMid = (yMin + yMax) / 2;
+
+                const handles = [
+                    { x: xMin, y: yMin }, // TL
+                    { x: xMax, y: yMin }, // TR
+                    { x: xMin, y: yMax }, // BL
+                    { x: xMax, y: yMax }, // BR
+                    { x: xMid, y: yMin }, // T
+                    { x: xMid, y: yMax }, // B
+                    { x: xMin, y: yMid }, // L
+                    { x: xMax, y: yMid }  // R
                 ];
-                corners.forEach(c => {
+                handles.forEach(h => {
                     ctx.beginPath();
-                    ctx.arc(c.x, c.y, hs / 2, 0, 2 * Math.PI);
+                    ctx.arc(h.x, h.y, hs / 2, 0, 2 * Math.PI);
                     ctx.fill();
                     ctx.stroke();
                 });
@@ -1091,7 +2128,94 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 ctx.restore();
             }
         }
-    }, [textOverlays, drawAestheticCaptions, drawStyledTextOverlay, transcript, focusedClipId, targetRatio]);
+
+        // Draw selection box around selected entity if active
+        if (selectedEntity && drawnTextBoxesRef.current.length > 0) {
+            const entityBox = drawnTextBoxesRef.current.find(box => 
+                box.isEntity && box.sceneEditIndex === selectedEntity.sceneEditIndex && box.entityId === selectedEntity.entityId
+            );
+            if (entityBox) {
+                ctx.save();
+                const pad = 12;
+
+                // 1. Soft glowing backdrop
+                ctx.fillStyle = 'rgba(59, 130, 246, 0.04)';
+                drawRoundedRect(
+                    ctx,
+                    entityBox.left - pad,
+                    entityBox.top - pad,
+                    entityBox.width + pad * 2,
+                    entityBox.height + pad * 2,
+                    8
+                );
+                ctx.fill();
+
+                // 2. High-contrast dashed border
+                ctx.strokeStyle = 'rgba(59, 130, 246, 0.8)';
+                ctx.lineWidth = 2.0;
+                ctx.setLineDash([6, 4]);
+                ctx.strokeRect(
+                    entityBox.left - pad,
+                    entityBox.top - pad,
+                    entityBox.width + pad * 2,
+                    entityBox.height + pad * 2
+                );
+
+                // 3. Thin solid border
+                ctx.strokeStyle = 'rgba(59, 130, 246, 0.15)';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([]);
+                ctx.strokeRect(
+                    entityBox.left - pad,
+                    entityBox.top - pad,
+                    entityBox.width + pad * 2,
+                    entityBox.height + pad * 2
+                );
+                
+                // 4. Circular handles (4 corners + 4 edge centers)
+                ctx.fillStyle = '#FFFFFF';
+                ctx.strokeStyle = '#3B82F6';
+                ctx.lineWidth = 2;
+                const hs = 10;
+                const xMin = entityBox.left - pad;
+                const xMax = entityBox.left + entityBox.width + pad;
+                const yMin = entityBox.top - pad;
+                const yMax = entityBox.top + entityBox.height + pad;
+                const xMid = (xMin + xMax) / 2;
+                const yMid = (yMin + yMax) / 2;
+
+                const handles = [
+                    { x: xMin, y: yMin }, // TL
+                    { x: xMax, y: yMin }, // TR
+                    { x: xMin, y: yMax }, // BL
+                    { x: xMax, y: yMax }, // BR
+                    { x: xMid, y: yMin }, // T
+                    { x: xMid, y: yMax }, // B
+                    { x: xMin, y: yMid }, // L
+                    { x: xMax, y: yMid }  // R
+                ];
+                handles.forEach(h => {
+                    ctx.beginPath();
+                    ctx.arc(h.x, h.y, hs / 2, 0, 2 * Math.PI);
+                    ctx.fill();
+                    ctx.stroke();
+                });
+
+                // 5. Entity ID and type label tag
+                const edit = editsRef.current[entityBox.sceneEditIndex!];
+                const entity = edit?.scene_data?.entities?.find((ent: any) => ent.id === entityBox.entityId);
+                const typeText = entity ? `${entity.type || 'element'}: ${entity.id}` : 'element';
+                
+                ctx.font = 'bold 10px monospace';
+                ctx.fillStyle = '#3B82F6';
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'bottom';
+                ctx.fillText(typeText.toUpperCase(), entityBox.left - pad, entityBox.top - pad - 6);
+
+                ctx.restore();
+            }
+        }
+    }, [textOverlays, drawAestheticCaptions, drawStyledTextOverlay, transcript, focusedClipId, targetRatio, selectedEntity]);
 
     // ── RAF Render + EDL enforcement loop ────────────────────────
     useEffect(() => {
@@ -1207,6 +2331,27 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 }
             });
 
+            // Find active color correction filter string for B-rolls
+            const activeColorForBroll = editsRef.current.find(e => 
+                e.action === 'color_correction' && e.start != null && e.end != null && t >= e.start && t < e.end
+            );
+            let brollFilter = 'none';
+            if (activeColorForBroll) {
+                const presetKey = activeColorForBroll.preset || activeColorForBroll.lut || 'cinema';
+                const base = LUT_PRESETS[presetKey] || { brightness: 1.0, contrast: 1.0, saturation: 1.0, hue: 0 };
+                const userB = activeColorForBroll.brightness !== undefined ? activeColorForBroll.brightness : 100;
+                const userC = activeColorForBroll.contrast !== undefined ? activeColorForBroll.contrast : 100;
+                const userS = activeColorForBroll.saturation !== undefined ? activeColorForBroll.saturation : 100;
+                const userH = activeColorForBroll.hue !== undefined ? activeColorForBroll.hue : 0;
+
+                const finalB = base.brightness * (userB / 100);
+                const finalC = base.contrast * (userC / 100);
+                const finalS = base.saturation * (userS / 100);
+                const finalH = base.hue + userH;
+
+                brollFilter = `brightness(${finalB}) contrast(${finalC}) saturate(${finalS}) hue-rotate(${finalH}deg)`;
+            }
+
             // Sync B-roll Overlays
             brollRefs.current.forEach((el, i) => {
                 if (!el) return;
@@ -1223,9 +2368,11 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                         el.currentTime = t - edit.start;
                     }
                     el.style.opacity = '1';
+                    el.style.filter = brollFilter;
                 } else {
                     if (!el.paused) el.pause();
                     el.style.opacity = '0';
+                    el.style.filter = 'none';
                 }
             });
 
@@ -1261,15 +2408,136 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
     const dragStartCoordsRef = useRef({ x: 0, y: 0 });
     const draggedBoxRef = useRef<any>(null);
 
+    const getActiveSelectedBox = useCallback(() => {
+        if (selectedEntity) {
+            const box = drawnTextBoxesRef.current.find(b => 
+                b.isEntity && b.sceneEditIndex === selectedEntity.sceneEditIndex && b.entityId === selectedEntity.entityId
+            );
+            if (box) return box;
+        }
+        if (focusedClipId && drawnTextBoxesRef.current.length > 0) {
+            const box = drawnTextBoxesRef.current.find(b => {
+                if (focusedClipId === "T1-Subtitles" || focusedClipId === "subtitles") {
+                    return b.isSub;
+                }
+                if (focusedClipId.startsWith("T1-Sub-")) {
+                    return b.isSub;
+                }
+                if (focusedClipId.startsWith("G1-Graphic-")) {
+                    const parts = focusedClipId.split('-');
+                    const gIdx = parseInt(parts[parts.length - 1], 10);
+                    const graphicEdits = editsRef.current.filter(x => 
+                        x.action === "canvas_overlay" || x.action === "hyperframes_html" ||
+                        x.action === 'add_hyperframes_graphics' || x.action === 'add_motion_graphic' ||
+                        x.action === 'add_dynamic_graphic' || x.action === 'add_text_overlay'
+                    );
+                    const targetEdit = graphicEdits[gIdx];
+                    const targetEditIndex = editsRef.current.indexOf(targetEdit);
+                    return b.editIndex === targetEditIndex;
+                }
+                return false;
+            });
+            if (box) return box;
+        }
+        return null;
+    }, [selectedEntity, focusedClipId]);
+
     const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
         const canvas = canvasRef.current;
         if (!canvas) return;
+
+        if (isPlaying) {
+            if (onTogglePlay) onTogglePlay();
+            return;
+        }
 
         const rect = canvas.getBoundingClientRect();
         const clickX = ((e.clientX - rect.left) / rect.width) * canvas.width;
         const clickY = ((e.clientY - rect.top) / rect.height) * canvas.height;
 
-        // Check if hit any box, reverse array so top overlays are hit first
+        // 1. Check if click hits a handle or border of the currently selected/focused box
+        const activeBox = getActiveSelectedBox();
+        if (activeBox) {
+            const pad = 12;
+            const handleSize = 15; // Hit area radius for handles
+            const lineThresh = 8;  // Hit tolerance for lines
+            
+            const xMin = activeBox.left - pad;
+            const xMax = activeBox.left + activeBox.width + pad;
+            const yMin = activeBox.top - pad;
+            const yMax = activeBox.top + activeBox.height + pad;
+            const xMid = (xMin + xMax) / 2;
+            const yMid = (yMin + yMax) / 2;
+
+            const dist = (x1: number, y1: number, x2: number, y2: number) => Math.sqrt((x1-x2)*(x1-x2) + (y1-y2)*(y1-y2));
+
+            let hitMode: 'TL' | 'TR' | 'BL' | 'BR' | 'T' | 'B' | 'L' | 'R' | null = null;
+
+            // Check circular handles first
+            if (dist(clickX, clickY, xMin, yMin) <= handleSize) hitMode = 'TL';
+            else if (dist(clickX, clickY, xMax, yMin) <= handleSize) hitMode = 'TR';
+            else if (dist(clickX, clickY, xMin, yMax) <= handleSize) hitMode = 'BL';
+            else if (dist(clickX, clickY, xMax, yMax) <= handleSize) hitMode = 'BR';
+            else if (dist(clickX, clickY, xMid, yMin) <= handleSize) hitMode = 'T';
+            else if (dist(clickX, clickY, xMid, yMax) <= handleSize) hitMode = 'B';
+            else if (dist(clickX, clickY, xMin, yMid) <= handleSize) hitMode = 'L';
+            else if (dist(clickX, clickY, xMax, yMid) <= handleSize) hitMode = 'R';
+
+            // Check line borders next
+            if (!hitMode) {
+                if (Math.abs(clickY - yMin) <= lineThresh && clickX >= xMin - lineThresh && clickX <= xMax + lineThresh) {
+                    hitMode = 'T';
+                } else if (Math.abs(clickY - yMax) <= lineThresh && clickX >= xMin - lineThresh && clickX <= xMax + lineThresh) {
+                    hitMode = 'B';
+                } else if (Math.abs(clickX - xMin) <= lineThresh && clickY >= yMin - lineThresh && clickY <= yMax + lineThresh) {
+                    hitMode = 'L';
+                } else if (Math.abs(clickX - xMax) <= lineThresh && clickY >= yMin - lineThresh && clickY <= yMax + lineThresh) {
+                    hitMode = 'R';
+                }
+            }
+
+            if (hitMode) {
+                e.preventDefault();
+                e.currentTarget.setPointerCapture(e.pointerId);
+
+                if (isPlaying && onTogglePlay) {
+                    onTogglePlay();
+                }
+
+                isDraggingRef.current = true;
+                draggedBoxRef.current = activeBox;
+                dragModeRef.current = `resize-${hitMode}`;
+                dragStartPointerRef.current = { x: e.clientX, y: e.clientY };
+                dragStartCoordsRef.current = { x: activeBox.x, y: activeBox.y };
+
+                let originalFontSize = 58;
+                if (activeBox.isSub) {
+                    originalFontSize = subtitleConfig?.font_size || 58;
+                } else if (activeBox.editIndex !== undefined) {
+                    const edit = editsRef.current[activeBox.editIndex];
+                    originalFontSize = edit?.font_size || edit?.fontsize || 58;
+                }
+
+                if (activeBox.isEntity && activeBox.sceneEditIndex !== undefined) {
+                    const edit = editsRef.current[activeBox.sceneEditIndex];
+                    const entity = edit?.scene_data?.entities?.find((ent: any) => ent.id === activeBox.entityId);
+                    dragStartDimsRef.current = {
+                        width: entity?.width ?? 28,
+                        height: entity?.height ?? 12,
+                        fontSize: originalFontSize
+                    };
+                } else {
+                    dragStartDimsRef.current = {
+                        width: activeBox.width,
+                        height: activeBox.height,
+                        fontSize: originalFontSize
+                    };
+                }
+                return;
+            }
+        }
+
+        // 2. Check if click hits any drawn box (for dragging / selecting)
         const hitBox = [...drawnTextBoxesRef.current].reverse().find(box => {
             return clickX >= box.left && clickX <= box.left + box.width &&
                    clickY >= box.top && clickY <= box.top + box.height;
@@ -1279,7 +2547,6 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
             e.preventDefault();
             e.currentTarget.setPointerCapture(e.pointerId);
             
-            // Pause video if playing
             if (isPlaying && onTogglePlay) {
                 onTogglePlay();
             }
@@ -1289,34 +2556,119 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
             dragStartPointerRef.current = { x: e.clientX, y: e.clientY };
             dragStartCoordsRef.current = { x: hitBox.x, y: hitBox.y };
 
-            // Select the item
-            let focusId = "";
-            if (hitBox.isSub) {
-                focusId = hitBox.chunkIndex !== undefined ? `T1-Sub-${hitBox.chunkIndex}` : "T1-Sub-0";
-            } else if (hitBox.editIndex !== undefined) {
-                const graphicEdits = editsRef.current.filter(x => 
-                    x.action === "canvas_overlay" || x.action === "hyperframes_html" ||
-                    x.action === 'add_hyperframes_graphics' || x.action === 'add_motion_graphic' ||
-                    x.action === 'add_dynamic_graphic' || x.action === 'add_text_overlay'
-                );
-                const relIdx = graphicEdits.indexOf(editsRef.current[hitBox.editIndex]);
-                focusId = `G1-Graphic-${relIdx !== -1 ? relIdx : 0}`;
-            }
-
-            if (focusId) {
+            if (hitBox.isEntity) {
+                dragModeRef.current = 'move';
+                setSelectedEntity({ sceneEditIndex: hitBox.sceneEditIndex!, entityId: hitBox.entityId! });
+                
+                const focusId = `S1-Scene-${hitBox.sceneEditIndex}`;
                 window.dispatchEvent(new CustomEvent('select_clip_focus', { detail: focusId }));
+            } else {
+                dragModeRef.current = 'move';
+                setSelectedEntity(null);
+                
+                let focusId = "";
+                if (hitBox.isSub) {
+                    focusId = hitBox.chunkIndex !== undefined ? `T1-Sub-${hitBox.chunkIndex}` : "T1-Sub-0";
+                } else if (hitBox.editIndex !== undefined) {
+                    const graphicEdits = editsRef.current.filter(x => 
+                        x.action === "canvas_overlay" || x.action === "hyperframes_html" ||
+                        x.action === 'add_hyperframes_graphics' || x.action === 'add_motion_graphic' ||
+                        x.action === 'add_dynamic_graphic' || x.action === 'add_text_overlay'
+                    );
+                    const relIdx = graphicEdits.indexOf(editsRef.current[hitBox.editIndex]);
+                    focusId = `G1-Graphic-${relIdx !== -1 ? relIdx : 0}`;
+                }
+
+                if (focusId) {
+                    window.dispatchEvent(new CustomEvent('select_clip_focus', { detail: focusId }));
+                }
             }
         } else {
             isDraggingRef.current = false;
             draggedBoxRef.current = null;
+            dragModeRef.current = null;
+            setSelectedEntity(null);
         }
     };
 
     const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-        if (!isDraggingRef.current || !draggedBoxRef.current || !canvasRef.current) return;
-
         const canvas = canvasRef.current;
+        if (!canvas) return;
+
         const rect = canvas.getBoundingClientRect();
+
+        // 1. Update hover cursor style when not dragging
+        if (!isDraggingRef.current) {
+            const hoverX = ((e.clientX - rect.left) / rect.width) * canvas.width;
+            const hoverY = ((e.clientY - rect.top) / rect.height) * canvas.height;
+            
+            const activeBox = getActiveSelectedBox();
+            if (activeBox) {
+                const pad = 12;
+                const handleSize = 15;
+                const lineThresh = 8;
+                
+                const xMin = activeBox.left - pad;
+                const xMax = activeBox.left + activeBox.width + pad;
+                const yMin = activeBox.top - pad;
+                const yMax = activeBox.top + activeBox.height + pad;
+                const xMid = (xMin + xMax) / 2;
+                const yMid = (yMin + yMax) / 2;
+                
+                const dist = (x1: number, y1: number, x2: number, y2: number) => Math.sqrt((x1-x2)*(x1-x2) + (y1-y2)*(y1-y2));
+                
+                let cursorMode: 'TL' | 'TR' | 'BL' | 'BR' | 'T' | 'B' | 'L' | 'R' | null = null;
+                
+                if (dist(hoverX, hoverY, xMin, yMin) <= handleSize) cursorMode = 'TL';
+                else if (dist(hoverX, hoverY, xMax, yMin) <= handleSize) cursorMode = 'TR';
+                else if (dist(hoverX, hoverY, xMin, yMax) <= handleSize) cursorMode = 'BL';
+                else if (dist(hoverX, hoverY, xMax, yMax) <= handleSize) cursorMode = 'BR';
+                else if (dist(hoverX, hoverY, xMid, yMin) <= handleSize) cursorMode = 'T';
+                else if (dist(hoverX, hoverY, xMid, yMax) <= handleSize) cursorMode = 'B';
+                else if (dist(hoverX, hoverY, xMin, yMid) <= handleSize) cursorMode = 'L';
+                else if (dist(hoverX, hoverY, xMax, yMid) <= handleSize) cursorMode = 'R';
+                
+                if (!cursorMode) {
+                    if (Math.abs(hoverY - yMin) <= lineThresh && hoverX >= xMin - lineThresh && hoverX <= xMax + lineThresh) {
+                        cursorMode = 'T';
+                    } else if (Math.abs(hoverY - yMax) <= lineThresh && hoverX >= xMin - lineThresh && hoverX <= xMax + lineThresh) {
+                        cursorMode = 'B';
+                    } else if (Math.abs(hoverX - xMin) <= lineThresh && hoverY >= yMin - lineThresh && hoverY <= yMax + lineThresh) {
+                        cursorMode = 'L';
+                    } else if (Math.abs(hoverX - xMax) <= lineThresh && hoverY >= yMin - lineThresh && hoverY <= yMax + lineThresh) {
+                        cursorMode = 'R';
+                    }
+                }
+                
+                if (cursorMode) {
+                    if (cursorMode === 'TL' || cursorMode === 'BR') {
+                        canvas.style.cursor = 'nwse-resize';
+                    } else if (cursorMode === 'TR' || cursorMode === 'BL') {
+                        canvas.style.cursor = 'nesw-resize';
+                    } else if (cursorMode === 'L' || cursorMode === 'R') {
+                        canvas.style.cursor = 'ew-resize';
+                    } else if (cursorMode === 'T' || cursorMode === 'B') {
+                        canvas.style.cursor = 'ns-resize';
+                    }
+                    return;
+                }
+            }
+            
+            // Check if hovering body of any drawn box
+            const hoverHitBox = [...drawnTextBoxesRef.current].reverse().find(box => {
+                return hoverX >= box.left && hoverX <= box.left + box.width &&
+                       hoverY >= box.top && hoverY <= box.top + box.height;
+            });
+            if (hoverHitBox) {
+                canvas.style.cursor = 'move';
+            } else {
+                canvas.style.cursor = 'default';
+            }
+            return;
+        }
+
+        if (!draggedBoxRef.current) return;
+        const box = draggedBoxRef.current;
         
         // Drag delta in client pixels
         const clientDx = e.clientX - dragStartPointerRef.current.x;
@@ -1326,37 +2678,148 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
         const pctDx = (clientDx / rect.width) * 100;
         const pctDy = (clientDy / rect.height) * 100;
 
-        const newX = Math.round(Math.max(0, Math.min(100, dragStartCoordsRef.current.x + pctDx)));
-        const newY = Math.round(Math.max(0, Math.min(100, dragStartCoordsRef.current.y + pctDy)));
+        if (dragModeRef.current === 'move') {
+            const newX = Math.round(Math.max(0, Math.min(100, dragStartCoordsRef.current.x + pctDx)));
+            const newY = Math.round(Math.max(0, Math.min(100, dragStartCoordsRef.current.y + pctDy)));
 
-        const box = draggedBoxRef.current;
-        box.x = newX;
-        box.y = newY;
+            box.x = newX;
+            box.y = newY;
 
-        // Update coordinates in parent state
-        if (box.isSub) {
-            // Mutate in editsRef.current to give immediate 60fps draw feedback
-            const subEdit = editsRef.current.find(x => x.action === 'add_subtitles');
-            if (subEdit) {
-                subEdit.x = newX;
-                subEdit.y = newY;
-            }
-            // Also mutate all active subtitle overlay chunk edits so they are drawn at the new coords instantly
-            editsRef.current.forEach(x => {
-                if (x.action === 'add_text_overlay' && x.is_subtitle) {
-                    x.x = newX;
-                    x.y = newY;
+            // Update coordinates in parent state
+            if (box.isSub) {
+                const subEdit = editsRef.current.find(x => x.action === 'add_subtitles');
+                if (subEdit) {
+                    subEdit.x = newX;
+                    subEdit.y = newY;
                 }
-            });
-            onUpdateSubtitleGlobal?.('x', newX);
-            onUpdateSubtitleGlobal?.('y', newY);
-        } else if (box.editIndex !== undefined) {
-            const edit = editsRef.current[box.editIndex];
-            if (edit) {
-                edit.x = newX;
-                edit.y = newY;
+                editsRef.current.forEach(x => {
+                    if (x.action === 'add_text_overlay' && x.is_subtitle) {
+                        x.x = newX;
+                        x.y = newY;
+                    }
+                });
+                onUpdateSubtitleGlobal?.('x', newX);
+                onUpdateSubtitleGlobal?.('y', newY);
+            } else if (box.isEntity && box.sceneEditIndex !== undefined) {
+                const edit = editsRef.current[box.sceneEditIndex];
+                if (edit && edit.scene_data && edit.scene_data.entities) {
+                    const updatedEntities = edit.scene_data.entities.map((ent: any) => {
+                        if (ent.id === box.entityId) {
+                            return { ...ent, x: newX, y: newY };
+                        }
+                        return ent;
+                    });
+                    const updatedSceneData = { ...edit.scene_data, entities: updatedEntities };
+                    edit.scene_data = updatedSceneData;
+                    onUpdateEdit?.(box.sceneEditIndex, { scene_data: updatedSceneData });
+                }
+            } else if (box.editIndex !== undefined) {
+                const edit = editsRef.current[box.editIndex];
+                if (edit) {
+                    edit.x = newX;
+                    edit.y = newY;
+                }
+                onUpdateEdit?.(box.editIndex, { x: newX, y: newY });
             }
-            onUpdateEdit?.(box.editIndex, { x: newX, y: newY });
+        } else if (dragModeRef.current && dragModeRef.current.startsWith('resize-')) {
+            const corner = dragModeRef.current.replace('resize-', '');
+            const W_orig = dragStartDimsRef.current.width;
+            const H_orig = dragStartDimsRef.current.height;
+            const X_orig = dragStartCoordsRef.current.x;
+            const Y_orig = dragStartCoordsRef.current.y;
+
+            if (box.isEntity) {
+                let newW = W_orig;
+                let newH = H_orig;
+
+                if (corner === 'BR' || corner === 'TR' || corner === 'R') {
+                    newW = W_orig + pctDx;
+                } else if (corner === 'BL' || corner === 'TL' || corner === 'L') {
+                    newW = W_orig - pctDx;
+                }
+
+                if (corner === 'BR' || corner === 'BL' || corner === 'B') {
+                    newH = H_orig + pctDy;
+                } else if (corner === 'TR' || corner === 'TL' || corner === 'T') {
+                    newH = H_orig - pctDy;
+                }
+
+                // Cap dimensions to a safe min boundary
+                newW = Math.max(2, Math.min(100, newW));
+                newH = Math.max(2, Math.min(100, newH));
+
+                let newX = X_orig;
+                let newY = Y_orig;
+
+                if (corner === 'BR' || corner === 'TR' || corner === 'R') {
+                    newX = X_orig - W_orig / 2 + newW / 2;
+                } else if (corner === 'BL' || corner === 'TL' || corner === 'L') {
+                    newX = X_orig + W_orig / 2 - newW / 2;
+                }
+
+                if (corner === 'BR' || corner === 'BL' || corner === 'B') {
+                    newY = Y_orig - H_orig / 2 + newH / 2;
+                } else if (corner === 'TR' || corner === 'TL' || corner === 'T') {
+                    newY = Y_orig + H_orig / 2 - newH / 2;
+                }
+
+                newX = Math.round(Math.max(0, Math.min(100, newX)));
+                newY = Math.round(Math.max(0, Math.min(100, newY)));
+                newW = Math.round(newW);
+                newH = Math.round(newH);
+
+                box.x = newX;
+                box.y = newY;
+                box.width = (newW / 100) * canvas.width;
+                box.height = (newH / 100) * canvas.height;
+
+                if (box.sceneEditIndex !== undefined) {
+                    const edit = editsRef.current[box.sceneEditIndex];
+                    if (edit && edit.scene_data && edit.scene_data.entities) {
+                        const updatedEntities = edit.scene_data.entities.map((ent: any) => {
+                            if (ent.id === box.entityId) {
+                                return { ...ent, x: newX, y: newY, width: newW, height: newH };
+                            }
+                            return ent;
+                        });
+                        const updatedSceneData = { ...edit.scene_data, entities: updatedEntities };
+                        edit.scene_data = updatedSceneData;
+                        onUpdateEdit?.(box.sceneEditIndex, { scene_data: updatedSceneData });
+                    }
+                }
+            } else {
+                // Subtitles or Text/Graphic Overlays -> Adjust font size proportionally
+                let scaleFactor = 1.0;
+                const canvasDx = (clientDx / rect.width) * canvas.width;
+                const canvasDy = (clientDy / rect.height) * canvas.height;
+
+                if (corner === 'R' || corner === 'TR' || corner === 'BR') {
+                    scaleFactor = (W_orig + canvasDx) / W_orig;
+                } else if (corner === 'L' || corner === 'TL' || corner === 'BL') {
+                    scaleFactor = (W_orig - canvasDx) / W_orig;
+                } else if (corner === 'B') {
+                    scaleFactor = (H_orig + canvasDy) / H_orig;
+                } else if (corner === 'T') {
+                    scaleFactor = (H_orig - canvasDy) / H_orig;
+                }
+
+                if (isNaN(scaleFactor) || scaleFactor <= 0.05) {
+                    scaleFactor = 0.05;
+                }
+
+                const newFontSize = Math.max(8, Math.min(250, Math.round(dragStartDimsRef.current.fontSize * scaleFactor)));
+
+                if (box.isSub) {
+                    onUpdateSubtitleGlobal?.('font_size', newFontSize);
+                } else if (box.editIndex !== undefined) {
+                    const edit = editsRef.current[box.editIndex];
+                    if (edit) {
+                        edit.font_size = newFontSize;
+                        edit.fontsize = newFontSize;
+                    }
+                    onUpdateEdit?.(box.editIndex, { font_size: newFontSize, fontsize: newFontSize });
+                }
+            }
         }
     };
 
@@ -1367,9 +2830,57 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
             } catch (err) {}
             isDraggingRef.current = false;
             draggedBoxRef.current = null;
-        } else {
-            onTogglePlay();
+            dragModeRef.current = null;
         }
+    };
+
+    const handleDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+        if (isPlaying) return;
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+
+        const rect = canvas.getBoundingClientRect();
+        const clickX = ((e.clientX - rect.left) / rect.width) * canvas.width;
+        const clickY = ((e.clientY - rect.top) / rect.height) * canvas.height;
+
+        const hitBox = [...drawnTextBoxesRef.current].reverse().find(box => {
+            return clickX >= box.left && clickX <= box.left + box.width &&
+                   clickY >= box.top && clickY <= box.top + box.height;
+        });
+
+        if (hitBox && hitBox.isEntity && hitBox.sceneEditIndex !== undefined) {
+            const edit = editsRef.current[hitBox.sceneEditIndex];
+            const entity = edit?.scene_data?.entities?.find((ent: any) => ent.id === hitBox.entityId);
+            if (entity) {
+                setEditingEntity({
+                    sceneEditIndex: hitBox.sceneEditIndex,
+                    entityId: hitBox.entityId!,
+                    left: hitBox.left,
+                    top: hitBox.top,
+                    width: hitBox.width,
+                    height: hitBox.height,
+                    text: entity.text || ''
+                });
+            }
+        }
+    };
+
+    const handleSaveEntityText = () => {
+        if (!editingEntity) return;
+        const { sceneEditIndex, entityId, text } = editingEntity;
+        const edit = editsRef.current[sceneEditIndex];
+        if (edit && edit.scene_data && edit.scene_data.entities) {
+            const updatedEntities = edit.scene_data.entities.map((ent: any) => {
+                if (ent.id === entityId) {
+                    return { ...ent, text: text };
+                }
+                return ent;
+            });
+            const updatedSceneData = { ...edit.scene_data, entities: updatedEntities };
+            edit.scene_data = updatedSceneData;
+            onUpdateEdit?.(sceneEditIndex, { scene_data: updatedSceneData });
+        }
+        setEditingEntity(null);
     };
 
     const seek = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -1431,6 +2942,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                         onPointerDown={handlePointerDown}
                         onPointerMove={handlePointerMove}
                         onPointerUp={handlePointerUp}
+                        onDoubleClick={handleDoubleClick}
                         style={{
                             width: '100%',
                             height: '100%',
@@ -1439,6 +2951,53 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                             display: videoReady && !isSceneActive ? 'block' : 'none',
                         }}
                     />
+
+                    {editingEntity && (
+                        <div
+                            style={{
+                                position: 'absolute',
+                                left: `${(editingEntity.left / (canvasRef.current?.width || 1)) * 100}%`,
+                                top: `${(editingEntity.top / (canvasRef.current?.height || 1)) * 100}%`,
+                                width: `${(editingEntity.width / (canvasRef.current?.width || 1)) * 100}%`,
+                                height: `${(editingEntity.height / (canvasRef.current?.height || 1)) * 100}%`,
+                                zIndex: 300,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                            }}
+                        >
+                            <textarea
+                                autoFocus
+                                value={editingEntity.text}
+                                onChange={(e) => setEditingEntity({ ...editingEntity, text: e.target.value })}
+                                onBlur={() => handleSaveEntityText()}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && !e.shiftKey) {
+                                        e.preventDefault();
+                                        handleSaveEntityText();
+                                    }
+                                    if (e.key === 'Escape') {
+                                        setEditingEntity(null);
+                                    }
+                                }}
+                                style={{
+                                    width: '100%',
+                                    height: '100%',
+                                    background: 'rgba(20, 20, 25, 0.95)',
+                                    color: '#FFFFFF',
+                                    border: '2px solid #3B82F6',
+                                    borderRadius: '8px',
+                                    padding: '8px',
+                                    fontSize: '14px',
+                                    fontFamily: 'Inter, sans-serif',
+                                    outline: 'none',
+                                    resize: 'none',
+                                    textAlign: 'center',
+                                    boxShadow: '0 0 16px rgba(59, 130, 246, 0.5)',
+                                }}
+                            />
+                        </div>
+                    )}
 
                     {/* Loading placeholder */}
                     {!videoReady && videoSrc && (
@@ -1553,7 +3112,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                                 preload="auto"
                                 playsInline
                                 muted
-                                className="absolute inset-0 w-full h-full object-cover z-[95]"
+                                className="absolute inset-0 w-full h-full object-contain z-[95]"
                                 style={{ opacity: 0, pointerEvents: 'none' }}
                             />
                         );
@@ -1567,25 +3126,25 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
 
                     {/* Play/Pause overlay — glass button */}
                     {!isPlaying && videoReady && (
-                        <button
-                            onClick={onTogglePlay}
-                            className="absolute inset-0 flex items-center justify-center group z-[10]"
-                            style={{ background: 'transparent' }}
+                        <div
+                            className="absolute inset-0 flex items-center justify-center pointer-events-none z-[10]"
                         >
-                            <div
-                                className="w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-200 group-hover:scale-105"
+                            <button
+                                onClick={onTogglePlay}
+                                className="w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-200 hover:scale-105 pointer-events-auto cursor-pointer"
                                 style={{
                                     background: 'rgba(255,255,255,0.08)',
                                     backdropFilter: 'blur(12px)',
                                     border: '1px solid rgba(255,255,255,0.15)',
                                     boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+                                    outline: 'none',
                                 }}
                             >
                                 <svg className="w-6 h-6 ml-0.5" fill="#F5F7FA" viewBox="0 0 24 24">
                                     <path d="M8 5v14l11-7z"/>
                                 </svg>
-                            </div>
-                        </button>
+                            </button>
+                        </div>
                     )}
                 </div>
 

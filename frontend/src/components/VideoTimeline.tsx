@@ -18,7 +18,8 @@ export default function VideoTimeline({
   onSelectedClipChange,
   isFocusSelectionActive = false,
   onFocusSelectionActiveChange,
-  draggingAssetType
+  draggingAssetType,
+  selectedSubIndices
 }: { 
   duration: number;
   activeEdits: any[];
@@ -36,6 +37,7 @@ export default function VideoTimeline({
   isFocusSelectionActive?: boolean;
   onFocusSelectionActiveChange?: (active: boolean) => void;
   draggingAssetType?: string | null;
+  selectedSubIndices?: number[];
 }) {
     const [timelineTime, setTimelineTime] = useState(0);
     const [localSelectedClipId, setLocalSelectedClipId] = useState<string | null>(null);
@@ -52,6 +54,13 @@ export default function VideoTimeline({
     const [editingChunk, setEditingChunk] = useState<{index: number; text: string} | null>(null);
     const [zoom, setZoom] = useState(100);
     const editInputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        if (editingChunk && editInputRef.current) {
+            editInputRef.current.focus();
+            editInputRef.current.select();
+        }
+    }, [editingChunk]);
     const subtitleChunks = useMemo(() => {
         if (!transcript?.words) return [];
         const cuts = activeEdits.filter(e => e.action === 'cut_out');
@@ -114,7 +123,7 @@ export default function VideoTimeline({
     };
     
     const [trimState, setTrimState] = useState<{ 
-        track: 'v1' | 'a1' | 't1' | 'v2' | 'm1' | 'sfx',
+        track: 'v1' | 'a1' | 't1' | 'v2' | 'm1' | 'sfx' | 'c1',
         clipIndex: number, 
         type: 'left' | 'right', 
         startX: number, 
@@ -125,7 +134,7 @@ export default function VideoTimeline({
 
     // NEW State for horizontal clip dragging
     const [dragState, setDragState] = useState<{
-        track: 'v1' | 'a1' | 't1' | 'v2' | 'm1' | 'sfx' | 'g1' | 's1',
+        track: 'v1' | 'a1' | 't1' | 'v2' | 'm1' | 'sfx' | 'g1' | 's1' | 'c1',
         clipIndex: number,
         startX: number,
         initialStart: number,
@@ -170,6 +179,14 @@ export default function VideoTimeline({
                     end: Math.min(dropTime + 3.0, duration),
                     query: assetData.query,
                     broll_url: assetData.url
+                };
+            } else if (track === 'v2' && assetType === 'stitch') {
+                newEdit = {
+                    action: "add_broll",
+                    start: dropTime,
+                    end: Math.min(dropTime + (assetData.duration || 3.0), duration),
+                    query: assetData.filename,
+                    resolved_path: assetData.path
                 };
             } else if (track === 'sfx' && assetType === 'sfx') {
                 newEdit = {
@@ -219,6 +236,18 @@ export default function VideoTimeline({
                     start: 0,
                     end: assetData.duration || 3.0
                 };
+            } else if (track === 'c1' && assetType === 'color') {
+                newEdit = {
+                    action: "color_correction",
+                    start: dropTime,
+                    end: Math.min(dropTime + 3.0, duration),
+                    preset: assetData.id,
+                    lut: assetData.id,
+                    brightness: 100,
+                    contrast: 100,
+                    saturation: 100,
+                    hue: 0
+                };
             }
 
             if (newEdit && onActiveEditsChange) {
@@ -245,6 +274,14 @@ export default function VideoTimeline({
         const handleKeyDown = (e: KeyboardEvent) => {
             const target = e.target as HTMLElement;
             if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+                return;
+            }
+            if (e.key.toLowerCase() === 'v') {
+                setActiveTool('pointer');
+                return;
+            }
+            if (e.key.toLowerCase() === 'c') {
+                setActiveTool('razor');
                 return;
             }
             if ((e.key === 'Backspace' || e.key === 'Delete') && selectedClipId && !trimState && !dragState) {
@@ -288,18 +325,19 @@ export default function VideoTimeline({
                         onActiveEditsChange(updated);
                     }
                 } else if (selectedClipId.startsWith('S1-Scene-')) {
-                    const idx = parseInt(selectedClipId.replace('S1-Scene-', ''), 10);
-                    if (onActiveEditsChange) {
-                        let sIndex = 0;
-                        const updated = activeEdits.filter(ae => {
-                            if (ae.action === 'semantic_scene' || ae.action === 'scene_override') {
-                                const keep = sIndex !== idx;
-                                sIndex++;
-                                return keep;
-                            }
-                            return true;
-                        });
+                    const parts = selectedClipId.split('-');
+                    const idx = parseInt(parts[parts.length - 1], 10);
+                    const targetClip = sceneClips[idx];
+                    if (targetClip && onActiveEditsChange) {
+                        const updated = activeEdits.filter((_, i) => i !== targetClip.rawIndex);
                         onActiveEditsChange(updated);
+                    }
+                } else if (selectedClipId.startsWith('C1-Color-')) {
+                    const idx = parseInt(selectedClipId.replace('C1-Color-', ''), 10);
+                    if (onActiveEditsChange) {
+                        const colors = activeEdits.filter(ae => ae.action === 'color_correction');
+                        const others = activeEdits.filter(ae => ae.action !== 'color_correction');
+                        onActiveEditsChange([...others, ...colors.filter((_, i) => i !== idx)]);
                     }
                 } else {
                     const [, track, indexStr] = selectedClipId.split('-');
@@ -314,9 +352,32 @@ export default function VideoTimeline({
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [selectedClipId, multiTrackEdl, activeEdits, onEdlChange, onActiveEditsChange, trimState, dragState]);
+    }, [selectedClipId, multiTrackEdl, activeEdits, onEdlChange, onActiveEditsChange, trimState, dragState, setActiveTool]);
 
     if (!duration || duration <= 0) return <div className="p-6 text-zinc-650 font-mono text-[11px] lowercase">loading timeline...</div>;
+
+    // Process Color Clips list supporting dragging preview
+    const colorClips: {start: number, end: number, id: string, label: string, rawIndex: number}[] = [];
+    activeEdits.forEach((e, idx) => {
+        if (e.action !== 'color_correction') return;
+        
+        let start = e.start != null ? e.start : 0;
+        let end = e.end != null ? e.end : start + 3;
+        
+        const cIdx = colorClips.length;
+        if (dragState?.track === 'c1' && dragState.clipIndex === cIdx && previewDrag) {
+            start = previewDrag.start;
+            end = previewDrag.end;
+        }
+        
+        colorClips.push({
+            start,
+            end,
+            id: `C1-Color-${cIdx}`,
+            label: e.preset || e.lut || 'cinema',
+            rawIndex: idx
+        });
+    });
 
     // Process Graphics Clips list supporting dragging preview
     const graphicClips: {start: number, end: number, id: string, label: string, rawIndex: number}[] = [];
@@ -350,6 +411,29 @@ export default function VideoTimeline({
             end,
             id: e.id || `${e.action}-${idx}`,
             label,
+            rawIndex: idx
+        });
+    });
+
+    // Process Scene Clips list supporting dragging preview
+    const sceneClips: {start: number, end: number, id: string, label: string, rawIndex: number}[] = [];
+    activeEdits.forEach((e, idx) => {
+        if (e.action !== 'semantic_scene' && e.action !== 'scene_override') return;
+        
+        let start = e.start != null ? e.start : 0;
+        let end = e.end != null ? e.end : start + 3;
+        
+        const sIdx = sceneClips.length;
+        if (dragState?.track === 's1' && dragState.clipIndex === sIdx && previewDrag) {
+            start = previewDrag.start;
+            end = previewDrag.end;
+        }
+        
+        sceneClips.push({
+            start,
+            end,
+            id: e.id || `${e.action}-${idx}`,
+            label: e.scene_data?.scene_template || e.style || 'semantic',
             rawIndex: idx
         });
     });
@@ -390,7 +474,7 @@ export default function VideoTimeline({
         id: string, 
         clip: { start: number, end: number }, 
         clipIndex: number, 
-        track: 'v1' | 'a1' | 't1' | 'v2' | 'm1' | 'sfx' | 'g1' | 's1'
+        track: 'v1' | 'a1' | 't1' | 'v2' | 'm1' | 'sfx' | 'g1' | 's1' | 'c1'
     ) => {
         e.stopPropagation();
         
@@ -436,21 +520,24 @@ export default function VideoTimeline({
                         updated.splice(targetClip.rawIndex, 1, first, second);
                         onActiveEditsChange(updated);
                     }
-                } else if (track === 's1') {
-                    let sIndex = 0;
-                    let targetIdx = -1;
-                    activeEdits.forEach((e, idx) => {
-                        if (e.action === 'scene_override') {
-                            if (sIndex === clipIndex) targetIdx = idx;
-                            sIndex++;
-                        }
-                    });
-                    if (targetIdx !== -1) {
-                        const target = activeEdits[targetIdx];
+                } else if (track === 'c1') {
+                    const targetClip = colorClips[clipIndex];
+                    if (targetClip) {
+                        const target = activeEdits[targetClip.rawIndex];
                         const first = { ...target, end: clickTime };
                         const second = { ...target, start: clickTime };
                         const updated = [...activeEdits];
-                        updated.splice(targetIdx, 1, first, second);
+                        updated.splice(targetClip.rawIndex, 1, first, second);
+                        onActiveEditsChange(updated);
+                    }
+                } else if (track === 's1') {
+                    const targetClip = sceneClips[clipIndex];
+                    if (targetClip && onActiveEditsChange) {
+                        const target = activeEdits[targetClip.rawIndex];
+                        const first = { ...target, end: clickTime };
+                        const second = { ...target, start: clickTime };
+                        const updated = [...activeEdits];
+                        updated.splice(targetClip.rawIndex, 1, first, second);
                         onActiveEditsChange(updated);
                     }
                 }
@@ -460,7 +547,7 @@ export default function VideoTimeline({
     };
 
     // Trim handler
-    const handleTrimStart = (e: React.PointerEvent, track: 'v1'|'a1'|'t1'|'v2'|'m1'|'sfx', clipIndex: number, type: 'left' | 'right', initialTime: number) => {
+    const handleTrimStart = (e: React.PointerEvent, track: 'v1'|'a1'|'t1'|'v2'|'m1'|'sfx'|'c1', clipIndex: number, type: 'left' | 'right', initialTime: number) => {
         if (activeTool !== 'pointer') return;
         e.stopPropagation();
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -503,6 +590,19 @@ export default function VideoTimeline({
                 });
                 onActiveEditsChange(updated);
             }
+        } else if (trimState.track === 'c1') {
+            if (onActiveEditsChange) {
+                const targetClip = colorClips[trimState.clipIndex];
+                if (targetClip) {
+                    const updated = activeEdits.map((ae, i) => {
+                        if (i !== targetClip.rawIndex) return ae;
+                        return trimState.type === 'left'
+                            ? { ...ae, start: previewTrim.time }
+                            : { ...ae, end: previewTrim.time };
+                    });
+                    onActiveEditsChange(updated);
+                }
+            }
         } else if (trimState.track === 't1') {
             if (onActiveEditsChange) {
                 const idx = trimState.clipIndex;
@@ -539,7 +639,7 @@ export default function VideoTimeline({
     };
 
     // Horizontal Clip Dragging Handlers
-    const handleDragStart = (e: React.PointerEvent, track: 'v1'|'a1'|'t1'|'v2'|'m1'|'sfx'|'g1'|'s1', clipIndex: number, initialStart: number, initialEnd: number) => {
+    const handleDragStart = (e: React.PointerEvent, track: 'v1'|'a1'|'t1'|'v2'|'m1'|'sfx'|'g1'|'s1'|'c1', clipIndex: number, initialStart: number, initialEnd: number) => {
         if (activeTool !== 'pointer') return;
         // Skip if trim handler was clicked
         if ((e.target as HTMLElement).classList.contains('cursor-ew-resize')) return;
@@ -596,19 +696,31 @@ export default function VideoTimeline({
                     onActiveEditsChange(updated);
                 }
             }
+        } else if (dragState.track === 'c1') {
+            if (onActiveEditsChange) {
+                const targetClip = colorClips[dragState.clipIndex];
+                if (targetClip) {
+                    const updated = activeEdits.map((ae, i) => {
+                        if (i === targetClip.rawIndex) {
+                            return { ...ae, start: previewDrag.start, end: previewDrag.end };
+                        }
+                        return ae;
+                    });
+                    onActiveEditsChange(updated);
+                }
+            }
         } else if (dragState.track === 's1') {
             if (onActiveEditsChange) {
-                let sIndex = 0;
-                const updated = activeEdits.map(ae => {
-                    if (ae.action !== 'semantic_scene' && ae.action !== 'scene_override') return ae;
-                    if (sIndex === dragState.clipIndex) {
-                        sIndex++;
-                        return { ...ae, start: previewDrag.start, end: previewDrag.end };
-                    }
-                    sIndex++;
-                    return ae;
-                });
-                onActiveEditsChange(updated);
+                const targetClip = sceneClips[dragState.clipIndex];
+                if (targetClip) {
+                    const updated = activeEdits.map((ae, i) => {
+                        if (i === targetClip.rawIndex) {
+                            return { ...ae, start: previewDrag.start, end: previewDrag.end };
+                        }
+                        return ae;
+                    });
+                    onActiveEditsChange(updated);
+                }
             }
         } else if (dragState.track === 't1') {
             if (onActiveEditsChange) {
@@ -642,7 +754,7 @@ export default function VideoTimeline({
     };
 
     // Manual clip insertion at playhead
-    const handleAddClip = (track: 's1' | 't1' | 'v2' | 'm1' | 'sfx' | 'g1') => {
+    const handleAddClip = (track: 's1' | 't1' | 'v2' | 'm1' | 'sfx' | 'g1' | 'c1') => {
         if (!onActiveEditsChange) return;
 
         let newEdit: any = null;
@@ -705,6 +817,18 @@ export default function VideoTimeline({
                 style: "modern",
                 html_content: `<div id="root" class="clip" data-start="${timelineTime}" data-duration="3" style="width: 1080px; height: 1920px; display: flex; align-items: center; justify-content: center;"><div class="card" style="padding: 40px; background: rgba(0,0,0,0.6); border: 2px solid #f59e0b; border-radius: 20px; font-family: Inter, sans-serif; text-align: center; color: white;"><h2 style="font-size: 64px; margin-bottom: 10px;">PRO DESIGN</h2><p style="font-size: 28px; color: #a1a1aa;">GSAP Powered Graphic</p></div></div>`
             };
+        } else if (track === 'c1') {
+            newEdit = {
+                action: "color_correction",
+                start: timelineTime,
+                end: Math.min(timelineTime + 3, duration),
+                preset: "cinema",
+                lut: "cinema",
+                brightness: 100,
+                contrast: 100,
+                saturation: 100,
+                hue: 0
+            };
         }
 
         if (newEdit) {
@@ -719,9 +843,10 @@ export default function VideoTimeline({
     };
 
     const isS1Visible = activeEdits.some(e => e.action === 'scene_override' || e.action === 'semantic_scene') || draggingAssetType === 'graphics';
+    const isC1Visible = activeEdits.some(e => e.action === 'color_correction') || draggingAssetType === 'color';
     const isG1Visible = activeEdits.some(e => e.action === 'canvas_overlay' || e.action === 'hyperframes_html' || e.action === 'add_hyperframes_graphics' || e.action === 'add_motion_graphic' || e.action === 'add_dynamic_graphic' || e.action === 'add_text_overlay') || draggingAssetType === 'graphics';
     const isT1Visible = activeEdits.some(e => e.action === 'add_subtitles' || e.action === 'subtitle_override' || e.action === 'add_text_overlay');
-    const isV2Visible = activeEdits.some(e => e.action === 'add_broll') || draggingAssetType === 'broll';
+    const isV2Visible = activeEdits.some(e => e.action === 'add_broll') || draggingAssetType === 'broll' || draggingAssetType === 'stitch';
     const isSFXVisible = activeEdits.some(e => 
         e.action === 'add_asset' && 
         (e.asset_query?.toLowerCase().includes('sfx') || 
@@ -754,16 +879,22 @@ export default function VideoTimeline({
                         <button 
                             onClick={() => setActiveTool('pointer')}
                             className={`p-1 flex items-center justify-center transition-colors rounded-none cursor-pointer ${activeTool === 'pointer' ? 'bg-zinc-900 text-white font-bold border border-border' : 'text-zinc-550 hover:bg-zinc-900'}`}
-                            title="select tool (v)"
+                            title="Инструмент выделения (V)"
                         >
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" /></svg>
                         </button>
                         <button 
                             onClick={() => setActiveTool('razor')}
                             className={`p-1 flex items-center justify-center transition-colors rounded-none cursor-pointer ${activeTool === 'razor' ? 'bg-zinc-900 text-white font-bold border border-border' : 'text-zinc-555 hover:bg-zinc-900'}`}
-                            title="razor tool (c)"
+                            title="Инструмент нарезки / Ножницы (C)"
                         >
-                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                                <circle cx="6" cy="6" r="3" />
+                                <circle cx="6" cy="18" r="3" />
+                                <line x1="20" y1="4" x2="8.12" y2="15.88" />
+                                <line x1="14.47" y1="14.48" x2="20" y2="20" />
+                                <line x1="8.12" y1="8.12" x2="12" y2="12" />
+                            </svg>
                         </button>
                     </div>
 
@@ -858,18 +989,13 @@ export default function VideoTimeline({
                     colorTheme = "border-amber-850/60 text-amber-400";
                 }
                 else if (selectedClipId.startsWith('S1-Scene-')) {
-                    const idx = parseInt(selectedClipId.replace('S1-Scene-', ''), 10);
-                    let sIndex = 0;
-                    let targetScene = null;
-                    activeEdits.forEach(ae => {
-                        if (ae.action === 'scene_override') {
-                            if (sIndex === idx) targetScene = ae;
-                            sIndex++;
-                        }
-                    });
-                    if (!targetScene) return null;
-                    const scene = targetScene as any;
-                    clipTitle = `🎬 Scene: "${scene.style || 'vox'}"`;
+                    const parts = selectedClipId.split('-');
+                    const idx = parseInt(parts[parts.length - 1], 10);
+                    const targetClip = sceneClips[idx];
+                    if (!targetClip) return null;
+                    const scene = activeEdits[targetClip.rawIndex] as any;
+                    if (!scene) return null;
+                    clipTitle = `🎬 Scene: "${scene.scene_data?.scene_template || scene.style || 'semantic'}"`;
                     clipStart = scene.start != null ? scene.start : 0;
                     clipEnd = scene.end != null ? scene.end : duration;
                     colorTheme = "border-purple-850/60 text-purple-400";
@@ -901,6 +1027,16 @@ export default function VideoTimeline({
                     clipStart = graphic.start != null ? graphic.start : 0;
                     clipEnd = graphic.end != null ? graphic.end : duration;
                     colorTheme = "border-fuchsia-850/60 text-fuchsia-400";
+                }
+                else if (selectedClipId.startsWith('C1-Color-')) {
+                    const idx = parseInt(selectedClipId.replace('C1-Color-', ''), 10);
+                    const colors = activeEdits.filter(ae => ae.action === 'color_correction');
+                    const c = colors[idx];
+                    if (!c) return null;
+                    clipTitle = `🎨 Цветокор: пресет "${c.preset || c.lut || 'cinema'}"`;
+                    clipStart = c.start != null ? c.start : 0;
+                    clipEnd = c.end != null ? c.end : duration;
+                    colorTheme = "border-amber-500/60 text-amber-500";
                 }
                 else if (selectedClipId.startsWith('V1-Video-')) {
                     const idx = parseInt(selectedClipId.replace('V1-Video-', ''), 10);
@@ -955,17 +1091,11 @@ export default function VideoTimeline({
                         }
                     }
                     else if (selectedClipId.startsWith('S1-Scene-')) {
-                        const idx = parseInt(selectedClipId.replace('S1-Scene-', ''), 10);
-                        if (onActiveEditsChange) {
-                            let sIndex = 0;
-                            const updated = activeEdits.map(ae => {
-                                if (ae.action === 'scene_override') {
-                                    const match = sIndex === idx;
-                                    sIndex++;
-                                    return match ? { ...ae, start: newStart, end: newEnd } : ae;
-                                }
-                                return ae;
-                            });
+                        const parts = selectedClipId.split('-');
+                        const idx = parseInt(parts[parts.length - 1], 10);
+                        const targetClip = sceneClips[idx];
+                        if (targetClip && onActiveEditsChange) {
+                            const updated = activeEdits.map((ae, i) => i === targetClip.rawIndex ? { ...ae, start: newStart, end: newEnd } : ae);
                             onActiveEditsChange(updated);
                         }
                     }
@@ -984,6 +1114,15 @@ export default function VideoTimeline({
                         if (targetClip && onActiveEditsChange) {
                             const updated = activeEdits.map((ae, i) => i === targetClip.rawIndex ? { ...ae, start: newStart, end: newEnd } : ae);
                             onActiveEditsChange(updated);
+                        }
+                    }
+                    else if (selectedClipId.startsWith('C1-Color-')) {
+                        const idx = parseInt(selectedClipId.replace('C1-Color-', ''), 10);
+                        if (onActiveEditsChange) {
+                            const colors = activeEdits.filter(ae => ae.action === 'color_correction');
+                            const others = activeEdits.filter(ae => ae.action !== 'color_correction');
+                            const updated = colors.map((c, i) => i === idx ? { ...c, start: newStart, end: newEnd } : c);
+                            onActiveEditsChange([...others, ...updated]);
                         }
                     }
                     else if (selectedClipId.startsWith('V1-Video-')) {
@@ -1017,17 +1156,11 @@ export default function VideoTimeline({
                         }
                     }
                     else if (selectedClipId.startsWith('S1-Scene-')) {
-                        const idx = parseInt(selectedClipId.replace('S1-Scene-', ''), 10);
-                        if (onActiveEditsChange) {
-                            let sIndex = 0;
-                            const updated = activeEdits.filter(ae => {
-                                if (ae.action === 'scene_override') {
-                                    const keep = sIndex !== idx;
-                                    sIndex++;
-                                    return keep;
-                                }
-                                return true;
-                            });
+                        const parts = selectedClipId.split('-');
+                        const idx = parseInt(parts[parts.length - 1], 10);
+                        const targetClip = sceneClips[idx];
+                        if (targetClip && onActiveEditsChange) {
+                            const updated = activeEdits.filter((_, i) => i !== targetClip.rawIndex);
                             onActiveEditsChange(updated);
                         }
                     }
@@ -1046,6 +1179,15 @@ export default function VideoTimeline({
                             const updated = activeEdits.filter((_, i) => i !== targetClip.rawIndex);
                             onActiveEditsChange(updated);
                         }
+                    }
+                    else if (selectedClipId.startsWith('C1-Color-')) {
+                        const idx = parseInt(selectedClipId.replace('C1-Color-', ''), 10);
+                        if (onActiveEditsChange) {
+                            const colors = activeEdits.filter(ae => ae.action === 'color_correction');
+                            const others = activeEdits.filter(ae => ae.action !== 'color_correction');
+                            onActiveEditsChange([...others, ...colors.filter((_, i) => i !== idx)]);
+                        }
+                        setSelectedClipId(null);
                     }
                     else if (selectedClipId.startsWith('V1-Video-')) {
                         const idx = parseInt(selectedClipId.replace('V1-Video-', ''), 10);
@@ -1091,25 +1233,17 @@ export default function VideoTimeline({
                         }
                     }
                     else if (selectedClipId.startsWith('S1-Scene-')) {
-                        const idx = parseInt(selectedClipId.replace('S1-Scene-', ''), 10);
-                        if (onActiveEditsChange) {
-                            let sIndex = 0;
-                            let targetIdx = -1;
-                            activeEdits.forEach((ae, i) => {
-                                if (ae.action === 'scene_override') {
-                                    if (sIndex === idx) targetIdx = i;
-                                    sIndex++;
-                                }
-                            });
-                            if (targetIdx !== -1) {
-                                const target = activeEdits[targetIdx];
-                                const first = { ...target, end: splitTime };
-                                const second = { ...target, start: splitTime };
-                                const updated = [...activeEdits];
-                                updated.splice(targetIdx, 1, first, second);
-                                onActiveEditsChange(updated);
-                                setSelectedClipId(`S1-Scene-${idx + 1}`);
-                            }
+                        const parts = selectedClipId.split('-');
+                        const idx = parseInt(parts[parts.length - 1], 10);
+                        const targetClip = sceneClips[idx];
+                        if (targetClip && onActiveEditsChange) {
+                            const target = activeEdits[targetClip.rawIndex];
+                            const first = { ...target, end: splitTime };
+                            const second = { ...target, start: splitTime };
+                            const updated = [...activeEdits];
+                            updated.splice(targetClip.rawIndex, 1, first, second);
+                            onActiveEditsChange(updated);
+                            setSelectedClipId(`S1-Scene-${targetClip.id}-${idx + 1}`);
                         }
                     }
                     else if (selectedClipId.startsWith('T1-Sub-')) {
@@ -1135,6 +1269,20 @@ export default function VideoTimeline({
                             updated.splice(targetClip.rawIndex, 1, first, second);
                             onActiveEditsChange(updated);
                             setSelectedClipId(`G1-Graphic-${parts[parts.length - 2]}-${idx + 1}`);
+                        }
+                    }
+                    else if (selectedClipId.startsWith('C1-Color-')) {
+                        const idx = parseInt(selectedClipId.replace('C1-Color-', ''), 10);
+                        if (onActiveEditsChange) {
+                            const colors = activeEdits.filter(ae => ae.action === 'color_correction');
+                            const others = activeEdits.filter(ae => ae.action !== 'color_correction');
+                            const target = colors[idx];
+                            const first = { ...target, end: splitTime };
+                            const second = { ...target, start: splitTime };
+                            const updatedColors = [...colors];
+                            updatedColors.splice(idx, 1, first, second);
+                            onActiveEditsChange([...others, ...updatedColors]);
+                            setSelectedClipId(`C1-Color-${idx + 1}`);
                         }
                     }
                     else if (selectedClipId.startsWith('V1-Video-')) {
@@ -1403,6 +1551,25 @@ export default function VideoTimeline({
                         </div>
                     )}
 
+                    {/* C1 Track Header */}
+                    {isC1Visible && (
+                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 uppercase hover:bg-white/5 select-none group/track transition-all">
+                            <div className="flex items-center gap-0.5 min-w-0">
+                                <span className="px-1 py-0.2 bg-amber-500/15 text-amber-500 border border-amber-500/20 rounded font-bold text-[7px] font-mono shrink-0">C1</span>
+                                <span className="text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">цветокор</span>
+                            </div>
+                            <div className="flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
+                                <button 
+                                    onClick={(ev) => { ev.stopPropagation(); handleAddClip('c1'); }}
+                                    className="w-3.5 h-3.5 bg-zinc-900 hover:bg-zinc-800 active:scale-95 border border-white/10 text-neutral-355 hover:text-white flex items-center justify-center cursor-pointer rounded transition-all font-bold text-[8px]"
+                                    title="Добавить цветокоррекцию"
+                                >
+                                    +
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
                     {/* V1 Track Header */}
                     <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 uppercase hover:bg-white/5 select-none group/track transition-all">
                         <div className="flex items-center gap-0.5 min-w-0">
@@ -1527,22 +1694,17 @@ export default function VideoTimeline({
                                         : ''
                                 }`}
                             >
-                                {activeEdits.map((item, i) => {
-                                    if (item.action !== 'scene_override' && item.action !== 'semantic_scene') return null;
-                                    const clipId = `S1-Scene-${i}`;
+                                {sceneClips.map((clip, i) => {
+                                    const clipId = `S1-Scene-${clip.id}-${i}`;
                                     const isSelected = selectedClipId === clipId;
-                                    const rawStart = item.start || 0;
-                                    const rawEnd = item.end || duration;
-                                    
-                                    const isDraggingThis = dragState?.track === 's1' && dragState.clipIndex === i;
-                                    const clipStart = isDraggingThis && previewDrag ? previewDrag.start : rawStart;
-                                    const clipEnd = isDraggingThis && previewDrag ? previewDrag.end : rawEnd;
+                                    const clipStart = clip.start;
+                                    const clipEnd = clip.end;
 
                                     return (
                                         <div
                                             key={clipId}
-                                            onClick={(e) => handleClipClick(e, clipId, { start: rawStart, end: rawEnd }, i, 's1')}
-                                            onPointerDown={(e) => handleDragStart(e, 's1', i, rawStart, rawEnd)}
+                                            onClick={(e) => handleClipClick(e, clipId, clip, i, 's1')}
+                                            onPointerDown={(e) => handleDragStart(e, 's1', i, clip.start, clip.end)}
                                             onPointerMove={handleDragMove}
                                             onPointerUp={handleDragEnd}
                                             className={`absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all ${
@@ -1552,7 +1714,7 @@ export default function VideoTimeline({
                                             }`}
                                             style={{ left: `${(clipStart / duration) * 100}%`, width: `${((clipEnd - clipStart) / duration) * 100}%` }}
                                         >
-                                            <span className="text-[9px] absolute left-2 font-mono truncate right-2 font-medium">🎬 Scene: {item.scene_data?.scene_template || item.style || 'semantic'} template</span>
+                                            <span className="text-[9px] absolute left-2 font-mono truncate right-2 font-medium">🎬 Scene: {clip.label} template</span>
                                         </div>
                                     );
                                 })}
@@ -1615,7 +1777,7 @@ export default function VideoTimeline({
                             >
                                 {subtitleChunks.map((chunk, i) => {
                                     const clipId = `T1-Sub-${i}`;
-                                    const isSelected = selectedClipId === clipId;
+                                    const isSelected = selectedClipId === clipId || (selectedSubIndices && selectedSubIndices.includes(i));
                                     const overrideEdits = activeEdits.filter(e => e.action === 'subtitle_override');
                                     const overrideForChunk = overrideEdits.find(e => e.chunk_index === i);
                                     
@@ -1642,7 +1804,6 @@ export default function VideoTimeline({
                                             onDoubleClick={(e) => {
                                                 e.stopPropagation();
                                                 setEditingChunk({ index: i, text: label });
-                                                setTimeout(() => editInputRef.current?.focus(), 50);
                                             }}
                                             onPointerDown={(e) => handleDragStart(e, 't1', i, rawStart, rawEnd)}
                                             onPointerMove={handleDragMove}
@@ -1662,6 +1823,7 @@ export default function VideoTimeline({
                                                     onClick={e => e.stopPropagation()}
                                                     onDoubleClick={e => e.stopPropagation()}
                                                     onKeyDown={e => {
+                                                        e.stopPropagation();
                                                         if (e.key === 'Enter' || e.key === 'Escape') {
                                                             if (e.key === 'Enter' && onActiveEditsChange) {
                                                                  const others = activeEdits.filter(ae => !(ae.action === 'subtitle_override' && ae.chunk_index === i));
@@ -1670,6 +1832,7 @@ export default function VideoTimeline({
                                                             setEditingChunk(null);
                                                         }
                                                     }}
+                                                    onKeyUp={e => e.stopPropagation()}
                                                     onBlur={() => {
                                                         if (onActiveEditsChange) {
                                                             const others = activeEdits.filter(ae => !(ae.action === 'subtitle_override' && ae.chunk_index === i));
@@ -1739,6 +1902,56 @@ export default function VideoTimeline({
                                                 <>
                                                     <div className="absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'v2', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                                     <div className="absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'v2', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                </>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+
+                        {/* C1 (Color Correction) Track */}
+                        {isC1Visible && (
+                            <div 
+                                onDragOver={(e) => handleDragOver(e, 'c1')}
+                                onDragLeave={handleDragLeave}
+                                onDrop={(e) => handleDrop(e, 'c1')}
+                                className={`h-10 border-b border-amber-950/10 bg-amber-950/5 relative flex items-center px-1 transition-all ${
+                                    dragOverTrack === 'c1' 
+                                        ? 'bg-amber-900/20 border-amber-500/40 border border-dashed shadow-[inset_0_0_8px_rgba(245,158,11,0.15)]' 
+                                        : ''
+                                }`}
+                            >
+                                {colorClips.map((clip, i) => {
+                                    const clipId = clip.id;
+                                    const isSelected = selectedClipId === clipId;
+                                    const rawStart = clip.start;
+                                    const rawEnd = clip.end;
+
+                                    const isDraggingThis = dragState?.track === 'c1' && dragState.clipIndex === i;
+                                    const clipStart = isDraggingThis && previewDrag ? previewDrag.start : (trimState?.clipIndex === i && trimState.track === 'c1' && trimState.type === 'left' && previewTrim ? previewTrim.time : rawStart);
+                                    const clipEnd = isDraggingThis && previewDrag ? previewDrag.end : (trimState?.clipIndex === i && trimState.track === 'c1' && trimState.type === 'right' && previewTrim ? previewTrim.time : rawEnd);
+
+                                    return (
+                                        <div
+                                            key={clipId}
+                                            onClick={(e) => handleClipClick(e, clipId, { start: rawStart, end: rawEnd }, i, 'c1')}
+                                            onPointerDown={(e) => handleDragStart(e, 'c1', i, rawStart, rawEnd)}
+                                            onPointerMove={handleDragMove}
+                                            onPointerUp={handleDragEnd}
+                                            title="click to select | delete to remove | drag to move | trim edges"
+                                            className={`absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/c1 ${
+                                                isSelected 
+                                                    ? 'bg-amber-900 border-amber-300 text-white z-10 font-bold shadow-[0_0_12px_rgba(245,158,11,0.3)]' 
+                                                    : 'bg-amber-950/30 border-amber-900/50 hover:border-amber-600 text-amber-200'
+                                            }`}
+                                            style={{ left: `${(clipStart / duration) * 100}%`, width: `${((clipEnd - clipStart) / duration) * 100}%` }}
+                                        >
+                                            <span className="text-[9px] absolute left-2 font-mono pointer-events-none truncate right-2 font-medium">🎨 Цветокор: "{clip.label.toLowerCase()}"</span>
+                                            {activeTool === 'pointer' && (
+                                                <>
+                                                    <div className="absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'c1', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'c1', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                                 </>
                                             )}
                                         </div>

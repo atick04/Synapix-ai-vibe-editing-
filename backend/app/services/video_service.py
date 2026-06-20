@@ -26,6 +26,10 @@ def get_animation_tag(style: str) -> str:
         "bounce":     r"{\fscx140\fscy140\fad(100,0)\t(0,180,\fscx90\fscy90)\t(180,320,\fscx108\fscy108)\t(320,430,\fscx98\fscy98)\t(430,520,\fscx100\fscy100)}",
         # Glow burst — blur dissolves in
         "glow":       r"{\blur30\alpha&H88&\t(0,400,\blur0\alpha&H00&)}",
+        # Slide from left
+        "slide_left":  r"{\move(400,1670,540,1670,0,350)\fad(250,50)}",
+        # Slide from right
+        "slide_right": r"{\move(680,1670,540,1670,0,350)\fad(250,50)}",
         # No animation (still karaoke word-highlight via \k tags)
         "karaoke":    "",
     }
@@ -38,7 +42,34 @@ def hex_to_ass_color(hex_str: str) -> str:
         return f"&H00{b}{g}{r}"
     return "&H00FFFFFF"
 
-def generate_ass(transcript, filepath, position="center", font="Impact", font_size=110, use_outline=True, font_color="White", cuts=None, animation_style="fade", template_id=None):
+def color_to_ass(c: str) -> str:
+    if not c:
+        return "&H00FFFFFF"
+    c_lower = c.lower()
+    color_map = {
+        "white": "&H00FFFFFF",
+        "yellow": "&H0000D7FF", # Gold-yellow
+        "green": "&H0055FF55",
+        "red": "&H005555FF",
+        "cyan": "&H00FFFF00",
+        "black": "&H00000000",
+        "blue": "&H00FF5555"
+    }
+    if c_lower in color_map:
+        return color_map[c_lower]
+    if c.startswith("#"):
+        hex_str = c.lstrip('#')
+        if len(hex_str) == 6:
+            r, g, b = hex_str[0:2], hex_str[2:4], hex_str[4:6]
+            return f"&H00{b}{g}{r}"
+    return "&H00FFFFFF"
+
+def opacity_to_ass_alpha(opacity: float) -> str:
+    alpha = int((1.0 - opacity) * 255)
+    alpha = min(255, max(0, alpha))
+    return f"{alpha:02X}"
+
+def generate_ass(transcript, filepath, position="center", font="Impact", font_size=110, use_outline=True, font_color="White", cuts=None, animation_style="fade", template_id=None, subtitle_edit=None):
     """Generate ASS subtitle file, adjusting timing for cut_out edits and injecting animation tags."""
     from app.services.template_service import get_template
     cuts = sorted(cuts or [], key=lambda c: c.get('start', 0))
@@ -62,40 +93,26 @@ def generate_ass(transcript, filepath, position="center", font="Impact", font_si
                 return True
         return False
 
-    # Premium Margin and Positioning
-    alignment = 5
-    margin_v = 500
-    margin_l = 60
-    margin_r = 60
-    
-    if position == "top":
-        alignment = 8
-        margin_v = 200
-    elif position == "bottom":
-        alignment = 2
-        margin_v = 250
-    elif position == "left":
-        alignment = 4
-        margin_l = 80
-        margin_v = 0
-    elif position == "right":
-        alignment = 6
-        margin_r = 80
-        margin_v = 0
-    elif position == "center":
-        alignment = 5
-        margin_v = 500
-
-    use_aesthetic_styling = False
-    base_font = font
-    accent_font = font
-    text_main_color = "&H00FFFFFF"
-    text_accent_color = "&H0000D7FF" # Yellow
-    text_case = "UPPER"
+    # Premium Margin and Positioning defaults
+    base_font = font or "Inter"
+    font_pairing = None
+    font_size_val = font_size or 72
+    text_main_color = "#FFFFFF"
+    text_accent_color = "#FACC15" # Default yellow/gold
+    text_case = "Sentence_Case"
     max_words = 3
-    shadow_val = 4
-    bold_val = -1
-    
+    shadow_val = 3
+    outline_val = 0
+    alignment = 2
+    margin_v = 180
+    margin_l = 80
+    margin_r = 80
+    custom_x = None
+    custom_y = None
+    inactive_opacity = 0.45
+    active_scale = 1.25
+    use_aesthetic_styling = False
+
     if template_id:
         tpl = get_template(template_id)
         if tpl and tpl.subtitles:
@@ -103,39 +120,72 @@ def generate_ass(transcript, filepath, position="center", font="Impact", font_si
             if sub.font_management:
                 use_aesthetic_styling = True
                 base_font = sub.font_management.base_sans_font.replace("-Medium.ttf", "").replace(".ttf", "")
-                accent_font = sub.font_management.accent_serif_font.replace("-Italic.ttf", "").replace(".ttf", "").replace("CormorantGaramond", "Cormorant Garamond")
-                font_size = sub.font_management.font_size_px
+                font_pairing = sub.font_management.accent_serif_font.replace("-Italic.ttf", "").replace(".ttf", "").replace("CormorantGaramond", "Cormorant Garamond").replace("MarckScript-Regular", "Marck Script").replace("MarckScript", "Marck Script")
+                font_size_val = sub.font_management.font_size_px
                 
                 if sub.color_palette:
-                    text_main_color = hex_to_ass_color(sub.color_palette.text_main)
-                    text_accent_color = hex_to_ass_color(sub.color_palette.text_accent)
+                    text_main_color = sub.color_palette.text_main
+                    text_accent_color = sub.color_palette.text_accent
                     
                 if sub.layout:
                     text_case = sub.layout.text_case
                     max_words = sub.layout.max_words_per_screen
-                    shadow_val = int(sub.layout.shadow_blur_px // 2) if sub.layout.shadow_blur_px else 4
-                bold_val = 0
+                    shadow_val = int(sub.layout.shadow_blur_px // 2) if sub.layout.shadow_blur_px else 3
 
-    if use_aesthetic_styling:
-        primary_col = text_main_color
-        unlit_col = text_main_color
-        outline = 0
-        shadow = shadow_val
-        font = base_font
-    else:
-        color_map = {
-            "White":  ("&H00FFFFFF", "&H00A0A0A0"),
-            "Yellow": ("&H0000D7FF", "&H00A0A0A0"),
-            "Green":  ("&H0055FF55", "&H00A0A0A0"),
-            "Red":    ("&H005555FF", "&H00A0A0A0"),
-            "Cyan":   ("&H00FFFF00", "&H00A0A0A0"),
-        }
-        primary_col, unlit_col = color_map.get(font_color, ("&H00FFFFFF", "&H00A0A0A0"))
-        outline = 10 if use_outline else 0
-        shadow = 8 if use_outline else 0
-        
-    outline_col = "&H00000000"
-    shadow_col = "&HAA000000"
+    if subtitle_edit:
+        if subtitle_edit.get("font"):
+            base_font = subtitle_edit.get("font")
+        if subtitle_edit.get("font_size"):
+            font_size_val = int(subtitle_edit.get("font_size"))
+        if subtitle_edit.get("font_color"):
+            color_name_map = {
+                "White": "#FFFFFF",
+                "Yellow": "#FACC15",
+                "Green": "#55FF55",
+                "Red": "#FF5555",
+                "Cyan": "#FFFF00"
+            }
+            text_main_color = color_name_map.get(subtitle_edit.get("font_color"), subtitle_edit.get("font_color"))
+        if subtitle_edit.get("accent_color"):
+            text_accent_color = subtitle_edit.get("accent_color")
+        if subtitle_edit.get("font_pairing"):
+            font_pairing = subtitle_edit.get("font_pairing")
+        if subtitle_edit.get("inactive_opacity") is not None:
+            inactive_opacity = float(subtitle_edit.get("inactive_opacity"))
+        if subtitle_edit.get("active_scale") is not None:
+            active_scale = float(subtitle_edit.get("active_scale"))
+        if subtitle_edit.get("text_case"):
+            text_case = subtitle_edit.get("text_case")
+        if subtitle_edit.get("max_words"):
+            max_words = int(subtitle_edit.get("max_words"))
+            
+        pos_preset = subtitle_edit.get("position") or position or "bottom"
+        if pos_preset == "top":
+            alignment = 8
+            margin_v = 200
+        elif pos_preset == "center":
+            alignment = 5
+            margin_v = 0
+        elif pos_preset == "bottom":
+            alignment = 2
+            margin_v = 180
+            
+        if subtitle_edit.get("x") is not None:
+            custom_x = float(subtitle_edit.get("x"))
+        if subtitle_edit.get("y") is not None:
+            custom_y = float(subtitle_edit.get("y"))
+            
+        use_outline = subtitle_edit.get("use_outline", use_outline)
+        outline_val = 3 if use_outline else 0
+        shadow_val = 3 if subtitle_edit.get("use_shadow", True) else 0
+        if subtitle_edit.get("shadow_blur") is not None:
+            shadow_val = int(float(subtitle_edit.get("shadow_blur")) / 4.0)
+            shadow_val = min(10, max(0, shadow_val))
+
+    main_col_ass = color_to_ass(text_main_color)
+    accent_col_ass = color_to_ass(text_accent_color)
+    outline_col_ass = "&H00000000"
+    shadow_col_ass = "&H99000000"
 
     ass_header = f"""[Script Info]
 ScriptType: v4.00+
@@ -145,7 +195,7 @@ WrapStyle: 1
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Premium,{font},{font_size},{primary_col},{unlit_col},{outline_col},{shadow_col},{bold_val},0,0,0,100,100,0,0,1,{outline},{shadow},{alignment},{margin_l},{margin_r},{margin_v},1
+Style: Premium,{base_font},{font_size_val},{main_col_ass},{main_col_ass},{outline_col_ass},{shadow_col_ass},1,0,0,0,100,100,0,0,1,{outline_val},{shadow_val},{alignment},{margin_l},{margin_r},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -165,6 +215,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 start = format_ass_time(remap_time(s))
                 end = format_ass_time(remap_time(e))
                 text = seg.get('text', '').strip()
+                if text_case == "UPPER":
+                    text = text.upper()
+                elif text_case == "lower":
+                    text = text.lower()
+                elif text_case == "Sentence_Case":
+                    text = text.capitalize()
                 f.write(f"Dialogue: 0,{start},{end},Premium,,0,0,0,,{anim}{text}\n")
             return
 
@@ -173,7 +229,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         for w in words:
             ws, we = w.get('start', 0.0), w.get('end', 0.0)
             if in_cut(ws, we):
-                # Flush current chunk before the cut
                 if cur_chunk:
                     chunks.append(cur_chunk)
                     cur_chunk = []
@@ -186,19 +241,25 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             chunks.append(cur_chunk)
             
         for chunk in chunks:
-            chunk_start = remap_time(chunk[0].get('start', 0.0))
-            chunk_end = remap_time(chunk[-1].get('end', 0.0))
-            
-            if use_aesthetic_styling:
-                text_line = ""
-                accent_idx = len(chunk) // 2 if len(chunk) == 3 else 1 if len(chunk) == 2 else -1
+            # Build Dialogue line for each word being active in the chunk
+            for active_i, active_w in enumerate(chunk):
+                w_start = remap_time(active_w.get('start', 0.0))
+                # Active word highlighting displays until the next word starts
+                if active_i == len(chunk) - 1:
+                    w_end = remap_time(chunk[-1].get('end', 0.0))
+                else:
+                    w_end = remap_time(chunk[active_i + 1].get('start', 0.0))
                 
-                for idx, w in enumerate(chunk):
+                if w_start >= w_end:
+                    w_end = w_start + 0.1
+                
+                # Build styled text line for this state
+                text_line = ""
+                for i, w in enumerate(chunk):
                     word_str = w.get('word', '').strip()
                     
-                    # Apply text casing
                     if text_case == "Sentence_Case":
-                        if idx == 0:
+                        if i == 0:
                             word_str = word_str.capitalize()
                         else:
                             word_str = word_str.lower()
@@ -206,36 +267,46 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         word_str = word_str.upper()
                     elif text_case == "lower":
                         word_str = word_str.lower()
+                    
+                    is_active = (i == active_i)
+                    
+                    w_font_size = font_size_val
+                    if is_active:
+                        w_font_size = int(font_size_val * active_scale)
+                    
+                    w_color = accent_col_ass if is_active else main_col_ass
+                    w_alpha_tag = ""
+                    if not is_active and inactive_opacity < 1.0:
+                        w_alpha_tag = f"\\1a{opacity_to_ass_alpha(inactive_opacity)}&"
+                    
+                    # Font pairing
+                    w_font = base_font
+                    is_accent_word = False
+                    if len(chunk) == 3:
+                        is_accent_word = (i == 1)
+                    elif len(chunk) == 2:
+                        is_accent_word = (i == 1)
+                    elif len(chunk) == 4:
+                        is_accent_word = (i == 1 or i == 2)
+                    elif len(chunk) > 4:
+                        is_accent_word = (i == 1 or i == 3)
                         
-                    # Apply font and color overrides for highlighted word
-                    if idx == accent_idx:
-                        text_line += f"{{\\fn{accent_font}\\i1\\c{text_accent_color}}}{word_str}{{\\fn{base_font}\\i0\\c{text_main_color}}} "
-                    else:
-                        text_line += f"{word_str} "
-                        
-                start_str = format_ass_time(chunk_start)
-                end_str = format_ass_time(chunk_end)
-                f.write(f"Dialogue: 0,{start_str},{end_str},Premium,,0,0,0,,{anim}{text_line.strip()}\n")
-            elif animation_style == "typewriter":
-                # Each word gets its own line, staggered by 100ms
-                for idx, w in enumerate(chunk):
-                    ws = remap_time(w.get('start', 0.0))
-                    we = remap_time(chunk[-1].get('end', 0.0))  # all hold until chunk end
-                    word_txt = w.get('word', '').strip().upper()
-                    # Build line: show words cumulatively
-                    shown = " ".join(ww.get('word','').strip().upper() for ww in chunk[:idx+1])
-                    s_str = format_ass_time(ws)
-                    e_str = format_ass_time(we)
-                    f.write(f"Dialogue: 0,{s_str},{e_str},Premium,,0,0,0,,{shown}\n")
-            else:
-                text_line = ""
-                for w in chunk:
-                    dur_cs = int((w.get('end', 0.0) - w.get('start', 0.0)) * 100)
-                    word_txt = w.get('word', '').strip().upper()
-                    text_line += f"{{\\k{dur_cs}}}{word_txt} "
-                start_str = format_ass_time(chunk_start)
-                end_str = format_ass_time(chunk_end)
-                f.write(f"Dialogue: 0,{start_str},{end_str},Premium,,0,0,0,,{anim}{text_line.strip()}\n")
+                    if is_accent_word and font_pairing:
+                        w_font = font_pairing
+                    
+                    tags = f"\\fn{w_font}\\fs{w_font_size}\\c{w_color}{w_alpha_tag}"
+                    text_line += f"{{{tags}}}{word_str} "
+                
+                start_str = format_ass_time(w_start)
+                end_str = format_ass_time(w_end)
+                
+                pos_tag = ""
+                if custom_x is not None and custom_y is not None:
+                    posX = int((custom_x / 100.0) * 1080)
+                    posY = int((custom_y / 100.0) * 1920)
+                    pos_tag = f"\\pos({posX},{posY})"
+                
+                f.write(f"Dialogue: 0,{start_str},{end_str},Premium,,0,0,0,,{{{pos_tag}}}{anim}{text_line.strip()}\n")
 
 def extract_audio(video_path: str, output_audio_path: str) -> str:
     try:
@@ -395,6 +466,48 @@ def build_drawtext_kwargs(text: str, start: float, end: float,
         "font": "Arial",
     }
 
+LUT_PRESETS = {
+    "cinema": {"brightness": 1.0, "contrast": 1.1, "saturation": 1.1, "hue": 0},
+    "vintage": {"brightness": 0.95, "contrast": 0.9, "saturation": 0.8, "hue": 5},
+    "cyberpunk": {"brightness": 1.0, "contrast": 1.2, "saturation": 1.4, "hue": -10},
+    "monochrome": {"brightness": 1.0, "contrast": 1.2, "saturation": 0.0, "hue": 0},
+    "teal_orange": {"brightness": 1.0, "contrast": 1.1, "saturation": 1.2, "hue": 10},
+    "vibrant": {"brightness": 1.0, "contrast": 1.1, "saturation": 1.3, "hue": 0},
+    "cold": {"brightness": 1.0, "contrast": 1.05, "saturation": 0.9, "hue": -15},
+    "warm": {"brightness": 1.05, "contrast": 1.0, "saturation": 1.1, "hue": 15}
+}
+
+def apply_color_corrections(stream, edits):
+    cc_edits = [e for e in edits if e.get("action") == "color_correction"]
+    for cc in cc_edits:
+        cc_start = float(cc.get("start", 0))
+        cc_end = float(cc.get("end", 0))
+        if cc_start >= cc_end:
+            continue
+            
+        preset_key = cc.get("preset") or cc.get("lut") or "cinema"
+        base = LUT_PRESETS.get(preset_key, {"brightness": 1.0, "contrast": 1.0, "saturation": 1.0, "hue": 0})
+        
+        user_b = cc.get("brightness") if cc.get("brightness") is not None else 100
+        user_c = cc.get("contrast") if cc.get("contrast") is not None else 100
+        user_s = cc.get("saturation") if cc.get("saturation") is not None else 100
+        user_h = cc.get("hue") if cc.get("hue") is not None else 0
+        
+        final_b = base["brightness"] * (user_b / 100.0)
+        final_c = base["contrast"] * (user_c / 100.0)
+        final_s = base["saturation"] * (user_s / 100.0)
+        final_h = base["hue"] + user_h
+        
+        ffmpeg_b = final_b - 1.0
+        ffmpeg_c = final_c
+        ffmpeg_s = final_s
+        ffmpeg_h = f"{final_h}*PI/180"
+        
+        stream = stream.filter('eq', brightness=ffmpeg_b, contrast=ffmpeg_c, saturation=ffmpeg_s, enable=f"between(t,{cc_start},{cc_end})")
+        stream = stream.filter('hue', h=ffmpeg_h, enable=f"between(t,{cc_start},{cc_end})")
+        
+    return stream
+
 def render_video(input_path: str, output_path: str, transcript_data: dict, edits: list, edl: dict = None, font: str = "Arial", font_size: int = 100, use_outline: bool = True, font_color: str = "White", template_id: str = None):
     """Advanced Rendering Pipeline using FFmpeg Concat, ASS overlays, Zoom, Speed, Text and EDL"""
     ass_path = output_path.replace(".mp4", ".ass")
@@ -420,7 +533,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
 
     # Generate ASS AFTER parsing cuts so timing can be remapped
     print(f"[ASS] animation_style={animation_style}, position={position}, template_id={template_id}")
-    generate_ass(transcript_data, ass_path, position=position, font=font, font_size=font_size, use_outline=use_outline, font_color=font_color, cuts=cuts, animation_style=animation_style, template_id=template_id)
+    generate_ass(transcript_data, ass_path, position=position, font=font, font_size=font_size, use_outline=use_outline, font_color=font_color, cuts=cuts, animation_style=animation_style, template_id=template_id, subtitle_edit=subtitle_edit)
     safe_ass = ass_path.replace("\\", "/")
 
     print(f"[Render] Step 0: Probing video metadata for {input_path}")
@@ -484,6 +597,58 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
             ok = apply_zoom(working_path, zoom_tmp, zoom_type, z_start, z_end, duration)
             if ok:
                 working_path = zoom_tmp
+
+    # --- Step 1c: Color correction (subprocess-based, before graphic overlays) ---
+    cc_edits = [e for e in edits if e.get("action") == "color_correction"]
+    if cc_edits:
+        print(f"[RenderEngine] Applying {len(cc_edits)} color correction segments to source video...")
+        color_tmp = output_path.replace('.mp4', '_color.mp4')
+        filters = []
+        for cc in cc_edits:
+            cc_start = float(cc.get("start", 0))
+            cc_end = float(cc.get("end", 0))
+            if cc_start >= cc_end:
+                continue
+                
+            preset_key = cc.get("preset") or cc.get("lut") or "cinema"
+            base = LUT_PRESETS.get(preset_key, {"brightness": 1.0, "contrast": 1.0, "saturation": 1.0, "hue": 0})
+            
+            user_b = cc.get("brightness") if cc.get("brightness") is not None else 100
+            user_c = cc.get("contrast") if cc.get("contrast") is not None else 100
+            user_s = cc.get("saturation") if cc.get("saturation") is not None else 100
+            user_h = cc.get("hue") if cc.get("hue") is not None else 0
+            
+            final_b = base["brightness"] * (user_b / 100.0)
+            final_c = base["contrast"] * (user_c / 100.0)
+            final_s = base["saturation"] * (user_s / 100.0)
+            final_h = base["hue"] + user_h
+            
+            ffmpeg_b = final_b - 1.0
+            ffmpeg_c = final_c
+            ffmpeg_s = final_s
+            ffmpeg_h = f"{final_h}*PI/180"
+            
+            filters.append(f"eq=brightness={ffmpeg_b}:contrast={ffmpeg_c}:saturation={ffmpeg_s}:enable='between(t,{cc_start},{cc_end})'")
+            filters.append(f"hue=h='{ffmpeg_h}':enable='between(t,{cc_start},{cc_end})'")
+            
+        if filters:
+            filter_str = ",".join(filters)
+            cmd = [
+                "ffmpeg", "-i", working_path,
+                "-vf", filter_str,
+                "-c:v", "libx264", "-c:a", "copy",
+                "-preset", "fast",
+                color_tmp, "-y", "-loglevel", "error"
+            ]
+            try:
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
+                if res.returncode == 0 and os.path.exists(color_tmp):
+                    working_path = color_tmp
+                    print("[RenderEngine] ✅ Color correction subprocess applied successfully.")
+                else:
+                    print(f"[RenderEngine] Color correction subprocess failed: {res.stderr.decode(errors='replace')}")
+            except subprocess.TimeoutExpired:
+                print("[RenderEngine] ⏰ Color correction subprocess timed out!")
 
     # --- Step 2: Extract EDL tracks ---
     v1_keeps = []
@@ -604,12 +769,46 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
     # --- Step 4: Text overlays (drawtext) ---
     if text_overlays:
         for to in text_overlays:
+            x_pct = to.get('x', 50.0)
+            y_pct = to.get('y', 78.0)
+            w_pct = to.get('width', 82.0)
+            raw_text = to.get('text', '')
+            
+            # Estimate wrapping based on width percentage
+            fontsize = int(to.get('fontsize') or to.get('font_size') or 72)
+            wrapped_text = raw_text
+            if w_pct:
+                max_w_px = (w_pct / 100.0) * width
+                char_w = fontsize * 0.46
+                words = raw_text.split(" ")
+                lines = []
+                current_line = []
+                current_width = 0
+                for word in words:
+                    word_w = len(word) * char_w
+                    if current_width + word_w > max_w_px and current_line:
+                        lines.append(" ".join(current_line))
+                        current_line = [word]
+                        current_width = word_w
+                    else:
+                        current_line.append(word)
+                        current_width += word_w + char_w
+                if current_line:
+                    lines.append(" ".join(current_line))
+                wrapped_text = "\n".join(lines)
+
+            # Map percent coordinates to FFmpeg math expressions
+            x_expr = f"(w*{x_pct/100.0})-text_w/2"
+            y_expr = f"(h*{y_pct/100.0})-text_h/2"
+            
             kwargs = build_drawtext_kwargs(
-                text=to.get('text', ''),
+                text=wrapped_text,
                 start=float(to.get('start', 0)),
                 end=float(to.get('end', 3)),
-                fontsize=int(to.get('fontsize', 72)),
-                color=to.get('color', 'white')
+                fontsize=fontsize,
+                color=to.get('font_color') or to.get('color') or 'white',
+                x=x_expr,
+                y=y_expr
             )
             v_out = v_out.drawtext(**kwargs)
 
@@ -827,28 +1026,21 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 os.remove(overlay_path)
 
 
-    # --- Step 4.4: Hyperframes HTML Canvas ---
+    # --- Step 4.4: Hyperframes HTML Canvas & Semantic Scenes ---
     hyperframes_edits = [e for e in edits if e.get("action") in ("hyperframes_html", "canvas_overlay")]
-    if hyperframes_edits:
-        print(f"[Hyperframes] Found {len(hyperframes_edits)} html injections. Compositing...")
+    semantic_edits = [e for e in edits if e.get("action") == "semantic_scene" and e.get("scene_data")]
+    
+    if hyperframes_edits or semantic_edits:
+        print(f"[Hyperframes] Found {len(hyperframes_edits)} html injections and {len(semantic_edits)} semantic scenes. Compositing...")
         hyperframes_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'hyperframes_studio'))
         os.makedirs(hyperframes_dir, exist_ok=True)
         
-        # Optimize Hyperframes rendering time by calculating the bounding time box of the graphics
+        # Bounding time box calculations
         import re
         min_start = float(duration)
         max_end = 0.0
         
-        for e in hyperframes_edits:
-            html = e.get("html_content", "")
-            for m in re.finditer(r"data-start=['\"]([\d.]+)['\"]", html):
-                s = float(m.group(1))
-                if s < min_start: min_start = s
-            for m in re.finditer(r"data-duration=['\"]([\d.]+)['\"]", html):
-                # We need the corresponding start. For simplicity just assume the max end is bounded
-                pass # Actually it's easier to just do a naive check:
-                
-        # More robust extraction (only from elements with class="clip"):
+        # Track starts and ends for both types of edits
         for e in hyperframes_edits:
             html = e.get("html_content", "")
             clip_matches = re.findall(r'<div[^>]*class=[\'"][^\'"]*clip[^\'"]*[\'"][^>]*>', html)
@@ -866,26 +1058,54 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 d = max(durs) if durs else 5.0
                 if s + d > max_end: max_end = s + d
                 
+        for e in semantic_edits:
+            s = e.get("start", 0.0)
+            e_end = e.get("end", s + 5.0)
+            if s < min_start: min_start = s
+            if e_end > max_end: max_end = e_end
+                
         if max_end <= 0.1:
             max_end = float(duration)
                 
         combined_html = "\n".join([e.get("html_content", "") for e in hyperframes_edits])
         
-        if combined_html:
-            # Scale the 1080x1920 design to the actual video resolution
-            scale_factor = width / 1080.0
+        # Construct semantic scene canvas elements and script code
+        semantic_canvas_html = ""
+        semantic_scripts = ""
+        draw_calls = ""
+        
+        for idx, se in enumerate(semantic_edits):
+            semantic_canvas_html += f'<canvas id="semantic-canvas-{idx}" width="1080" height="1920" style="position: absolute; top: 0; left: 0; width: 1080px; height: 1920px; pointer-events: none;"></canvas>\n'
             
-            # Replace the agent's hardcoded dimensions with the actual video dimensions
+            scene_data_json = json.dumps(se.get("scene_data"), ensure_ascii=False)
+            start = se.get("start", 0.0)
+            end = se.get("end", 5.0)
+            
+            semantic_scripts += f"""
+            const sceneData_{idx} = {scene_data_json};
+            const sceneStart_{idx} = {start};
+            const sceneEnd_{idx} = {end};
+            """
+            
+            draw_calls += f"drawSemanticScene('semantic-canvas-{idx}', sceneData_{idx}, sceneStart_{idx}, sceneEnd_{idx}, t);\n"
+
+        # Scale the 1080x1920 design to the actual video resolution
+        scale_factor = width / 1080.0
+        
+        if combined_html:
             combined_html = re.sub(r'data-width=[\'"]1080[\'"]', f'data-width="{width}"', combined_html)
             combined_html = re.sub(r'data-height=[\'"]1920[\'"]', f'data-height="{height}"', combined_html)
             
-            # Wrap in boilerplate provided by hyperframes, sized to video
-            html_doc = f"""<!doctype html>
+        html_doc = f"""<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width={width}, height={height}" />
     <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;700&family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;700&family=Manrope:wght@400;700&family=Montserrat:wght@400;700;800&family=Playfair+Display:ital,wght@0,700;1,400&family=Rubik:wght@400;700&family=Unbounded:wght@700&display=swap" rel="stylesheet" />
     <style>
       * {{ margin: 0; padding: 0; box-sizing: border-box; }}
       html, body {{ width: {width}px; height: {height}px; overflow: hidden; background: transparent !important; }}
@@ -897,73 +1117,351 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
           transform: scale({scale_factor}) !important; 
       }}
     </style>
+    <script>
+      tailwind.config = {{
+        theme: {{
+          extend: {{
+            fontFamily: {{
+              inter: ['Inter', 'sans-serif'],
+              montserrat: ['Montserrat', 'sans-serif'],
+              rubik: ['Rubik', 'sans-serif'],
+              manrope: ['Manrope', 'sans-serif'],
+              unbounded: ['Unbounded', 'sans-serif'],
+              comfortaa: ['Comfortaa', 'sans-serif'],
+              mono: ['JetBrains Mono', 'monospace'],
+              playfair: ['Playfair Display', 'serif']
+            }}
+          }}
+        }}
+      }}
+    </script>
   </head>
   <body style="background: transparent;">
+    <div id="root">
 {combined_html}
+{semantic_canvas_html}
+    </div>
+    <script>
+      function drawRoundedRect(ctx, x, y, w, h, r) {{
+          ctx.beginPath();
+          ctx.moveTo(x + r, y);
+          ctx.lineTo(x + w - r, y);
+          ctx.arcTo(x + w, y, x + w, y + r, r);
+          ctx.lineTo(x + w, y + h - r);
+          ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+          ctx.lineTo(x + r, y + h);
+          ctx.arcTo(x, y + h, x, y + h - r, r);
+          ctx.lineTo(x, y + r);
+          ctx.arcTo(x, y, x + r, y, r);
+          ctx.closePath();
+      }}
+      function getEmojiForIcon(id) {{
+          const mapping = {{
+              'rocket': '🚀', 'fire': '🔥', 'warning': '⚠️', 'check': '✅',
+              'star': '⭐', 'lightning': '⚡', 'chart': '📊', 'crm': '💻',
+              'sales': '📈', 'money': '💰', 'arrow': '➡️', 'brain': '🧠'
+          }};
+          return mapping[id] || id;
+      }}
+      function drawArrowhead(ctx, fromX, fromY, toX, toY, size) {{
+          const angle = Math.atan2(toY - fromY, toX - fromX);
+          ctx.beginPath();
+          ctx.moveTo(toX, toY);
+          ctx.lineTo(toX - size * Math.cos(angle - Math.PI / 6), toY - size * Math.sin(angle - Math.PI / 6));
+          ctx.lineTo(toX - size * Math.cos(angle + Math.PI / 6), toY - size * Math.sin(angle + Math.PI / 6));
+          ctx.closePath();
+          ctx.fillStyle = ctx.strokeStyle;
+          ctx.fill();
+      }}
+      function drawSemanticScene(canvasId, sceneData, start, end, t) {{
+          const canvas = document.getElementById(canvasId);
+          if (!canvas) return;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return;
+          const W = canvas.width;
+          const H = canvas.height;
+          ctx.clearRect(0, 0, W, H);
+          if (t < start || t >= end) return;
+          const styleProfile = sceneData.style_profile || {{}};
+          const entities = sceneData.entities || [];
+          const relations = sceneData.relations || [];
+          const bgColor = styleProfile.bg_color || 'rgba(20, 20, 25, 0.65)';
+          const borderColor = styleProfile.border_color || 'rgba(255, 255, 255, 0.15)';
+          const glowColor = styleProfile.glow_color || 'rgba(255, 255, 255, 0.04)';
+          const baseFontFamily = styleProfile.font_family || 'Inter, sans-serif';
+          const elapsed = t - start;
+          entities.forEach(entity => {{
+              const xPercent = entity.x ?? 50;
+              const yPercent = entity.y ?? 50;
+              const wPercent = entity.width ?? 28;
+              const hPercent = entity.height ?? 12;
+              const targetX = (xPercent / 100) * W;
+              const targetY = (yPercent / 100) * H;
+              const targetW = (wPercent / 100) * W;
+              const targetH = (hPercent / 100) * H;
+              const anim = entity.animation || {{}};
+              const animType = anim.type || 'fade';
+              const animDuration = anim.duration || 0.6;
+              const animDelay = anim.delay || 0.0;
+              const progress = Math.min(1, Math.max(0, (elapsed - animDelay) / animDuration));
+              let easeProgress = progress;
+              if (anim.easing === 'linear') {{
+                  easeProgress = progress;
+              }} else if (anim.easing === 'bounce') {{
+                  const c4 = (2 * Math.PI) / 3;
+                  easeProgress = progress === 0 ? 0 : progress === 1 ? 1 : Math.pow(2, -10 * progress) * Math.sin((progress * 10 - 0.75) * c4) + 1;
+              }} else {{
+                  easeProgress = progress * progress * (3 - 2 * progress);
+              }}
+              let currentX = targetX;
+              let currentY = targetY;
+              let currentOpacity = 1.0;
+              let currentScale = 1.0;
+              let currentRotation = 0;
+              const startOpacity = anim.opacity_start !== undefined ? anim.opacity_start : (animType === 'fade' || animType === 'pop' || animType === 'slide_in' ? 0.0 : 1.0);
+              const endOpacity = anim.opacity_end !== undefined ? anim.opacity_end : 1.0;
+              currentOpacity = startOpacity + (endOpacity - startOpacity) * easeProgress;
+              const startScale = anim.scale_start !== undefined ? anim.scale_start : (animType === 'pop' ? 0.5 : 1.0);
+              const endScale = anim.scale_end !== undefined ? anim.scale_end : 1.0;
+              currentScale = startScale + (endScale - startScale) * easeProgress;
+              const startRotation = anim.rotation_start !== undefined ? anim.rotation_start : 0;
+              const endRotation = anim.rotation_end !== undefined ? anim.rotation_end : 0;
+              currentRotation = startRotation + (endRotation - startRotation) * easeProgress;
+              const xOffsetPercent = anim.x_offset !== undefined ? anim.x_offset : (animType === 'slide_in' ? -10 : 0);
+              const yOffsetPercent = anim.y_offset !== undefined ? anim.y_offset : 0;
+              const startX = targetX + (xOffsetPercent / 100) * W;
+              const startY = targetY + (yOffsetPercent / 100) * H;
+              currentX = startX + (targetX - startX) * easeProgress;
+              currentY = startY + (targetY - startY) * easeProgress;
+              ctx.save();
+              ctx.globalAlpha = currentOpacity;
+              if (currentScale !== 1.0) {{
+                  ctx.translate(currentX, currentY);
+                  ctx.scale(currentScale, currentScale);
+                  ctx.translate(-currentX, -currentY);
+              }}
+              if (currentRotation !== 0) {{
+                  ctx.translate(currentX, currentY);
+                  ctx.rotate(currentRotation * Math.PI / 180);
+                  ctx.translate(-currentX, -currentY);
+              }}
+              const styles = entity.styles || {{}};
+              const itemBg = styles.bg_color || bgColor;
+              const itemBorder = styles.border_color || borderColor;
+              const itemGlow = styles.glow_color || glowColor;
+              const itemFont = styles.font_family || baseFontFamily;
+              
+              if (entity.type === 'loading_bar' || entity.is_loading_bar) {{
+                  // Render Apple-style loading bar
+                  ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+                  ctx.strokeStyle = itemBorder;
+                  ctx.lineWidth = 1.0;
+                  drawRoundedRect(ctx, currentX - targetW / 2, currentY - targetH / 2, targetW, targetH, targetH / 2);
+                  ctx.fill();
+                  ctx.stroke();
+                  
+                  ctx.fillStyle = styleProfile.color_accent || '#0A84FF';
+                  const activeW = targetW * easeProgress;
+                  drawRoundedRect(ctx, currentX - targetW / 2, currentY - targetH / 2, activeW, targetH, targetH / 2);
+                  ctx.fill();
+                  
+                  const textVal = entity.text || '';
+                  if (textVal) {{
+                      ctx.fillStyle = '#FFFFFF';
+                      ctx.textAlign = 'center';
+                      ctx.textBaseline = 'middle';
+                      ctx.font = `bold ${{Math.round(targetH * 0.5)}}px ${{itemFont}}`;
+                      ctx.fillText(textVal + ' ' + Math.round(easeProgress * 100) + '%', currentX, currentY);
+                  }}
+              }} else if (entity.type !== 'headline') {{
+                  ctx.shadowColor = itemGlow;
+                  ctx.shadowBlur = 28;
+                  ctx.shadowOffsetY = 4;
+                  ctx.fillStyle = itemBg;
+                  ctx.strokeStyle = itemBorder;
+                  ctx.lineWidth = 1.5;
+                  drawRoundedRect(ctx, currentX - targetW / 2, currentY - targetH / 2, targetW, targetH, 16);
+                  ctx.fill();
+                  ctx.shadowColor = 'transparent';
+                  ctx.shadowBlur = 0;
+                  ctx.stroke();
+              }}
+              
+              if (entity.type !== 'loading_bar' && !entity.is_loading_bar) {{
+                  const textVal = entity.text || '';
+                  if (textVal) {{
+                      const lines = textVal.split('\\n');
+                      const textColor = styles.color || '#F5F7FA';
+                      const fontSize = styles.font_size || Math.round(H * 0.024);
+                      ctx.fillStyle = textColor;
+                      ctx.textAlign = 'center';
+                      ctx.textBaseline = 'middle';
+                      ctx.font = `${{styles.bold ? 'bold ' : ''}}${{styles.italic ? 'italic ' : ''}}${{fontSize}}px ${{itemFont}}`;
+                      const totalTextHeight = lines.length * (fontSize * 1.35);
+                      const startY = currentY - (totalTextHeight / 2) + (fontSize / 2);
+                      lines.forEach((lineText, lIdx) => {{
+                          ctx.fillText(lineText, currentX, startY + lIdx * (fontSize * 1.35));
+                      }});
+                  }}
+                  const iconId = entity.asset_id || entity.icon;
+                  if (entity.type === 'icon' && iconId) {{
+                      ctx.fillStyle = styles.color || '#3B82F6';
+                      ctx.font = `${{Math.round(targetH * 0.5)}}px ${{itemFont}}`;
+                      ctx.textAlign = 'center';
+                      ctx.textBaseline = 'middle';
+                      ctx.fillText(getEmojiForIcon(iconId), currentX, currentY);
+                  }}
+              }}
+              ctx.restore();
+          }});
+          relations.forEach(rel => {{
+              const fromEnt = entities.find(e => e.id === rel.from);
+              const toEnt = entities.find(e => e.id === rel.to);
+              if (!fromEnt || !toEnt) return;
+              const fromX = ( (fromEnt.x ?? 50) / 100 ) * W;
+              const fromY = ( (fromEnt.y ?? 50) / 100 ) * H;
+              const toX = ( (toEnt.x ?? 50) / 100 ) * W;
+              const toY = ( (toEnt.y ?? 50) / 100 ) * H;
+              ctx.save();
+              ctx.strokeStyle = styleProfile.arrow_color || styleProfile.border_color || 'rgba(59, 130, 246, 0.6)';
+              ctx.lineWidth = styleProfile.arrow_width || 3.0;
+              const anim = styleProfile.relation_animation || {{}};
+              const rDelay = anim.delay || 0.4;
+              const rDur = anim.duration || 0.8;
+              const rProgress = Math.min(1, Math.max(0, (elapsed - rDelay) / rDur));
+              const rEase = rProgress * rProgress * (3 - 2 * rProgress);
+              if (rProgress > 0) {{
+                  const currentEndX = fromX + (toX - fromX) * rEase;
+                  const currentEndY = fromY + (toY - fromY) * rEase;
+                  ctx.beginPath();
+                  ctx.moveTo(fromX, fromY);
+                  ctx.lineTo(currentEndX, currentEndY);
+                  ctx.stroke();
+                  if (rProgress >= 0.95) {{
+                      drawArrowhead(ctx, fromX, fromY, toX, toY, 12);
+                  }}
+              }}
+              ctx.restore();
+          }});
+      }}
+      
+      {semantic_scripts}
+      
+      function drawAllScenes(t) {{
+          {draw_calls}
+      }}
+
+      function scaleRoot(){{
+        const r=document.getElementById('root');
+        if(!r)return;
+        const s=Math.min(window.innerWidth/1080,window.innerHeight/1920);
+        r.style.transform='scale('+s+')';
+        const scaledW=1080*s, scaledH=1920*s;
+        r.style.left=((window.innerWidth-scaledW)/2)+'px';
+        r.style.top=((window.innerHeight-scaledH)/2)+'px';
+      }}
+      window.addEventListener('resize',scaleRoot);
+      scaleRoot();
+
+      let isSynced = false;
+      window.addEventListener('message', (event) => {{
+          if (event.data && event.data.type === 'sync_time') {{
+              isSynced = true;
+              const t = event.data.time;
+              if (window.__timelines && window.__timelines["main"]) {{
+                  window.__timelines["main"].pause();
+                  window.__timelines["main"].seek(t);
+              }}
+              drawAllScenes(t);
+          }}
+      }});
+      
+      function tick() {{
+          requestAnimationFrame(tick);
+      }}
+      requestAnimationFrame(tick);
+    </script>
   </body>
 </html>"""
+        
+        os.makedirs(hyperframes_dir, exist_ok=True)
+        idx_file = os.path.join(hyperframes_dir, "index.html")
+        with open(idx_file, "w", encoding="utf-8") as f:
+            f.write(html_doc)
+        
+        base_name, _ = os.path.splitext(working_path)
+        # Bypassing Puppeteer/Chrome browser rendering completely to reduce CPU/RAM load.
+        # Direct Pillow and FFmpeg rendering is kept as the single optimized graphics pipeline.
+        browser_render_success = False
             
-            os.makedirs(hyperframes_dir, exist_ok=True)
-            idx_file = os.path.join(hyperframes_dir, "index.html")
-            with open(idx_file, "w", encoding="utf-8") as f:
-                f.write(html_doc)
+        # If browser rendering failed or skipped, execute the high-fidelity Pillow + FFmpeg fallback!
+        if not browser_render_success and semantic_edits:
+            print("[SemanticRenderer] Headless render failed. Activating high-fidelity Pillow & FFmpeg fallback overlay...")
+            from app.services.semantic_renderer import render_semantic_scene_to_image
             
-            base_name, _ = os.path.splitext(working_path)
-            hf_output = os.path.abspath(base_name + "_hyperframes.mov")
-            
-            # Force MOV format (ProRes 4444) for ultra-fast rendering with alpha channel!
-            hf_cmd = (
-                f'npx --yes hyperframes render --format mov --output "{hf_output}"'
-            )
-            print(f"[Hyperframes] Running: {hf_cmd}")
-            try:
-                hf_result = subprocess.run(
-                    hf_cmd, cwd=hyperframes_dir, shell=True, timeout=600,
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
-                )
-                if hf_result.returncode != 0:
-                    err = hf_result.stderr.decode('utf-8', errors='replace')[:300]
-                    print(f"[Hyperframes] Render FAILED (code {hf_result.returncode}): {err}")
-                else:
-                    print(f"[Hyperframes] Render completed successfully")
+            for idx, se in enumerate(semantic_edits):
+                start = float(se.get("start", 0.0))
+                end = float(se.get("end", start + 5.0))
+                scene_data = se.get("scene_data", {})
                 
-                if os.path.exists(hf_output):
-                    # We render the full duration, so we overlay at 0
-                    hf_blend_out = base_name + "_hfblend.mp4"
-                    blend_cmd = [
-                        "ffmpeg", "-i", working_path, 
-                        "-i", hf_output,
-                        "-filter_complex", "[1:v]format=rgba[gfx];[0:v][gfx]overlay=0:0:eof_action=pass[outv]",
+                # Render transparent PNG frame
+                png_path = os.path.join(hyperframes_dir, f"semantic_fallback_{idx}.png")
+                render_semantic_scene_to_image(scene_data, png_path, width=width, height=height)
+                
+                if os.path.exists(png_path):
+                    temp_out = base_name + f"_fallback_blend_{idx}.mp4"
+                    fallback_cmd = [
+                        "ffmpeg", "-i", working_path,
+                        "-i", png_path,
+                        "-filter_complex", f"[0:v][1:v]overlay=0:0:format=auto:enable='between(t,{start},{end})'[outv]",
                         "-map", "[outv]", "-map", "0:a",
                         "-c:v", "libx264", "-c:a", "copy", "-preset", "fast",
-                        hf_blend_out, "-y", "-loglevel", "error"
+                        temp_out, "-y", "-loglevel", "error"
                     ]
-                    blend_res = subprocess.run(blend_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
-                    if blend_res.returncode == 0 and os.path.exists(hf_blend_out):
-                        os.replace(hf_blend_out, working_path)
-                        print("[Hyperframes] ✅ Overlaid transparent canvas successfully.")
+                    fallback_res = subprocess.run(fallback_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
+                    if fallback_res.returncode == 0 and os.path.exists(temp_out):
+                        os.replace(temp_out, working_path)
+                        print(f"[SemanticRenderer] ✅ Pillow overlay successfully applied for scene {idx} ({start}s-{end}s)")
                     else:
-                        print(f"[Hyperframes] FFmpeg overlay failed: {blend_res.stderr.decode()}")
-            except Exception as e:
-                print(f"[Hyperframes] FFmpeg execute error: {e}")
+                        print(f"[SemanticRenderer] FFmpeg fallback overlay failed: {fallback_res.stderr.decode()}")
+                    
+                    # Cleanup temp PNG
+                    try:
+                        os.remove(png_path)
+                    except:
+                        pass
 
 
     # --- Step 4.5: B-Roll overlay ---
     broll_edits = [e for e in edits if e.get("action") == "add_broll"]
     if broll_edits:
         for broll in broll_edits:
-            q = broll.get("query", "technology")
             start = float(broll.get("start", 0))
             end = float(broll.get("end", start + 3))
             duration = end - start
             
-            broll_path = download_broll(q, duration)
+            broll_path = broll.get("resolved_path")
+            if broll_path:
+                if not os.path.isabs(broll_path):
+                    for prefix in ("", "backend", "../backend", ".."):
+                        p = os.path.join(prefix, broll_path)
+                        if os.path.exists(p):
+                            broll_path = p
+                            break
+                if not os.path.exists(broll_path):
+                    broll_path = None
+                    
+            if not broll_path:
+                q = broll.get("query", "technology")
+                broll_path = download_broll(q, duration)
             if broll_path:
                 print(f"[RenderEngine] Overlaying broll {broll_path} at {start}-{end}s")
                 # Load B-Roll
                 b_in = ffmpeg.input(broll_path).video
                 # Scale and crop to target resolution, adjust PTS to start at exact timestamp
                 b_scaled = b_in.filter('scale', width, height, force_original_aspect_ratio='increase').filter('crop', width, height).filter('setpts', f'PTS-STARTPTS+{start}/TB')
+                # Apply user color correction to B-Roll
+                b_scaled = apply_color_corrections(b_scaled, edits)
                 # Overlay it onto main video
                 v_out = ffmpeg.overlay(v_out, b_scaled, enable=f"between(t,{start},{end})", eof_action='pass')
             else:
@@ -979,6 +1477,8 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                     .filter('hue', h="120")  # Cyberpunk gold/cyan tint
                     .filter('setpts', f'PTS-STARTPTS+{start}/TB')
                 )
+                # Apply user color correction on top of the fallback B-roll
+                b_scaled = apply_color_corrections(b_scaled, edits)
                 v_out = ffmpeg.overlay(v_out, b_scaled, enable=f"between(t,{start},{end})", eof_action='pass')
 
     # --- Step 5: Subtitles via separate subprocess pass (avoids Windows path/space issues) ---

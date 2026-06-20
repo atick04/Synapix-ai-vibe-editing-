@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { getApiUrl } from "@/utils/api";
 
 interface ReferencesSidebarProps {
     activeEdits: any[];
@@ -16,6 +17,9 @@ interface ReferencesSidebarProps {
     multiTrackEdl?: any;
     onEdlChange?: (edl: any) => void;
     onDragStateChange?: (draggingType: string | null) => void;
+    videoRef?: React.RefObject<HTMLVideoElement | null>;
+    selectedSubIndices?: number[];
+    subtitleChunks?: any[];
 }
 
 interface MusicTrack {
@@ -192,6 +196,17 @@ const LIBRARY_GRAPHICS = [
     }
 ];
 
+const LUT_PRESETS = [
+    { id: 'cinema', name: 'Кино', label: 'Cinema', brightness: 1.0, contrast: 1.1, saturation: 1.1, hue: 0, description: 'Кинематографичный контрастный пресет' },
+    { id: 'vintage', name: 'Винтаж', label: 'Vintage', brightness: 0.95, contrast: 0.9, saturation: 0.8, hue: 5, description: 'Мягкий ретро стиль с теплыми тонами' },
+    { id: 'cyberpunk', name: 'Киберпанк', label: 'Cyberpunk', brightness: 1.0, contrast: 1.2, saturation: 1.4, hue: -10, description: 'Насыщенные неоновые цвета' },
+    { id: 'monochrome', name: 'Чёрно-белый', label: 'Monochrome', brightness: 1.0, contrast: 1.2, saturation: 0.0, hue: 0, description: 'Классический черно-белый стиль' },
+    { id: 'teal_orange', name: 'Teal & Orange', label: 'Teal & Orange', brightness: 1.0, contrast: 1.1, saturation: 1.2, hue: 10, description: 'Голливудская цветовая палитра' },
+    { id: 'vibrant', name: 'Сочный', label: 'Vibrant', brightness: 1.0, contrast: 1.1, saturation: 1.3, hue: 0, description: 'Яркие, насыщенные цвета' },
+    { id: 'cold', name: 'Холодный', label: 'Cold', brightness: 1.0, contrast: 1.05, saturation: 0.9, hue: -15, description: 'Прохладная цветовая гамма' },
+    { id: 'warm', name: 'Тёплый', label: 'Warm', brightness: 1.05, contrast: 1.0, saturation: 1.1, hue: 15, description: 'Теплые солнечные оттенки' },
+];
+
 const classifyTrack = (track: { name: string; rel_path: string }): MusicTrack => {
     const path = track.rel_path.toLowerCase();
     const name = track.name.toLowerCase();
@@ -254,15 +269,26 @@ export default function ReferencesSidebar({
     onClearFocus,
     multiTrackEdl,
     onEdlChange,
-    onDragStateChange
+    onDragStateChange,
+    videoRef,
+    selectedSubIndices,
+    subtitleChunks
 }: ReferencesSidebarProps) {
-    const [sidebarTab, setSidebarTab] = useState<'media' | 'music' | 'stock' | 'inspect'>('media');
+    const [sidebarTab, setSidebarTab] = useState<'media' | 'music' | 'stock' | 'color' | 'inspect'>('media');
+    const [selectedSubMode, setSelectedSubMode] = useState<'single' | 'all'>('single');
+    const [projectSession, setProjectSession] = useState<any>(null);
 
     useEffect(() => {
         if (focusedClipId) {
             setSidebarTab('inspect');
         } else if (sidebarTab === 'inspect') {
             setSidebarTab('media');
+        }
+    }, [focusedClipId]);
+
+    useEffect(() => {
+        if (focusedClipId && focusedClipId.startsWith('T1-Sub-')) {
+            setSelectedSubMode('single');
         }
     }, [focusedClipId]);
     const [playingTrack, setPlayingTrack] = useState<string | null>(null);
@@ -301,7 +327,7 @@ export default function ReferencesSidebar({
         setIsGeneratingAudio(true);
         setAiAudioError(null);
         try {
-            const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+            const apiBase = getApiUrl();
             const res = await fetch(`${apiBase}/api/video/${fileId}/generate_audio`, {
                 method: 'POST',
                 headers: {
@@ -406,7 +432,7 @@ export default function ReferencesSidebar({
         setIsSearchingStock(true);
         setStockError(null);
         try {
-            const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+            const apiBase = getApiUrl();
             const endpoint = stockType === 'stickers' ? 'search_stickers' : 'search_music';
             const res = await fetch(`${apiBase}/api/video/${endpoint}?query=${encodeURIComponent(stockQuery)}`);
             if (res.ok) {
@@ -427,7 +453,7 @@ export default function ReferencesSidebar({
         setDownloadingAssetId(assetId);
         setStockError(null);
         try {
-            const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+            const apiBase = getApiUrl();
             const res = await fetch(`${apiBase}/api/video/download_asset`, {
                 method: 'POST',
                 headers: {
@@ -484,7 +510,7 @@ export default function ReferencesSidebar({
     // Poll the media library periodically to get progress updates (such as visual/transcript analysis completion)
     useEffect(() => {
         if (!fileId || !onMediaLibraryChange) return;
-        const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+        const apiBase = getApiUrl();
         
         const pollLibrary = async () => {
             try {
@@ -503,6 +529,28 @@ export default function ReferencesSidebar({
         const interval = setInterval(pollLibrary, 5000);
         return () => clearInterval(interval);
     }, [fileId, onMediaLibraryChange]);
+
+    // Poll the project session periodically to get hook detection and styling progress
+    useEffect(() => {
+        if (!fileId) return;
+        const apiBase = getApiUrl();
+        
+        const pollSession = async () => {
+            try {
+                const res = await fetch(`${apiBase}/api/video/${fileId}/session`);
+                if (res.ok) {
+                    const data = await res.json();
+                    setProjectSession(data);
+                }
+            } catch (e) {
+                console.error("Failed to poll project session:", e);
+            }
+        };
+
+        pollSession(); // Initial fetch
+        const interval = setInterval(pollSession, 5000);
+        return () => clearInterval(interval);
+    }, [fileId]);
 
     const handleDragOver = (e: React.DragEvent) => {
         e.preventDefault();
@@ -539,7 +587,7 @@ export default function ReferencesSidebar({
         setUploadError(null);
 
         try {
-            const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+            const apiBase = getApiUrl();
             const url = `${apiBase}/api/video/${fileId}/upload_additional`;
             const formData = new FormData();
             formData.append("file", file);
@@ -587,7 +635,7 @@ export default function ReferencesSidebar({
     useEffect(() => {
         const fetchTracks = async () => {
             try {
-                const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+                const apiBase = getApiUrl();
                 const response = await fetch(`${apiBase}/assets/index.json`);
                 if (!response.ok) throw new Error("Failed to fetch assets index");
                 const data = await response.json();
@@ -638,7 +686,7 @@ export default function ReferencesSidebar({
         if (!audioPreviewRef.current) {
             audioPreviewRef.current = new Audio();
         }
-        const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+        const apiBase = getApiUrl();
         const fullUrl = `${apiBase}/assets/${encodeURI(track.rel_path)}`;
 
         if (playingTrack === track.name) {
@@ -659,7 +707,7 @@ export default function ReferencesSidebar({
         if (!sfxPreviewRef.current) {
             sfxPreviewRef.current = new Audio();
         }
-        const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+        const apiBase = getApiUrl();
         const fullUrl = `${apiBase}/assets/${encodeURI(sfx.rel_path)}`;
 
         if (playingSfx === sfx.id) {
@@ -710,17 +758,50 @@ export default function ReferencesSidebar({
     };
 
     // Manual Quick Insert Buttons (Fallback in case they don't drag)
+    const insertLutPreset = (item: typeof LUT_PRESETS[0]) => {
+        if (!onActiveEditsChange) return;
+        const playheadTime = videoRef?.current?.currentTime || 0;
+        const newEdit = {
+            action: "color_correction",
+            start: Number(playheadTime.toFixed(2)),
+            end: Number(Math.min(playheadTime + 3.0, duration).toFixed(2)),
+            preset: item.id,
+            lut: item.id,
+            brightness: 100,
+            contrast: 100,
+            saturation: 100,
+            hue: 0
+        };
+        onActiveEditsChange([...activeEdits, newEdit]);
+        triggerAddedFeedback(item.id);
+    };
+
     const insertLibraryBroll = (item: typeof LIBRARY_BROLLS[0]) => {
         if (!onActiveEditsChange) return;
+        const playheadTime = videoRef?.current?.currentTime || 0;
         const newEdit = {
             action: "add_broll",
-            start: 0.0,
-            end: Math.min(3.0, duration),
+            start: Number(playheadTime.toFixed(2)),
+            end: Number(Math.min(playheadTime + 3.0, duration).toFixed(2)),
             query: item.query,
             broll_url: item.url
         };
         onActiveEditsChange([...activeEdits, newEdit]);
         triggerAddedFeedback(item.id);
+    };
+
+    const insertCustomBroll = (asset: any) => {
+        if (!onActiveEditsChange) return;
+        const playheadTime = videoRef?.current?.currentTime || 0;
+        const newEdit = {
+            action: "add_broll",
+            start: Number(playheadTime.toFixed(2)),
+            end: Number(Math.min(playheadTime + (asset.duration || 3.0), duration).toFixed(2)),
+            query: asset.filename,
+            resolved_path: asset.path
+        };
+        onActiveEditsChange([...activeEdits, newEdit]);
+        triggerAddedFeedback(asset.id);
     };
 
     const insertLibrarySfx = (item: typeof LIBRARY_SFX[0]) => {
@@ -811,6 +892,12 @@ export default function ReferencesSidebar({
                     >
                         <span>stock</span>
                     </button>
+                    <button 
+                        onClick={() => setSidebarTab('color')}
+                        className={`flex-1 py-1 rounded-lg text-[11px] font-semibold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${sidebarTab === 'color' ? 'bg-zinc-900 text-amber-500 border border-white/5 shadow-sm' : 'text-zinc-400 hover:text-zinc-350'}`}
+                    >
+                        <span>луты</span>
+                    </button>
                     {focusedClipId && (
                         <button 
                             onClick={() => setSidebarTab('inspect')}
@@ -844,6 +931,45 @@ export default function ReferencesSidebar({
                                 <span className="text-[12px] leading-relaxed text-zinc-300 font-medium">
                                     Drag any reference card below and drop it directly onto the timeline tracks to overlay visual pacing elements.
                                 </span>
+                            </div>
+                        )}
+
+                        {/* Auto-detected Hook Card */}
+                        {projectSession?.narrative_arc?.hook && (
+                            <div 
+                                onClick={() => {
+                                    if (videoRef?.current) {
+                                        videoRef.current.currentTime = projectSession.narrative_arc.hook_start || 0;
+                                    }
+                                }}
+                                className="group relative cursor-pointer overflow-hidden rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 shadow-[0_8px_32px_rgba(245,158,11,0.05)] backdrop-blur-md transition-all duration-300 hover:bg-amber-500/10 hover:border-amber-500/50 hover:shadow-[0_8px_32px_rgba(245,158,11,0.15)] font-sans"
+                            >
+                                <div className="absolute -inset-px bg-gradient-to-r from-amber-500/10 to-orange-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500 rounded-xl" />
+                                
+                                <div className="relative flex items-start gap-3">
+                                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-amber-400 border border-amber-500/20 group-hover:scale-110 transition-transform duration-300 text-xl">
+                                        🪝
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-center justify-between gap-2 mb-1">
+                                            <span className="text-[10px] font-bold text-amber-400 uppercase tracking-widest bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/10">
+                                                Фраза-хук
+                                            </span>
+                                            <span className="text-[11px] font-semibold text-zinc-400 font-mono">
+                                                {projectSession.narrative_arc.hook_start?.toFixed(1)}с - {projectSession.narrative_arc.hook_end?.toFixed(1)}с
+                                            </span>
+                                        </div>
+                                        <p className="text-[13px] text-zinc-200 font-medium italic leading-relaxed line-clamp-2">
+                                            «{projectSession.narrative_arc.hook}»
+                                        </p>
+                                        <div className="flex items-center gap-1 mt-2 text-[10px] text-amber-500/70 font-semibold uppercase tracking-wider group-hover:text-amber-400 transition-colors">
+                                            <span>Перемотать к хуку</span>
+                                            <svg className="w-3 h-3 transform group-hover:translate-x-0.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                                            </svg>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         )}
 
@@ -962,23 +1088,42 @@ export default function ReferencesSidebar({
                                                     </div>
                                                 </div>
 
-                                                <button 
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        if (onStitchClip) {
-                                                            onStitchClip(asset.id, asset.duration || 0);
-                                                            triggerAddedFeedback(asset.id);
-                                                        }
-                                                    }}
-                                                    className={`w-6 h-6 rounded-full bg-zinc-950 border flex items-center justify-center text-[13px] font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 shrink-0 ${
-                                                        isJustAdded 
-                                                            ? 'border-emerald-500 text-emerald-400 bg-emerald-950/80' 
-                                                            : 'border-white/10 hover:border-amber-500 hover:text-amber-500 text-zinc-200'
-                                                    }`}
-                                                    title="Stitch clip onto timeline"
-                                                >
-                                                    {isJustAdded ? '✓' : '+'}
-                                                </button>
+                                                <div className="flex items-center gap-1.5 shrink-0">
+                                                    {/* Stitch to Main V1 Track Button */}
+                                                    <button 
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            if (onStitchClip) {
+                                                                onStitchClip(asset.id, asset.duration || 0);
+                                                                triggerAddedFeedback(asset.id);
+                                                            }
+                                                        }}
+                                                        className={`h-6 px-1.5 rounded-lg bg-zinc-950 border flex items-center justify-center text-[9.5px] font-sans font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 shrink-0 ${
+                                                            isJustAdded 
+                                                                ? 'border-emerald-500 text-emerald-400 bg-emerald-950/80' 
+                                                                : 'border-white/10 hover:border-amber-500 hover:text-amber-500 text-zinc-350'
+                                                        }`}
+                                                        title="Stitch clip onto main timeline (V1)"
+                                                    >
+                                                        +Main
+                                                    </button>
+                                                    
+                                                    {/* Overlay as B-Roll V2 Track Button */}
+                                                    <button 
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            insertCustomBroll(asset);
+                                                        }}
+                                                        className={`h-6 px-1.5 rounded-lg bg-zinc-950 border flex items-center justify-center text-[9.5px] font-sans font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 shrink-0 ${
+                                                            isJustAdded 
+                                                                ? 'border-emerald-500 text-emerald-400 bg-emerald-950/80' 
+                                                                : 'border-white/10 hover:border-amber-500 hover:text-amber-500 text-zinc-350'
+                                                        }`}
+                                                        title="Overlay clip as B-Roll (V2)"
+                                                    >
+                                                        +B-Roll
+                                                    </button>
+                                                </div>
                                             </div>
                                         );
                                     })
@@ -1546,6 +1691,77 @@ export default function ReferencesSidebar({
                     </div>
                 )}
 
+                {sidebarTab === 'color' && (
+                    <div className="space-y-7">
+                        <div className="bg-white/5 rounded-xl p-3 border border-white/10 text-zinc-350 flex flex-col gap-2 font-sans shadow-sm">
+                            <span className="text-[12px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
+                                💡 Цветокоррекция и LUTs
+                            </span>
+                            <span className="text-[12px] leading-relaxed text-zinc-300 font-medium">
+                                Перетащите пресет на дорожку «Цветокор» (C1) или нажмите кнопку «+» на карточке пресета для добавления на позицию плейхеда.
+                            </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2.5">
+                            {LUT_PRESETS.map((item) => {
+                                const isJustAdded = justAddedIds.includes(item.id);
+                                return (
+                                    <div 
+                                        key={item.id} 
+                                        draggable="true"
+                                        onDragStart={(e) => handleDragStart(e, "color", item)}
+                                        onDragEnd={() => onDragStateChange?.(null)}
+                                        className={`relative aspect-video bg-zinc-950 border rounded-xl overflow-hidden cursor-grab active:cursor-grabbing transition-all group flex flex-col items-center justify-center shadow-sm ${
+                                            isJustAdded 
+                                                ? 'border-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.3)] scale-[0.98]' 
+                                                : 'border-white/5 bg-white/[0.01] hover:border-white/20'
+                                        }`}
+                                    >
+                                        <div className="absolute inset-0 bg-gradient-to-tr from-zinc-900 to-zinc-950 opacity-90 z-0" />
+                                        
+                                        <div 
+                                            className="absolute top-3 left-3 w-4 h-4 rounded-full border border-white/20 shadow z-10" 
+                                            style={{
+                                                background: item.id === 'cinema' ? 'linear-gradient(135deg, #1e3a8a, #b45309)' :
+                                                            item.id === 'vintage' ? 'linear-gradient(135deg, #78350f, #d97706)' :
+                                                            item.id === 'cyberpunk' ? 'linear-gradient(135deg, #ec4899, #06b6d4)' :
+                                                            item.id === 'monochrome' ? 'linear-gradient(135deg, #111827, #f9fafb)' :
+                                                            item.id === 'teal_orange' ? 'linear-gradient(135deg, #0f766e, #c2410c)' :
+                                                            item.id === 'vibrant' ? 'linear-gradient(135deg, #e11d48, #fbbf24)' :
+                                                            item.id === 'cold' ? 'linear-gradient(135deg, #1e40af, #60a5fa)' :
+                                                            'linear-gradient(135deg, #b45309, #f59e0b)'
+                                            }}
+                                        />
+
+                                        <div className="absolute top-1.5 right-1.5 z-10">
+                                            <button 
+                                                onClick={() => insertLutPreset(item)}
+                                                className={`w-5.5 h-5.5 rounded-full bg-black/60 backdrop-blur-md border flex items-center justify-center text-[12px] font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 ${
+                                                    isJustAdded 
+                                                        ? 'border-emerald-500 text-emerald-400 bg-emerald-950/85' 
+                                                        : 'border-white/15 hover:border-amber-500 hover:text-amber-500 text-zinc-200'
+                                                }`}
+                                                title="Добавить на позицию плейхеда"
+                                            >
+                                                {isJustAdded ? '✓' : '+'}
+                                            </button>
+                                        </div>
+                                        
+                                        <div className="absolute bottom-2 left-2 right-2 z-10 flex flex-col font-sans">
+                                            <span className="text-[11.5px] font-semibold text-white truncate text-shadow leading-tight">
+                                                {item.name}
+                                            </span>
+                                            <span className="text-[9.5px] text-zinc-355 truncate mt-[1px] font-medium leading-none">
+                                                {item.description}
+                                            </span>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+
                 {sidebarTab === 'inspect' && focusedItem && (() => {
                     const subEdit = activeEdits.find(e => e.action === 'add_subtitles') || {
                         action: 'add_subtitles',
@@ -1564,6 +1780,7 @@ export default function ReferencesSidebar({
                     const isGraphic = focusedItem.type === 'graphics';
                     const isScene = focusedItem.type === 'scene';
                     const isEdl = focusedItem.type === 'video' || focusedItem.type === 'audio';
+                    const isColor = focusedItem.type === 'color';
 
                     const targetEdit = focusedItem.editIndex !== undefined && focusedItem.editIndex !== -1 
                         ? activeEdits[focusedItem.editIndex] 
@@ -1616,28 +1833,189 @@ export default function ReferencesSidebar({
                         onActiveEditsChange(updated);
                     };
 
+                    const updateSceneEntityProperty = (entityId: string, field: string, value: any) => {
+                        if (!onActiveEditsChange || focusedItem.editIndex === undefined || focusedItem.editIndex === -1) return;
+                        const targetEdit = activeEdits[focusedItem.editIndex];
+                        if (!targetEdit || !targetEdit.scene_data || !targetEdit.scene_data.entities) return;
+
+                        const updatedEntities = targetEdit.scene_data.entities.map((ent: any) => {
+                            if (ent.id === entityId) {
+                                return { ...ent, [field]: value };
+                            }
+                            return ent;
+                        });
+
+                        const updatedSceneData = { ...targetEdit.scene_data, entities: updatedEntities };
+                        const updated = [...activeEdits];
+                        updated[focusedItem.editIndex] = {
+                            ...targetEdit,
+                            scene_data: updatedSceneData
+                        };
+                        onActiveEditsChange(updated);
+                    };
+
+                    const updateSingleChunkProperty = (field: string, value: any) => {
+                        if (!onActiveEditsChange || focusedItem.subIdx === undefined) return;
+                        const indices = (selectedSubIndices && selectedSubIndices.length > 0)
+                            ? selectedSubIndices
+                            : [focusedItem.subIdx];
+
+                        let updatedEdits = [...activeEdits];
+
+                        indices.forEach(idx => {
+                            const chunk = subtitleChunks ? subtitleChunks[idx] : null;
+                            if (!chunk) return;
+
+                            // 1. Ensure subtitle_override exists and is deleted
+                            let overrideIndex = updatedEdits.findIndex(e => e.action === 'subtitle_override' && e.chunk_index === idx);
+                            if (overrideIndex === -1) {
+                                const spokenText = chunk.words.map((w: any) => w.word).join(' ');
+                                updatedEdits.push({
+                                    action: 'subtitle_override',
+                                    chunk_index: idx,
+                                    deleted: true,
+                                    text: spokenText,
+                                    start: chunk.start,
+                                    end: chunk.end
+                                });
+                            } else {
+                                updatedEdits[overrideIndex] = {
+                                    ...updatedEdits[overrideIndex],
+                                    deleted: true
+                                };
+                            }
+
+                            // 2. Ensure custom add_text_overlay exists with is_subtitle: true
+                            const overlayId = `G1-Graphic-Sub-${idx}`;
+                            let overlayIndex = updatedEdits.findIndex(e => e.action === 'add_text_overlay' && e.is_subtitle && e.id === overlayId);
+                            
+                            const defaultText = chunk.words.map((w: any) => w.word).join(' ');
+
+                            if (overlayIndex === -1) {
+                                const newOverlay: any = {
+                                    action: 'add_text_overlay',
+                                    is_subtitle: true,
+                                    id: overlayId,
+                                    chunk_index: idx,
+                                    text: defaultText,
+                                    start: chunk.start,
+                                    end: chunk.end,
+                                    font: subEdit.font || 'Arial',
+                                    font_size: subEdit.font_size || 100,
+                                    fontsize: subEdit.font_size || 100,
+                                    font_color: subEdit.font_color || 'White',
+                                    color: subEdit.font_color || 'White',
+                                    use_outline: subEdit.use_outline !== false,
+                                    position: subEdit.position || 'bottom',
+                                    animation_style: subEdit.animation_style || 'fade',
+                                    x: subEdit.x !== undefined ? subEdit.x : 50,
+                                    y: subEdit.y !== undefined ? subEdit.y : 78,
+                                    use_shadow: subEdit.use_shadow !== false,
+                                    shadow_blur: subEdit.shadow_blur !== undefined ? subEdit.shadow_blur : 18,
+                                    text_case: subEdit.text_case || 'Sentence_Case'
+                                };
+                                newOverlay[field] = value;
+                                if (field === 'font_size' || field === 'fontsize') {
+                                    newOverlay.font_size = value;
+                                    newOverlay.fontsize = value;
+                                }
+                                if (field === 'font_color' || field === 'color') {
+                                    newOverlay.font_color = value;
+                                    newOverlay.color = value;
+                                }
+                                updatedEdits.push(newOverlay);
+                            } else {
+                                updatedEdits[overlayIndex] = {
+                                    ...updatedEdits[overlayIndex],
+                                    [field]: value
+                                };
+                                if (field === 'font_size' || field === 'fontsize') {
+                                    updatedEdits[overlayIndex].font_size = value;
+                                    updatedEdits[overlayIndex].fontsize = value;
+                                }
+                                if (field === 'font_color' || field === 'color') {
+                                    updatedEdits[overlayIndex].font_color = value;
+                                    updatedEdits[overlayIndex].color = value;
+                                }
+                            }
+                        });
+
+                        onActiveEditsChange(updatedEdits);
+                    };
+
+                    const getActiveSubValue = (field: string, defaultValue: any) => {
+                        if (selectedSubMode === 'single') {
+                            const firstIdx = (selectedSubIndices && selectedSubIndices.length > 0) ? selectedSubIndices[0] : focusedItem.subIdx;
+                            const overlayId = `G1-Graphic-Sub-${firstIdx}`;
+                            const chunkOverlay = activeEdits.find(e => e.action === 'add_text_overlay' && e.is_subtitle && e.id === overlayId);
+                            if (chunkOverlay) {
+                                if (field === 'font_size' || field === 'fontsize') {
+                                    return chunkOverlay.font_size || chunkOverlay.fontsize || defaultValue;
+                                }
+                                if (field === 'font_color' || field === 'color') {
+                                    return chunkOverlay.font_color || chunkOverlay.color || defaultValue;
+                                }
+                                return chunkOverlay[field] !== undefined ? chunkOverlay[field] : defaultValue;
+                            }
+                        }
+                        return subEdit[field] !== undefined ? subEdit[field] : defaultValue;
+                    };
+
                     const updateSubtitleText = (newText: string) => {
                         if (!onActiveEditsChange || focusedItem.subIdx === undefined) return;
                         const idx = focusedItem.subIdx;
-                        const others = activeEdits.filter(ae => !(ae.action === 'subtitle_override' && ae.chunk_index === idx));
-                        onActiveEditsChange([...others, { 
-                            action: 'subtitle_override', 
-                            chunk_index: idx, 
-                            text: newText, 
-                            start: startVal, 
-                            end: endVal 
-                        }]);
+                        
+                        let updatedEdits = [...activeEdits];
+                        
+                        // Update subtitle_override
+                        let overrideIndex = updatedEdits.findIndex(e => e.action === 'subtitle_override' && e.chunk_index === idx);
+                        if (overrideIndex === -1) {
+                            updatedEdits.push({
+                                action: 'subtitle_override',
+                                chunk_index: idx,
+                                deleted: selectedSubMode === 'single',
+                                text: newText,
+                                start: startVal,
+                                end: endVal
+                            });
+                        } else {
+                            updatedEdits[overrideIndex] = {
+                                ...updatedEdits[overrideIndex],
+                                text: newText
+                            };
+                        }
+                        
+                        // If single mode, update add_text_overlay text as well
+                        if (selectedSubMode === 'single') {
+                            const overlayId = `G1-Graphic-Sub-${idx}`;
+                            let overlayIndex = updatedEdits.findIndex(e => e.action === 'add_text_overlay' && e.is_subtitle && e.id === overlayId);
+                            if (overlayIndex !== -1) {
+                                updatedEdits[overlayIndex] = {
+                                    ...updatedEdits[overlayIndex],
+                                    text: newText
+                                };
+                            }
+                        }
+                        
+                        onActiveEditsChange(updatedEdits);
                     };
 
                     const deleteSubtitleText = () => {
                         if (!onActiveEditsChange || focusedItem.subIdx === undefined) return;
                         const idx = focusedItem.subIdx;
-                        const others = activeEdits.filter(ae => !(ae.action === 'subtitle_override' && ae.chunk_index === idx));
-                        onActiveEditsChange([...others, { 
+                        let updatedEdits = activeEdits.filter(ae => !(ae.action === 'subtitle_override' && ae.chunk_index === idx));
+                        
+                        // Filter out add_text_overlay override too
+                        const overlayId = `G1-Graphic-Sub-${idx}`;
+                        updatedEdits = updatedEdits.filter(ae => !(ae.action === 'add_text_overlay' && ae.is_subtitle && ae.id === overlayId));
+                        
+                        // Add deleted subtitle_override
+                        updatedEdits.push({ 
                             action: 'subtitle_override', 
                             chunk_index: idx, 
                             deleted: true 
-                        }]);
+                        });
+                        onActiveEditsChange(updatedEdits);
                         if (onClearFocus) onClearFocus();
                     };
 
@@ -1684,6 +2062,28 @@ export default function ReferencesSidebar({
                             {/* 1. Subtitles Form */}
                             {isSub && (
                                 <div className="space-y-5">
+                                    {/* Edit Mode Switcher */}
+                                    <div className="flex bg-zinc-950/40 p-0.5 rounded-xl border border-white/5 gap-0.5 mb-1 font-sans">
+                                        <button
+                                            type="button"
+                                            onClick={() => setSelectedSubMode('single')}
+                                            className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold uppercase transition-all cursor-pointer ${
+                                                selectedSubMode === 'single' ? 'bg-zinc-900 text-blue-500 border border-white/5' : 'text-zinc-400 hover:text-zinc-200'
+                                            }`}
+                                        >
+                                            Фрагмент
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setSelectedSubMode('all')}
+                                            className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold uppercase transition-all cursor-pointer ${
+                                                selectedSubMode === 'all' ? 'bg-zinc-900 text-blue-500 border border-white/5' : 'text-zinc-400 hover:text-zinc-200'
+                                            }`}
+                                        >
+                                            Всю дорожку
+                                        </button>
+                                    </div>
+
                                     <div className="space-y-2">
                                         <label className="text-[15px] font-mono uppercase text-zinc-500">Текст субтитра</label>
                                         <textarea
@@ -1691,21 +2091,23 @@ export default function ReferencesSidebar({
                                             onChange={(e) => updateSubtitleText(e.target.value)}
                                             rows={2}
                                             className="w-full bg-zinc-950 border border-white/10 rounded-xl px-4 py-3 text-[12.5px] text-white focus:outline-none focus:border-blue-500/40 shadow-inner resize-none font-sans"
-                                            placeholder="Введите текст оверлея..."
+                                            placeholder="Введите text оверлея..."
                                         />
                                     </div>
 
                                     <div className="w-full h-px bg-white/5 my-4" />
 
                                     <div className="space-y-4">
-                                        <h4 className="text-[15px] font-bold text-zinc-300 uppercase tracking-wider font-mono">Оформление субтитров (Глобально)</h4>
+                                        <h4 className="text-[15px] font-bold text-zinc-300 uppercase tracking-wider font-mono">
+                                            {selectedSubMode === 'single' ? 'Оформление фрагмента' : 'Оформление дорожки (Глобально)'}
+                                        </h4>
                                         
                                         {/* Font Family */}
                                         <div className="flex items-center justify-between gap-6">
                                             <span className="text-[16px] font-medium text-zinc-400">Шрифт</span>
                                             <select
-                                                value={subEdit.font || 'Arial'}
-                                                onChange={(e) => updateSubtitleGlobalStyle('font', e.target.value)}
+                                                value={getActiveSubValue('font', 'Arial')}
+                                                onChange={(e) => selectedSubMode === 'single' ? updateSingleChunkProperty('font', e.target.value) : updateSubtitleGlobalStyle('font', e.target.value)}
                                                 className="bg-zinc-950 border border-white/10 rounded-xl px-4 py-1.5 text-[16px] text-white focus:outline-none focus:border-blue-500/40 shadow-sm font-sans"
                                             >
                                                 {['Inter', 'Manrope', 'Rubik', 'Oswald', 'Montserrat', 'Comfortaa', 'Lobster', 'JetBrainsMono', 'IBMPlexSans', 'BebasNeue', 'Arial', 'Impact', 'Courier New'].map(f => (
@@ -1718,14 +2120,21 @@ export default function ReferencesSidebar({
                                         <div className="space-y-1.5">
                                             <div className="flex justify-between items-center text-[16px] font-medium text-zinc-400">
                                                 <span>Размер</span>
-                                                <span className="font-mono text-white font-bold bg-white/5 px-2 py-0.5 rounded border border-white/5">{subEdit.font_size || 100}px</span>
+                                                <span className="font-mono text-white font-bold bg-white/5 px-2 py-0.5 rounded border border-white/5">{getActiveSubValue('font_size', 100)}px</span>
                                             </div>
                                             <input 
                                                 type="range"
                                                 min="30"
                                                 max="200"
-                                                value={subEdit.font_size || 100}
-                                                onChange={(e) => updateSubtitleGlobalStyle('font_size', parseInt(e.target.value, 10))}
+                                                value={getActiveSubValue('font_size', 100)}
+                                                onChange={(e) => {
+                                                    const val = parseInt(e.target.value, 10);
+                                                    if (selectedSubMode === 'single') {
+                                                        updateSingleChunkProperty('font_size', val);
+                                                    } else {
+                                                        updateSubtitleGlobalStyle('font_size', val);
+                                                    }
+                                                }}
                                                 className="w-full accent-blue-500 h-[2px] bg-zinc-800 rounded-none appearance-none cursor-pointer focus:outline-none"
                                             />
                                         </div>
@@ -1739,11 +2148,11 @@ export default function ReferencesSidebar({
                                                                 color === 'Yellow' ? '#FFD700' :
                                                                 color === 'Green' ? '#55ff55' :
                                                                 color === 'Red' ? '#ff5555' : '#00ffff';
-                                                    const isAct = (subEdit.font_color || 'White').toLowerCase() === color.toLowerCase();
+                                                    const isAct = (getActiveSubValue('font_color', 'White')).toLowerCase() === color.toLowerCase();
                                                     return (
                                                         <button
                                                             key={color}
-                                                            onClick={() => updateSubtitleGlobalStyle('font_color', color)}
+                                                            onClick={() => selectedSubMode === 'single' ? updateSingleChunkProperty('font_color', color) : updateSubtitleGlobalStyle('font_color', color)}
                                                             className={`w-6 h-6 rounded-full border transition-all cursor-pointer shadow-md ${
                                                                 isAct ? 'border-white scale-110 shadow-blue-500/30' : 'border-white/20 hover:border-white/50 hover:scale-105'
                                                             }`}
@@ -1759,12 +2168,22 @@ export default function ReferencesSidebar({
                                         <div className="flex items-center justify-between gap-6">
                                             <span className="text-[16px] font-medium text-zinc-400">Анимация</span>
                                             <select
-                                                value={subEdit.animation_style || 'fade'}
-                                                onChange={(e) => updateSubtitleGlobalStyle('animation_style', e.target.value)}
+                                                value={getActiveSubValue('animation_style', 'fade')}
+                                                onChange={(e) => selectedSubMode === 'single' ? updateSingleChunkProperty('animation_style', e.target.value) : updateSubtitleGlobalStyle('animation_style', e.target.value)}
                                                 className="bg-zinc-950 border border-white/10 rounded-xl px-4 py-1.5 text-[16px] text-white focus:outline-none focus:border-blue-500/40 shadow-sm font-sans"
                                             >
-                                                {['fade', 'pop', 'slide_up', 'bounce', 'glow', 'typewriter', 'karaoke'].map(a => (
-                                                    <option key={a} value={a}>{a}</option>
+                                                {[
+                                                    { value: 'fade', label: 'Появление (Fade)' },
+                                                    { value: 'pop', label: 'Увеличение (Pop)' },
+                                                    { value: 'slide_up', label: 'Снизу (Slide Up)' },
+                                                    { value: 'bounce', label: 'Пружина (Bounce)' },
+                                                    { value: 'glow', label: 'Размытие (Glow/Blur)' },
+                                                    { value: 'typewriter', label: 'Печатная машинка (Typewriter)' },
+                                                    { value: 'karaoke', label: 'Караоке (Karaoke)' },
+                                                    { value: 'slide_left', label: 'Слева (Slide Left)' },
+                                                    { value: 'slide_right', label: 'Справа (Slide Right)' }
+                                                ].map(opt => (
+                                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
                                                 ))}
                                             </select>
                                         </div>
@@ -1773,8 +2192,8 @@ export default function ReferencesSidebar({
                                         <div className="flex items-center justify-between gap-6">
                                             <span className="text-[16px] font-medium text-zinc-400">Положение</span>
                                             <select
-                                                value={subEdit.position || 'bottom'}
-                                                onChange={(e) => updateSubtitleGlobalStyle('position', e.target.value)}
+                                                value={getActiveSubValue('position', 'bottom')}
+                                                onChange={(e) => selectedSubMode === 'single' ? updateSingleChunkProperty('position', e.target.value) : updateSubtitleGlobalStyle('position', e.target.value)}
                                                 className="bg-zinc-950 border border-white/10 rounded-xl px-4 py-1.5 text-[16px] text-white focus:outline-none focus:border-blue-500/40 shadow-sm font-sans"
                                             >
                                                 {['bottom', 'center', 'top', 'left', 'right'].map(pos => (
@@ -1787,13 +2206,20 @@ export default function ReferencesSidebar({
                                         <div className="flex items-center justify-between gap-6">
                                             <span className="text-[16px] font-medium text-zinc-400">Обводка и тень</span>
                                             <button
-                                                onClick={() => updateSubtitleGlobalStyle('use_outline', subEdit.use_outline === false ? true : false)}
+                                                onClick={() => {
+                                                    const nextVal = getActiveSubValue('use_outline', true) === false ? true : false;
+                                                    if (selectedSubMode === 'single') {
+                                                        updateSingleChunkProperty('use_outline', nextVal);
+                                                    } else {
+                                                        updateSubtitleGlobalStyle('use_outline', nextVal);
+                                                    }
+                                                }}
                                                 className={`w-10 h-5 rounded-full p-0.5 transition-all cursor-pointer ${
-                                                    subEdit.use_outline !== false ? 'bg-blue-500' : 'bg-zinc-800'
+                                                    getActiveSubValue('use_outline', true) !== false ? 'bg-blue-500' : 'bg-zinc-800'
                                                 }`}
                                             >
                                                 <div className={`w-4 h-4 bg-white rounded-full transition-transform duration-200 ${
-                                                    subEdit.use_outline !== false ? 'translate-x-5' : 'translate-x-0'
+                                                    getActiveSubValue('use_outline', true) !== false ? 'translate-x-5' : 'translate-x-0'
                                                 }`} />
                                             </button>
                                         </div>
@@ -1802,14 +2228,21 @@ export default function ReferencesSidebar({
                                         <div className="space-y-1.5 pt-2">
                                             <div className="flex justify-between items-center text-[16px] font-medium text-zinc-400">
                                                 <span>Позиция X (%)</span>
-                                                <span className="font-mono text-white font-bold bg-white/5 px-2 py-0.5 rounded border border-white/5">{subEdit.x !== undefined ? subEdit.x : 50}%</span>
+                                                <span className="font-mono text-white font-bold bg-white/5 px-2 py-0.5 rounded border border-white/5">{getActiveSubValue('x', 50)}%</span>
                                             </div>
                                             <input 
                                                 type="range"
                                                 min="0"
                                                 max="100"
-                                                value={subEdit.x !== undefined ? subEdit.x : 50}
-                                                onChange={(e) => updateSubtitleGlobalStyle('x', parseInt(e.target.value, 10))}
+                                                value={getActiveSubValue('x', 50)}
+                                                onChange={(e) => {
+                                                    const val = parseInt(e.target.value, 10);
+                                                    if (selectedSubMode === 'single') {
+                                                        updateSingleChunkProperty('x', val);
+                                                    } else {
+                                                        updateSubtitleGlobalStyle('x', val);
+                                                    }
+                                                }}
                                                 className="w-full accent-blue-500 h-[2px] bg-zinc-800 rounded-none appearance-none cursor-pointer focus:outline-none"
                                             />
                                         </div>
@@ -1818,14 +2251,21 @@ export default function ReferencesSidebar({
                                         <div className="space-y-1.5 pt-1">
                                             <div className="flex justify-between items-center text-[16px] font-medium text-zinc-400">
                                                 <span>Позиция Y (%)</span>
-                                                <span className="font-mono text-white font-bold bg-white/5 px-2 py-0.5 rounded border border-white/5">{subEdit.y !== undefined ? subEdit.y : 78}%</span>
+                                                <span className="font-mono text-white font-bold bg-white/5 px-2 py-0.5 rounded border border-white/5">{getActiveSubValue('y', 78)}%</span>
                                             </div>
                                             <input 
                                                 type="range"
                                                 min="0"
                                                 max="100"
-                                                value={subEdit.y !== undefined ? subEdit.y : 78}
-                                                onChange={(e) => updateSubtitleGlobalStyle('y', parseInt(e.target.value, 10))}
+                                                value={getActiveSubValue('y', 78)}
+                                                onChange={(e) => {
+                                                    const val = parseInt(e.target.value, 10);
+                                                    if (selectedSubMode === 'single') {
+                                                        updateSingleChunkProperty('y', val);
+                                                    } else {
+                                                        updateSubtitleGlobalStyle('y', val);
+                                                    }
+                                                }}
                                                 className="w-full accent-blue-500 h-[2px] bg-zinc-800 rounded-none appearance-none cursor-pointer focus:outline-none"
                                             />
                                         </div>
@@ -1834,14 +2274,21 @@ export default function ReferencesSidebar({
                                         <div className="space-y-1.5 pt-1">
                                             <div className="flex justify-between items-center text-[16px] font-medium text-zinc-400">
                                                 <span>Межбуквенный интервал (px)</span>
-                                                <span className="font-mono text-white font-bold bg-white/5 px-2 py-0.5 rounded border border-white/5">{subEdit.letter_spacing !== undefined ? subEdit.letter_spacing : 0}px</span>
+                                                <span className="font-mono text-white font-bold bg-white/5 px-2 py-0.5 rounded border border-white/5">{getActiveSubValue('letter_spacing', 0)}px</span>
                                             </div>
                                             <input 
                                                 type="range"
                                                 min="-5"
                                                 max="20"
-                                                value={subEdit.letter_spacing !== undefined ? subEdit.letter_spacing : 0}
-                                                onChange={(e) => updateSubtitleGlobalStyle('letter_spacing', parseInt(e.target.value, 10))}
+                                                value={getActiveSubValue('letter_spacing', 0)}
+                                                onChange={(e) => {
+                                                    const val = parseInt(e.target.value, 10);
+                                                    if (selectedSubMode === 'single') {
+                                                        updateSingleChunkProperty('letter_spacing', val);
+                                                    } else {
+                                                        updateSubtitleGlobalStyle('letter_spacing', val);
+                                                    }
+                                                }}
                                                 className="w-full accent-blue-500 h-[2px] bg-zinc-800 rounded-none appearance-none cursor-pointer focus:outline-none"
                                             />
                                         </div>
@@ -1850,14 +2297,21 @@ export default function ReferencesSidebar({
                                         <div className="space-y-1.5 pt-1">
                                             <div className="flex justify-between items-center text-[16px] font-medium text-zinc-400">
                                                 <span>Межстрочный интервал (px)</span>
-                                                <span className="font-mono text-white font-bold bg-white/5 px-2 py-0.5 rounded border border-white/5">{subEdit.line_spacing !== undefined ? subEdit.line_spacing : 0}px</span>
+                                                <span className="font-mono text-white font-bold bg-white/5 px-2 py-0.5 rounded border border-white/5">{getActiveSubValue('line_spacing', 0)}px</span>
                                             </div>
                                             <input 
                                                 type="range"
                                                 min="-20"
                                                 max="80"
-                                                value={subEdit.line_spacing !== undefined ? subEdit.line_spacing : 0}
-                                                onChange={(e) => updateSubtitleGlobalStyle('line_spacing', parseInt(e.target.value, 10))}
+                                                value={getActiveSubValue('line_spacing', 0)}
+                                                onChange={(e) => {
+                                                    const val = parseInt(e.target.value, 10);
+                                                    if (selectedSubMode === 'single') {
+                                                        updateSingleChunkProperty('line_spacing', val);
+                                                    } else {
+                                                        updateSubtitleGlobalStyle('line_spacing', val);
+                                                    }
+                                                }}
                                                 className="w-full accent-blue-500 h-[2px] bg-zinc-800 rounded-none appearance-none cursor-pointer focus:outline-none"
                                             />
                                         </div>
@@ -2129,8 +2583,18 @@ export default function ReferencesSidebar({
                                                     onChange={(e) => updateEditProperty('animation_style', e.target.value)}
                                                     className="bg-zinc-950 border border-white/10 rounded-xl px-4 py-1.5 text-[16px] text-white focus:outline-none focus:border-blue-500/40 shadow-sm font-sans"
                                                 >
-                                                    {['fade', 'pop', 'slide_up', 'bounce', 'glow', 'typewriter', 'karaoke'].map(a => (
-                                                        <option key={a} value={a}>{a}</option>
+                                                    {[
+                                                        { value: 'fade', label: 'Появление (Fade)' },
+                                                        { value: 'pop', label: 'Увеличение (Pop)' },
+                                                        { value: 'slide_up', label: 'Снизу (Slide Up)' },
+                                                        { value: 'bounce', label: 'Пружина (Bounce)' },
+                                                        { value: 'glow', label: 'Размытие (Glow/Blur)' },
+                                                        { value: 'typewriter', label: 'Печатная машинка (Typewriter)' },
+                                                        { value: 'karaoke', label: 'Караоке (Karaoke)' },
+                                                        { value: 'slide_left', label: 'Слева (Slide Left)' },
+                                                        { value: 'slide_right', label: 'Справа (Slide Right)' }
+                                                    ].map(opt => (
+                                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
                                                     ))}
                                                 </select>
                                             </div>
@@ -2255,6 +2719,219 @@ export default function ReferencesSidebar({
                                             />
                                         </div>
                                     </div>
+
+                                    {targetEdit?.action === 'semantic_scene' && targetEdit.scene_data?.entities && (
+                                        <div className="space-y-4 pt-3 border-t border-white/5 font-sans">
+                                            <h4 className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">Элементы сцены</h4>
+                                            <div className="space-y-3">
+                                                {targetEdit.scene_data.entities.map((entity: any) => (
+                                                    <div key={entity.id} className="bg-white/[0.03] border border-white/5 rounded-xl p-3.5 space-y-3 shadow-[inset_0_1px_1px_rgba(255,255,255,0.03)]">
+                                                        <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                                                            <span className="text-[10px] font-mono text-zinc-400 capitalize">{entity.type || 'element'}</span>
+                                                            <span className="text-[11.5px] font-bold text-blue-400 font-mono">{entity.id}</span>
+                                                        </div>
+                                                        
+                                                        {/* Text Edit */}
+                                                        {entity.text !== undefined && (
+                                                            <div className="space-y-1">
+                                                                <label className="text-[9.5px] font-mono uppercase text-zinc-500">Текст содержимого</label>
+                                                                <input
+                                                                    type="text"
+                                                                    value={entity.text || ''}
+                                                                    onChange={(e) => updateSceneEntityProperty(entity.id, 'text', e.target.value)}
+                                                                    className="w-full bg-zinc-950 border border-white/10 rounded-lg px-2.5 py-1.5 text-[11px] text-white focus:outline-none focus:border-blue-500/40"
+                                                                />
+                                                            </div>
+                                                        )}
+                                                        
+                                                        {/* Grid layout for coordinates & size */}
+                                                        <div className="grid grid-cols-2 gap-3.5 pt-1">
+                                                            {/* X Slider */}
+                                                            <div className="space-y-1">
+                                                                <div className="flex justify-between text-[11px] font-medium text-zinc-400">
+                                                                    <span>Позиция X</span>
+                                                                    <span className="font-mono text-white font-bold">{entity.x ?? 50}%</span>
+                                                                </div>
+                                                                <input 
+                                                                    type="range"
+                                                                    min="0"
+                                                                    max="100"
+                                                                    value={entity.x ?? 50}
+                                                                    onChange={(e) => updateSceneEntityProperty(entity.id, 'x', parseInt(e.target.value, 10))}
+                                                                    className="w-full accent-blue-500 h-[2px] bg-zinc-800 rounded-none appearance-none cursor-pointer focus:outline-none"
+                                                                />
+                                                            </div>
+                                                            
+                                                            {/* Y Slider */}
+                                                            <div className="space-y-1">
+                                                                <div className="flex justify-between text-[11px] font-medium text-zinc-400">
+                                                                    <span>Позиция Y</span>
+                                                                    <span className="font-mono text-white font-bold">{entity.y ?? 50}%</span>
+                                                                </div>
+                                                                <input 
+                                                                    type="range"
+                                                                    min="0"
+                                                                    max="100"
+                                                                    value={entity.y ?? 50}
+                                                                    onChange={(e) => updateSceneEntityProperty(entity.id, 'y', parseInt(e.target.value, 10))}
+                                                                    className="w-full accent-blue-500 h-[2px] bg-zinc-800 rounded-none appearance-none cursor-pointer focus:outline-none"
+                                                                />
+                                                            </div>
+                                                            
+                                                            {/* Width Slider */}
+                                                            <div className="space-y-1">
+                                                                <div className="flex justify-between text-[11px] font-medium text-zinc-400">
+                                                                    <span>Ширина</span>
+                                                                    <span className="font-mono text-white font-bold">{entity.width ?? 28}%</span>
+                                                                </div>
+                                                                <input 
+                                                                    type="range"
+                                                                    min="2"
+                                                                    max="100"
+                                                                    value={entity.width ?? 28}
+                                                                    onChange={(e) => updateSceneEntityProperty(entity.id, 'width', parseInt(e.target.value, 10))}
+                                                                    className="w-full accent-blue-500 h-[2px] bg-zinc-800 rounded-none appearance-none cursor-pointer focus:outline-none"
+                                                                />
+                                                            </div>
+                                                            
+                                                            {/* Height Slider */}
+                                                            <div className="space-y-1">
+                                                                <div className="flex justify-between text-[11px] font-medium text-zinc-400">
+                                                                    <span>Высота</span>
+                                                                    <span className="font-mono text-white font-bold">{entity.height ?? 12}%</span>
+                                                                </div>
+                                                                <input 
+                                                                    type="range"
+                                                                    min="2"
+                                                                    max="100"
+                                                                    value={entity.height ?? 12}
+                                                                    onChange={(e) => updateSceneEntityProperty(entity.id, 'height', parseInt(e.target.value, 10))}
+                                                                    className="w-full accent-blue-500 h-[2px] bg-zinc-800 rounded-none appearance-none cursor-pointer focus:outline-none"
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* 5.5 Color correction Form */}
+                            {isColor && (
+                                <div className="space-y-4">
+                                    <div className="flex items-center justify-between gap-6">
+                                        <span className="text-[16px] font-medium text-zinc-400">Пресет (LUT)</span>
+                                        <select
+                                            value={targetEdit?.preset || targetEdit?.lut || 'cinema'}
+                                            onChange={(e) => {
+                                                updateEditProperty('preset', e.target.value);
+                                                updateEditProperty('lut', e.target.value);
+                                            }}
+                                            className="bg-zinc-950 border border-white/10 rounded-xl px-4 py-1.5 text-[16px] text-white focus:outline-none focus:border-blue-500/40 shadow-sm font-sans"
+                                        >
+                                            {LUT_PRESETS.map(opt => (
+                                                <option key={opt.id} value={opt.id}>{opt.name}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div className="space-y-1.5">
+                                        <div className="flex justify-between items-center text-[16px] font-medium text-zinc-400">
+                                            <span>Яркость</span>
+                                            <span className="font-mono text-white font-bold bg-white/5 px-2 py-0.5 rounded border border-white/5">{targetEdit?.brightness ?? 100}%</span>
+                                        </div>
+                                        <input 
+                                            type="range"
+                                            min="50"
+                                            max="150"
+                                            value={targetEdit?.brightness ?? 100}
+                                            onChange={(e) => updateEditProperty('brightness', parseInt(e.target.value, 10))}
+                                            className="w-full accent-blue-500 h-[2px] bg-zinc-800 rounded-none appearance-none cursor-pointer focus:outline-none"
+                                        />
+                                    </div>
+
+                                    <div className="space-y-1.5">
+                                        <div className="flex justify-between items-center text-[16px] font-medium text-zinc-400">
+                                            <span>Контраст</span>
+                                            <span className="font-mono text-white font-bold bg-white/5 px-2 py-0.5 rounded border border-white/5">{targetEdit?.contrast ?? 100}%</span>
+                                        </div>
+                                        <input 
+                                            type="range"
+                                            min="50"
+                                            max="150"
+                                            value={targetEdit?.contrast ?? 100}
+                                            onChange={(e) => updateEditProperty('contrast', parseInt(e.target.value, 10))}
+                                            className="w-full accent-blue-500 h-[2px] bg-zinc-800 rounded-none appearance-none cursor-pointer focus:outline-none"
+                                        />
+                                    </div>
+
+                                    <div className="space-y-1.5">
+                                        <div className="flex justify-between items-center text-[16px] font-medium text-zinc-400">
+                                            <span>Насыщенность</span>
+                                            <span className="font-mono text-white font-bold bg-white/5 px-2 py-0.5 rounded border border-white/5">{targetEdit?.saturation ?? 100}%</span>
+                                        </div>
+                                        <input 
+                                            type="range"
+                                            min="0"
+                                            max="200"
+                                            value={targetEdit?.saturation ?? 100}
+                                            onChange={(e) => updateEditProperty('saturation', parseInt(e.target.value, 10))}
+                                            className="w-full accent-blue-500 h-[2px] bg-zinc-800 rounded-none appearance-none cursor-pointer focus:outline-none"
+                                        />
+                                    </div>
+
+                                    <div className="space-y-1.5">
+                                        <div className="flex justify-between items-center text-[16px] font-medium text-zinc-400">
+                                            <span>Оттенок (Hue)</span>
+                                            <span className="font-mono text-white font-bold bg-white/5 px-2 py-0.5 rounded border border-white/5">{targetEdit?.hue ?? 0}°</span>
+                                        </div>
+                                        <input 
+                                            type="range"
+                                            min="-180"
+                                            max="180"
+                                            value={targetEdit?.hue ?? 0}
+                                            onChange={(e) => updateEditProperty('hue', parseInt(e.target.value, 10))}
+                                            className="w-full accent-blue-500 h-[2px] bg-zinc-800 rounded-none appearance-none cursor-pointer focus:outline-none"
+                                        />
+                                    </div>
+
+                                    <div className="flex gap-6">
+                                        <div className="flex-1 space-y-1.5">
+                                            <span className="text-[15px] font-mono uppercase text-zinc-500">Начало (сек)</span>
+                                            <input
+                                                type="number"
+                                                step="0.1"
+                                                value={startVal}
+                                                onChange={(e) => updateEditProperty('start', parseFloat(e.target.value) || 0)}
+                                                className="w-full bg-zinc-950 border border-white/10 rounded-xl px-4 py-1.5 text-[12.5px] font-mono text-white focus:outline-none focus:border-blue-500/40 shadow-sm"
+                                            />
+                                        </div>
+                                        <div className="flex-1 space-y-1.5">
+                                            <span className="text-[15px] font-mono uppercase text-zinc-500">Конец (сек)</span>
+                                            <input
+                                                type="number"
+                                                step="0.1"
+                                                value={endVal}
+                                                onChange={(e) => updateEditProperty('end', parseFloat(e.target.value) || duration)}
+                                                className="w-full bg-zinc-950 border border-white/10 rounded-xl px-4 py-1.5 text-[12.5px] font-mono text-white focus:outline-none focus:border-blue-500/40 shadow-sm"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="w-full h-px bg-white/5 my-4" />
+                                    <button
+                                        onClick={() => {
+                                            if (!onActiveEditsChange || focusedItem.editIndex === undefined) return;
+                                            const updated = activeEdits.filter((_, idx) => idx !== focusedItem.editIndex);
+                                            onActiveEditsChange(updated);
+                                            if (onClearFocus) onClearFocus();
+                                        }}
+                                        className="w-full py-3 bg-rose-500/10 hover:bg-rose-500/15 border border-rose-500/25 hover:border-rose-500/45 text-rose-400 rounded-xl text-[16px] font-bold font-sans transition-all active:scale-[0.98] cursor-pointer"
+                                    >
+                                        Удалить клип цветокоррекции
+                                    </button>
                                 </div>
                             )}
 

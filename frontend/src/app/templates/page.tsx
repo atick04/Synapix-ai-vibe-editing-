@@ -140,7 +140,11 @@ export default function TemplatesPage() {
                   <div className="flex flex-wrap gap-1.5 border-t border-neutral-800/80 pt-3">
                     <span className="text-[9.5px] px-2 py-0.5 rounded-full bg-neutral-950 border border-neutral-850 flex items-center gap-1">
                       <Type className="w-2.5 h-2.5 text-blue-400" />
-                      Inter + Cormorant
+                      {tpl.subtitles?.font_management ? (
+                        `${tpl.subtitles.font_management.base_sans_font.replace(/_24pt-Bold|-Medium|\.ttf/i, '')} + ${tpl.subtitles.font_management.accent_serif_font.replace(/-Regular|-Italic|\.ttf/i, '')}`
+                      ) : (
+                        "Inter + Cormorant"
+                      )}
                     </span>
                     <span className="text-[9.5px] px-2 py-0.5 rounded-full bg-neutral-950 border border-neutral-850 flex items-center gap-1">
                       <Music className="w-2.5 h-2.5 text-amber-500" />

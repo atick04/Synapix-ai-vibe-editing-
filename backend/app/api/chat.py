@@ -386,6 +386,7 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
             # full AIMessage content reliably (works across LangGraph versions).
             agent_texts = []        # list of full text strings, one per agent call
             graph_active_edits = None
+            graph_aspect_ratio = "vertical"
             cur_buf = ""            # raw streaming accumulator
             cur_json = ""           # post-think accumulator
             cur_thinking = False
@@ -437,9 +438,11 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
                                 graph_active_edits = output["active_edits"]
                                 print(f"[Chat] execute_tools finished, captured {len(graph_active_edits)} edits")
 
-                        # prepare_context: grab auto_cuts
+                        # prepare_context: grab auto_cuts and aspect_ratio
                         if ev == "on_chain_end" and name == "prepare_context":
-                            auto_cuts = event["data"]["output"].get("auto_cuts", [])
+                            output = event["data"].get("output", {})
+                            graph_aspect_ratio = output.get("aspect_ratio", "vertical")
+                            auto_cuts = output.get("auto_cuts", [])
                             if auto_cuts:
                                 yield json.dumps({"type": "log", "message": f"Editor Agent: Найдено {len(auto_cuts)} затянутых пауз. Они могут быть удалены по вашему запросу."}) + "\n"
                                 await asyncio.sleep(0.3)
@@ -651,7 +654,7 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
                 if edit.get("action") == "add_broll" and "query" in edit and not edit.get("broll_url"):
                     from app.services.pexels_service import resolve_broll_url
                     dur = float(edit.get("end", 3)) - float(edit.get("start", 0))
-                    ar = final_state.get("aspect_ratio", "vertical")
+                    ar = graph_aspect_ratio
                     b_url = resolve_broll_url(edit["query"], dur, aspect_ratio=ar)
                     if b_url:
                         edit["broll_url"] = b_url

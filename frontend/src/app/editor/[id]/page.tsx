@@ -1,6 +1,7 @@
 "use client";
 
-import { use, useState, useEffect, useRef, useMemo } from "react";
+import { use, useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { getApiUrl } from "@/utils/api";
 import { useRouter, useSearchParams } from "next/navigation";
 import TimelineEditor from "@/components/TimelineEditor";
 import VideoTimeline from "@/components/VideoTimeline";
@@ -44,7 +45,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         }
     }, [id, filenameParam]);
 
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+    const API_URL = getApiUrl();
     const [message, setMessage] = useState("");
     const [fontStyle, setFontStyle] = useState("Arial");
     const [fontSize, setFontSize] = useState(100);
@@ -72,6 +73,11 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     const [logs, setLogs] = useState<string[]>([]);
     const [hasInitialized, setHasInitialized] = useState(false);
     const [activeEdits, setActiveEdits] = useState<any[]>([]);
+    const [canUndo, setCanUndo] = useState(false);
+    const [canRedo, setCanRedo] = useState(false);
+    const historyRef = useRef<{ activeEdits: any[]; multiTrackEdl: any }[]>([]);
+    const historyIndexRef = useRef<number>(-1);
+    const isUndoingRedoingRef = useRef<boolean>(false);
     const [audioPeaks, setAudioPeaks] = useState<number[]>([]);
     const [activeTab, setActiveTab] = useState<'text' | 'video'>('text');
     const [isChatOpen, setIsChatOpen] = useState(false);
@@ -87,8 +93,20 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
 
     // Focus / Context Selection
     const [focusedClipId, setFocusedClipId] = useState<string | null>(null);
+    const [selectedSubIndices, setSelectedSubIndices] = useState<number[]>([]);
     const [isFocusSelectionActive, setIsFocusSelectionActive] = useState(false);
     const [draggingAssetType, setDraggingAssetType] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (focusedClipId && focusedClipId.startsWith('T1-Sub-')) {
+            const idx = parseInt(focusedClipId.replace('T1-Sub-', ''), 10);
+            if (!selectedSubIndices.includes(idx)) {
+                setSelectedSubIndices([idx]);
+            }
+        } else if (!focusedClipId || !focusedClipId.startsWith('T1-Sub-')) {
+            setSelectedSubIndices([]);
+        }
+    }, [focusedClipId]);
     
     const subtitleChunks = useMemo(() => {
         if (!transcript?.words) return [];
@@ -300,10 +318,27 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             }
         }
 
+        // 9. C1-Color-
+        if (focusedClipId.startsWith("C1-Color-")) {
+            const idx = parseInt(focusedClipId.replace("C1-Color-", ""), 10);
+            const colors = activeEdits.filter(ae => ae.action === 'color_correction');
+            const target = colors[idx];
+            if (target) {
+                return {
+                    id: focusedClipId,
+                    type: 'color',
+                    label: `🎨 Цветокоррекция: пресет "${target.lut || 'cinema'}"`,
+                    start: target.start != null ? target.start : 0,
+                    end: target.end != null ? target.end : duration,
+                    editIndex: activeEdits.indexOf(target)
+                };
+            }
+        }
+
         return null;
     }, [focusedClipId, activeEdits, multiTrackEdl, transcript, duration, subtitleChunks]);
 
-    const isLoadedRef = useRef(false);
+    const [isLoaded, setIsLoaded] = useState(false);
 
     // Load from localStorage on mount
     useEffect(() => {
@@ -321,30 +356,111 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         } catch (e) {
             console.error("Failed to load state from localStorage:", e);
         } finally {
-            isLoadedRef.current = true;
+            setIsLoaded(true);
         }
     }, [id]);
 
     // Save to localStorage when state changes
     useEffect(() => {
-        if (!id || !isLoadedRef.current) return;
+        if (!id || !isLoaded) return;
         localStorage.setItem(`chat_${id}`, JSON.stringify(chat));
-    }, [id, chat]);
+    }, [id, chat, isLoaded]);
 
     useEffect(() => {
-        if (!id || !isLoadedRef.current) return;
+        if (!id || !isLoaded) return;
         localStorage.setItem(`activeEdits_${id}`, JSON.stringify(activeEdits));
-    }, [id, activeEdits]);
+    }, [id, activeEdits, isLoaded]);
 
     useEffect(() => {
-        if (!id || !isLoadedRef.current) return;
+        if (!id || !isLoaded) return;
         localStorage.setItem(`multiTrackEdl_${id}`, JSON.stringify(multiTrackEdl));
-    }, [id, multiTrackEdl]);
+    }, [id, multiTrackEdl, isLoaded]);
 
     useEffect(() => {
-        if (!id || !isLoadedRef.current) return;
+        if (!id || !isLoaded) return;
         localStorage.setItem(`hasInitialized_${id}`, JSON.stringify(hasInitialized));
-    }, [id, hasInitialized]);
+    }, [id, hasInitialized, isLoaded]);
+
+    // History callbacks
+    const handleUndo = useCallback(() => {
+        if (historyIndexRef.current > 0) {
+            isUndoingRedoingRef.current = true;
+            historyIndexRef.current -= 1;
+            const entry = historyRef.current[historyIndexRef.current];
+            setActiveEdits(entry.activeEdits);
+            setMultiTrackEdl(entry.multiTrackEdl);
+            setCanUndo(historyIndexRef.current > 0);
+            setCanRedo(true);
+        }
+    }, []);
+
+    const handleRedo = useCallback(() => {
+        if (historyIndexRef.current < historyRef.current.length - 1) {
+            isUndoingRedoingRef.current = true;
+            historyIndexRef.current += 1;
+            const entry = historyRef.current[historyIndexRef.current];
+            setActiveEdits(entry.activeEdits);
+            setMultiTrackEdl(entry.multiTrackEdl);
+            setCanUndo(true);
+            setCanRedo(historyIndexRef.current < historyRef.current.length - 1);
+        }
+    }, []);
+
+    // Track state updates and push to history stack
+    useEffect(() => {
+        if (!isLoaded) return;
+        if (isUndoingRedoingRef.current) {
+            isUndoingRedoingRef.current = false;
+            return;
+        }
+
+        const currentEntry = historyRef.current[historyIndexRef.current];
+        if (currentEntry) {
+            const editsChanged = JSON.stringify(currentEntry.activeEdits) !== JSON.stringify(activeEdits);
+            const edlChanged = JSON.stringify(currentEntry.multiTrackEdl) !== JSON.stringify(multiTrackEdl);
+            if (!editsChanged && !edlChanged) {
+                return;
+            }
+        }
+
+        const nextHistory = historyRef.current.slice(0, historyIndexRef.current + 1);
+        nextHistory.push({ activeEdits, multiTrackEdl });
+        if (nextHistory.length > 50) {
+            nextHistory.shift();
+        }
+        historyRef.current = nextHistory;
+        historyIndexRef.current = nextHistory.length - 1;
+
+        setCanUndo(historyIndexRef.current > 0);
+        setCanRedo(false);
+    }, [activeEdits, multiTrackEdl, isLoaded]);
+
+    // Handle global keyboard shortcuts
+    useEffect(() => {
+        const handleGlobalKeyDown = (e: KeyboardEvent) => {
+            const target = e.target as HTMLElement;
+            if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+                return;
+            }
+
+            const isCtrl = e.ctrlKey || e.metaKey;
+            if (isCtrl) {
+                if (e.key.toLowerCase() === 'z') {
+                    e.preventDefault();
+                    if (e.shiftKey) {
+                        handleRedo();
+                    } else {
+                        handleUndo();
+                    }
+                } else if (e.key.toLowerCase() === 'y') {
+                    e.preventDefault();
+                    handleRedo();
+                }
+            }
+        };
+        window.addEventListener('keydown', handleGlobalKeyDown);
+        return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+    }, [handleUndo, handleRedo]);
 
 
     // Template states
@@ -409,6 +525,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                 // Deduplicate: filter out any add_text_overlay in the original activeEdits that are part of transcript subtitles
                 result = result.filter(e => {
                     if (e.action !== 'add_text_overlay') return true;
+                    if (e.is_subtitle) return true;
                     const eStart = e.start ?? 0;
                     const eEnd = e.end ?? 0;
                     
@@ -464,6 +581,8 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     const activePosition = overrideForChunk?.position || userPosition || "bottom";
                     const activeX = overrideForChunk?.x !== undefined ? overrideForChunk.x : userX;
                     const activeY = overrideForChunk?.y !== undefined ? overrideForChunk.y : userY;
+                    const activeWidth = overrideForChunk?.width !== undefined ? overrideForChunk.width : subEdit?.width;
+                    const activeHeight = overrideForChunk?.height !== undefined ? overrideForChunk.height : subEdit?.height;
 
                     const activeFontPairing = overrideForChunk?.font_pairing || subEdit?.font_pairing || templateAccentFont || "";
                     const activeWordStyles = overrideForChunk?.word_styles || subEdit?.word_styles || null;
@@ -471,6 +590,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     const activeActiveScale = overrideForChunk?.active_scale !== undefined ? overrideForChunk?.active_scale : subEdit?.active_scale;
                     const activeLetterSpacing = overrideForChunk?.letter_spacing !== undefined ? overrideForChunk?.letter_spacing : subEdit?.letter_spacing;
                     const activeLineSpacing = overrideForChunk?.line_spacing !== undefined ? overrideForChunk?.line_spacing : subEdit?.line_spacing;
+                    const activeAnimation = overrideForChunk?.animation_style || subEdit?.animation_style || "fade";
 
                     if (overrideForChunk) {
                         if (overrideForChunk.deleted) return;
@@ -492,6 +612,8 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                             position: activePosition,
                             x: activeX,
                             y: activeY,
+                            width: activeWidth,
+                            height: activeHeight,
                             use_outline: overrideForChunk.use_outline !== undefined 
                                 ? overrideForChunk.use_outline 
                                 : (templateUseOutline !== undefined ? templateUseOutline : (subEdit?.use_outline !== false)),
@@ -500,7 +622,8 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                             inactive_opacity: activeInactiveOpacity,
                             active_scale: activeActiveScale,
                             letter_spacing: activeLetterSpacing,
-                            line_spacing: activeLineSpacing
+                            line_spacing: activeLineSpacing,
+                            animation_style: activeAnimation
                         });
                     } else {
                         const text = chunk.words.map((w: any) => w.word).join(' ');
@@ -522,13 +645,16 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                             position: activePosition,
                             x: activeX,
                             y: activeY,
+                            width: activeWidth,
+                            height: activeHeight,
                             use_outline: templateUseOutline !== undefined ? templateUseOutline : (subEdit?.use_outline !== false),
                             font_pairing: activeFontPairing,
                             word_styles: activeWordStyles,
                             inactive_opacity: activeInactiveOpacity,
                             active_scale: activeActiveScale,
                             letter_spacing: activeLetterSpacing,
-                            line_spacing: activeLineSpacing
+                            line_spacing: activeLineSpacing,
+                            animation_style: activeAnimation
                         });
                     }
                 });
@@ -569,6 +695,8 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             active_scale: subEdit?.active_scale ?? null,
             letter_spacing: subEdit?.letter_spacing,
             line_spacing: subEdit?.line_spacing,
+            width: subEdit?.width,
+            height: subEdit?.height,
         };
     }, [activeEdits, templates, selectedTemplate]);
 
@@ -979,6 +1107,75 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         });
     };
 
+    const handleUpdateSubtitleGlobalMultiple = (fields: Record<string, any>) => {
+        setActiveEdits(prev => {
+            const exists = prev.some(e => e.action === 'add_subtitles');
+            if (exists) {
+                return prev.map(e => {
+                    if (e.action === 'add_subtitles') {
+                        return { ...e, ...fields };
+                    }
+                    return e;
+                });
+            } else {
+                const newSubEdit = {
+                    action: 'add_subtitles',
+                    font: 'Arial',
+                    font_size: 100,
+                    font_color: 'White',
+                    use_outline: true,
+                    position: 'bottom',
+                    animation_style: 'fade',
+                    ...fields
+                };
+                return [...prev, newSubEdit];
+            }
+        });
+    };
+
+    const handleUpdateSubtitleChunk = (chunkIndex: number, newText: string) => {
+        setActiveEdits(prev => {
+            const overrideExists = prev.some(e => e.action === 'subtitle_override' && e.chunk_index === chunkIndex);
+            let base = prev;
+            if (!overrideExists) {
+                base = [...prev, { action: 'subtitle_override', chunk_index: chunkIndex, deleted: true }];
+            }
+
+            const chunkWords = transcript?.words?.filter((w: any) => w.chunk_index === chunkIndex) || [];
+            const start = chunkWords[0]?.start ?? 0;
+            const end = chunkWords[chunkWords.length - 1]?.end ?? (start + 1.5);
+            
+            const textOverlayId = `G1-Graphic-Sub-${chunkIndex}`;
+            const existingOverlayIdx = base.findIndex((e: any) => e.action === 'add_text_overlay' && e.id === textOverlayId);
+
+            const newOverlay = {
+                action: 'add_text_overlay',
+                id: textOverlayId,
+                start,
+                end,
+                text: newText,
+                is_subtitle: true,
+                font_size: sandboxSubtitleConfig?.font_size ?? 38,
+                font: sandboxSubtitleConfig?.font ?? 'Inter',
+                font_color: sandboxSubtitleConfig?.color ?? '#FFFFFF',
+                position: sandboxSubtitleConfig?.position ?? 'bottom',
+                animation_style: 'fade',
+                x: sandboxSubtitleConfig?.x ?? 50,
+                y: sandboxSubtitleConfig?.y ?? 78,
+                width: sandboxSubtitleConfig?.width ?? 80,
+                height: sandboxSubtitleConfig?.height ?? 15
+            };
+
+            if (existingOverlayIdx !== -1) {
+                const updated = [...base];
+                updated[existingOverlayIdx] = { ...updated[existingOverlayIdx], text: newText };
+                return updated;
+            } else {
+                return [...base, newOverlay];
+            }
+        });
+    };
+
     const handleUpdateEditByIndex = (index: number, updates: Record<string, any>) => {
         setActiveEdits(prev => {
             if (index < 0 || index >= prev.length) return prev;
@@ -1256,6 +1453,38 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
 
                     {/* Header toggles removed as requested (now in Left Navigation Dock) */}
 
+                    {/* Undo/Redo History Controls */}
+                    <div className="flex items-center gap-0.5 bg-neutral-100 dark:bg-neutral-800 rounded-lg p-0.5 border border-neutral-200 dark:border-neutral-700">
+                        <button
+                            onClick={handleUndo}
+                            disabled={!canUndo}
+                            className={`p-1 text-[11px] rounded-md transition-all flex items-center justify-center cursor-pointer select-none ${
+                                canUndo 
+                                    ? 'text-neutral-700 dark:text-neutral-200 hover:bg-white dark:hover:bg-neutral-700 active:scale-95' 
+                                    : 'text-neutral-400 dark:text-neutral-600 opacity-40 cursor-not-allowed'
+                            }`}
+                            title="Undo (Ctrl+Z)"
+                        >
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                            </svg>
+                        </button>
+                        <button
+                            onClick={handleRedo}
+                            disabled={!canRedo}
+                            className={`p-1 text-[11px] rounded-md transition-all flex items-center justify-center cursor-pointer select-none ${
+                                canRedo 
+                                    ? 'text-neutral-700 dark:text-neutral-200 hover:bg-white dark:hover:bg-neutral-700 active:scale-95' 
+                                    : 'text-neutral-400 dark:text-neutral-600 opacity-40 cursor-not-allowed'
+                            }`}
+                            title="Redo (Ctrl+Y)"
+                        >
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 10H11a8 8 0 00-8 8v2m18-10l-6 6m6-6l-6-6" />
+                            </svg>
+                        </button>
+                    </div>
+
                     {/* Format Toggle UI */}
                     <div className="flex items-center gap-1 mx-2 bg-neutral-100 dark:bg-neutral-800 rounded-lg p-0.5 border border-neutral-200 dark:border-neutral-700">
                         {(['auto', '16:9', '9:16'] as const).map(fmt => (
@@ -1406,6 +1635,8 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                                 focusedClipId={focusedClipId}
                                 onUpdateEdit={handleUpdateEditByIndex}
                                 onUpdateSubtitleGlobal={handleUpdateSubtitleGlobal}
+                                onUpdateSubtitleGlobalMultiple={handleUpdateSubtitleGlobalMultiple}
+                                onUpdateSubtitleChunk={handleUpdateSubtitleChunk}
                             />
                         </div>
 
@@ -1494,6 +1725,14 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                                         transcript={transcript} 
                                         activeEdits={activeEdits} 
                                         onEditsChange={setActiveEdits} 
+                                        subtitleChunks={subtitleChunks}
+                                        selectedSubIndices={selectedSubIndices}
+                                        onSubSelectionChange={(indices) => {
+                                            setSelectedSubIndices(indices);
+                                            if (indices.length > 0) {
+                                                setFocusedClipId(`T1-Sub-${indices[0]}`);
+                                            }
+                                        }}
                                     />
                                 ) : (
                                     <VideoTimeline 
@@ -1513,6 +1752,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                                         isFocusSelectionActive={isFocusSelectionActive}
                                         onFocusSelectionActiveChange={setIsFocusSelectionActive}
                                         draggingAssetType={draggingAssetType}
+                                        selectedSubIndices={selectedSubIndices}
                                     />
                                 )}
                             </div>
@@ -1544,6 +1784,9 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                                     { action: "stitch_clip", source: assetId, start: 0, end: assetDuration }
                                 ]);
                             }}
+                            videoRef={videoRef}
+                            selectedSubIndices={selectedSubIndices}
+                            subtitleChunks={subtitleChunks}
                         />
                     </div>
                 )}

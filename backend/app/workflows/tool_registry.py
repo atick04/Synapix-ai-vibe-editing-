@@ -3,6 +3,7 @@ Tool Registry — Declarative editing tools for the Persistent Cinematic Operati
 Defines MCP-compatible input schemas and functional logic for modifying timeline states.
 """
 
+import logging
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 from app.workflows.timeline_state import TimelineState
@@ -10,6 +11,8 @@ from app.workflows.timeline_state import TimelineState
 from app.workflows.production_memory import ProductionMemory
 from app.workflows import event_bus
 from app.services.asset_manager import resolve_asset_query
+
+logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PYDANTIC ARGUMENT SCHEMAS (MCP / Tool Calling Standard)
@@ -27,11 +30,12 @@ class AddBrollArgs(BaseModel):
 class CreateSceneArgs(BaseModel):
     start_time: float = Field(description="Таймкод начала сцены в секундах")
     duration: float = Field(description="Длительность сцены в секундах")
-    scene_template: str = Field(description="Шаблон сцены (например: 'cause_effect', 'timeline', 'comparison', 'concept_explainer')")
-    mood: str = Field(default="neutral", description="Настроение сцены (например: 'analytical', 'energetic', 'dramatic')")
+    scene_template: str = Field(description="Шаблон композиции сцены: 'comparison' (бок о бок), 'vertical_stack' (стопка по вертикали), 'timeline' (горизонтальный поток), 'concept_explainer' (центральный элемент и ветви)")
+    mood: str = Field(default="neutral", description="Настроение сцены (например: 'analytical', 'energetic', 'dramatic', 'cozy') для подбора Apple-style палитры")
     energy: float = Field(default=0.5, description="Уровень энергии от 0.0 до 1.0")
-    entities: List[Dict[str, Any]] = Field(description="Список сущностей. Должен включать id, type, text/asset_id и visual_role")
-    relations: Optional[List[Dict[str, str]]] = Field(default=None, description="Связи между сущностями. Список объектов с полями from, to, type")
+    entities: List[Dict[str, Any]] = Field(description="Список сущностей сцены. Каждая сущность должна включать: id (e.g. 'e1'), type ('headline', 'stat_card', 'icon', 'loading_bar'), text (текст на кириллице), icon (emoji-иконка), x, y, width, height в % (если опустить координаты - DesignSkill сгенерирует их автоматически!)")
+    relations: Optional[List[Dict[str, str]]] = Field(default=None, description="Связи между сущностями для рисования стрелок (список объектов с полями from, to, type)")
+    style_profile: Optional[Dict[str, Any]] = Field(default=None, description="Профиль стилей: 'font_family' (кириллические шрифты: 'Inter', 'Montserrat', 'Rubik', 'Manrope', 'Unbounded', 'Comfortaa', 'JetBrains Mono', 'Playfair Display'), 'bg_color' (полупрозрачный фон Apple-glass, например 'rgba(20,20,25,0.65)'), 'border_color' ('rgba(255,255,255,0.15)'), 'color_accent' (цвет полосы загрузки/акцентов, например '#0A84FF')")
 
 class KineticTypographyArgs(BaseModel):
     font: str = Field(default="Montserrat-ExtraBold", description="Имя шрифта. Доступные значения: 'Montserrat-ExtraBold' (универсальный жирный), 'Inter_24pt-Bold' (технологичный), 'BebasNeue-Regular' (TikTok/блогерский), 'Rubik-Bold' (скругленный), 'Oswald-Bold' (строгий сжатый), 'Manrope-Bold' (современный геометричный), 'JetBrainsMono-Bold' (моноширинный), 'Comfortaa-Bold' (мягкий округлый)")
@@ -297,19 +301,71 @@ def create_scene(timeline: TimelineState, memory: ProductionMemory, args: Dict[s
     start = args["start_time"]
     duration = args["duration"]
     
+    scene_template = args["scene_template"]
+    mood = args.get("mood", "neutral")
+    entities = args["entities"]
+    relations = args.get("relations") or []
+    style_profile = args.get("style_profile") or {}
+    
+    # 1. Access DesignSkill to generate layout coordinates if entities are missing spatial data
+    from app.services.design_skill import DesignSkill
+    
+    aspect_ratio = memory.session.get("aspect_ratio", "vertical")
+    
+    # Pre-position navbars to keep them top-fixed and exclude them from templates grid
+    non_nav_entities = [e for e in entities if e.get("type") != "navbar"]
+    nav_entities = [e for e in entities if e.get("type") == "navbar"]
+    
+    for nav in nav_entities:
+        if nav.get("x") is None: nav["x"] = 50.0
+        if nav.get("y") is None: nav["y"] = 12.0 if aspect_ratio == "vertical" else 8.0
+        if nav.get("width") is None: nav["width"] = 90.0
+        if nav.get("height") is None: nav["height"] = 7.0
+
+    # Check if we need to auto-layout non-navbar elements
+    needs_layout = any(e.get("x") is None or e.get("y") is None for e in non_nav_entities)
+    if needs_layout:
+        generated_coords = DesignSkill.generate_layout(scene_template, len(non_nav_entities), aspect_ratio)
+        for idx, entity in enumerate(non_nav_entities):
+            if idx < len(generated_coords):
+                if entity.get("x") is None:
+                    entity["x"] = generated_coords[idx]["x"]
+                if entity.get("y") is None:
+                    entity["y"] = generated_coords[idx]["y"]
+                if entity.get("width") is None:
+                    entity["width"] = generated_coords[idx]["width"]
+                if entity.get("height") is None:
+                    entity["height"] = generated_coords[idx]["height"]
+
     scene_data = {
-        "scene_template": args["scene_template"],
-        "mood": args.get("mood", "neutral"),
+        "scene_template": scene_template,
+        "mood": mood,
         "energy": args.get("energy", 0.5),
-        "entities": args["entities"],
-        "relations": args.get("relations", [])
+        "style_profile": style_profile,
+        "entities": entities,
+        "relations": relations,
+        "duration": duration
     }
     
-    # Passing the raw semantic JSON object instead of compiled HTML
-    timeline.add_graphics(start, duration, scene_data, "semantic_scene")
+    # 2. Run Design Critic for automatic overlap resolution, safe area constraints, Cyrillic compliance, and contrast checks
+    aspect_ratio = memory.session.get("aspect_ratio", "vertical")
+    polished_data, fixes = DesignSkill.audit_and_correct(scene_data, aspect_ratio)
     
-    event_bus.emit("graphics_generated", {"style": args["scene_template"], "message": f"Создана семантическая сцена '{args['scene_template']}' на {start}s"})
-    return f"Успешно создана семантическая сцена '{args['scene_template']}' на {start}s"
+    # Log corrected design changes for debugging transparency
+    if fixes:
+        for fix in fixes:
+            logger.info(f"[DesignCritic Fix] {fix}")
+            
+    # Passing the polished semantic JSON object to the timeline state
+    timeline.add_graphics(start, duration, polished_data, "semantic_scene")
+    
+    event_bus.emit("graphics_generated", {
+        "style": scene_template, 
+        "message": f"Создана семантическая сцена '{scene_template}' на {start}s. Применено дизайн-исправлений: {len(fixes)}"
+    })
+    
+    fixes_desc = f" (автоматически исправлено огрехов дизайна: {len(fixes)})" if fixes else ""
+    return f"Успешно создана семантическая сцена '{scene_template}' на {start}s{fixes_desc}"
 
 
 def build_kinetic_typography(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
@@ -501,7 +557,7 @@ def modify_clip(timeline: TimelineState, memory: ProductionMemory, args: Dict[st
             g_indices = []
             for i, e in enumerate(timeline.edits):
                 is_graphic = e.get("action") in ("canvas_overlay", "hyperframes_html", "add_hyperframes_graphics", 
-                                                 "add_motion_graphic", "add_dynamic_graphic", "add_text_overlay")
+                                                 "add_motion_graphic", "add_dynamic_graphic", "add_text_overlay", "semantic_scene")
                 if is_graphic:
                     g_indices.append(i)
             if 0 <= idx < len(g_indices):

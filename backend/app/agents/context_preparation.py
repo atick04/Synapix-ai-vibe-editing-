@@ -54,6 +54,28 @@ async def prepare_context_node(state: VideoEditingState) -> VideoEditingState:
 
                 words = data.get("words", [])
                 if words:
+                    # Hook Auto Detection
+                    narrative_arc = session.get("narrative_arc", {})
+                    if not narrative_arc.get("hook"):
+                        try:
+                            from app.services.hook_detector import detect_hook_phrase
+                            from app.workflows.production_session import save_session
+                            
+                            hook_res = await detect_hook_phrase(words)
+                            if hook_res and hook_res.get("hook"):
+                                session["narrative_arc"] = {
+                                    "hook": hook_res["hook"],
+                                    "problem": narrative_arc.get("problem", ""),
+                                    "solution": narrative_arc.get("solution", ""),
+                                    "call_to_action": narrative_arc.get("call_to_action", ""),
+                                    "hook_start": hook_res["hook_start"],
+                                    "hook_end": hook_res["hook_end"]
+                                }
+                                save_session(file_id, session)
+                                print(f"[PrepareContext] Auto-detected hook: '{hook_res['hook']}' ({hook_res['hook_start']}s - {hook_res['hook_end']}s)")
+                        except Exception as hook_err:
+                            print(f"[PrepareContext] Hook detection failed: {hook_err}")
+
                     from difflib import SequenceMatcher
 
                     # Expanded Russian and English single-word fillers
