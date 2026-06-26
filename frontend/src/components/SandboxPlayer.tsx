@@ -2962,11 +2962,12 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                     }
                 }}
                 onError={(e) => {
-                    console.error('SandboxPlayer video error:', e);
                     const video = videoRef.current;
                     if (video && video.src.includes('_proxy')) {
                         console.warn('[SandboxPlayer] Proxy video failed to load, falling back to original:', videoSrc);
                         setProxyFailed(true);
+                    } else {
+                        console.warn('SandboxPlayer video error on original file:', e.currentTarget.error);
                     }
                 }}
             />
