@@ -668,12 +668,18 @@ interface ChatSidebarProps {
   onClearFocus?: () => void;
   isFocusSelectionActive?: boolean;
   onToggleFocusSelection?: () => void;
+  // Context for predictor
+  transcript?: any;
+  activeEdits?: any[];
+  mediaLibrary?: any[];
+  videoUrl?: string | null;
 }
 
 export default function ChatSidebar({
   chat, message, setMessage, handleSend, isProcessing,
   isAgentTyping, isRenderingBackground, logs, chatEndRef, isMobile,
-  focusedItem, onClearFocus, isFocusSelectionActive = false, onToggleFocusSelection
+  focusedItem, onClearFocus, isFocusSelectionActive = false, onToggleFocusSelection,
+  transcript, activeEdits = [], mediaLibrary = [], videoUrl
 }: ChatSidebarProps) {
 
   const [sidebarWidth, setSidebarWidth] = useState(290);
@@ -681,14 +687,86 @@ export default function ChatSidebar({
   const [inputValue, setInputValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Resizing Horizontal Handler - moved inline with pointer capture
+  // --- Contextual Predictor State ---
+  const [showPredictor, setShowPredictor] = useState(false);
+  const [suggestionIndex, setSuggestionIndex] = useState(0);
+
+  const suggestions = useMemo(() => {
+    let list: string[] = [];
+    const q = inputValue.trim().toLowerCase();
+
+    const hasSubtitles = activeEdits.some(e => e.action === 'add_subtitles' || e.is_subtitle);
+    const hasBroll = activeEdits.some(e => e.action === 'add_broll');
+    const hasMusic = activeEdits.some(e => e.action === 'add_audio' || e.action === 'add_music');
+
+    if (!q) {
+      if (focusedItem) {
+        list.push(`Удали этот ${focusedItem.type === 'broll' ? 'b-roll' : 'фрагмент'}`);
+        if (focusedItem.type === 'scene') {
+          list.push('Сделай цветокоррекцию ярче (vibrant)');
+          list.push('Замени этот фрагмент на подходящую перебивку');
+        } else if (focusedItem.type === 'subtitles') {
+          list.push('Сделай субтитры крупнее и измени цвет на желтый');
+        } else {
+          list.push('Сделай зум (наезд камеры) на этот момент');
+        }
+      } else {
+        if (!hasSubtitles) list.push('Сгенерируй крутые субтитры для видео');
+        if (!hasBroll) list.push('Добавь кинематографичные b-roll перебивки');
+        if (!hasMusic) list.push('Наложи фоновую музыку (lo-fi)');
+        if (transcript && transcript.words && transcript.words.length > 0) {
+          list.push('Удали все слова-паразиты и паузы');
+        } else {
+          list.push('Удали все пустые паузы (сделай jump cuts)');
+        }
+      }
+    } else {
+      const pool = [
+        'Сгенерируй субтитры (шрифт Impact, желтый цвет)',
+        'Добавь B-roll перебивки на словах о природе',
+        'Обрежь тишину и сделай динамичный монтаж',
+        'Сделай зум (camera_zoom) на важных словах',
+        'Наложи lo-fi музыку на фон',
+        'Добавь звуковые эффекты (swoosh) на смене кадров',
+        'Сделай цветокоррекцию (теплые тона)',
+        'Удали этот фрагмент',
+        'Замени это на эпичное слоу-мо',
+        'Сделай стильные переходы между сценами'
+      ];
+      list = pool.filter(s => s.toLowerCase().includes(q) && s.toLowerCase() !== q);
+    }
+    return list.slice(0, 4);
+  }, [inputValue, focusedItem, activeEdits]);
+
+  useEffect(() => {
+    setSuggestionIndex(0);
+  }, [suggestions]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (showPredictor && suggestions.length > 0) {
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSuggestionIndex(prev => (prev > 0 ? prev - 1 : suggestions.length - 1));
+        return;
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSuggestionIndex(prev => (prev < suggestions.length - 1 ? prev + 1 : 0));
+        return;
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        setInputValue(suggestions[suggestionIndex] + ' ');
+        return;
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       if (inputValue.trim() && !isProcessing) {
         handleSend(inputValue.trim());
         setInputValue('');
+        setShowPredictor(false);
       }
     }
   };
@@ -1026,22 +1104,75 @@ export default function ChatSidebar({
           </div>
         )}
 
-        <div
-          className="flex flex-col rounded-[16px] overflow-hidden transition-all duration-200"
-          style={{
-            background: "rgba(255,255,255,0.04)",
-            border: isFocusSelectionActive 
-              ? "1px solid rgba(59, 130, 246, 0.4)" 
+        <div className="relative">
+          {/* Predictor Menu */}
+          {showPredictor && suggestions.length > 0 && (
+            <div 
+              className="absolute bottom-full mb-3 left-0 w-full rounded-[14px] border shadow-2xl z-50 overflow-hidden backdrop-blur-xl animate-in slide-in-from-bottom-2 fade-in duration-200"
+              style={{
+                background: "rgba(20, 20, 25, 0.9)",
+                borderColor: "rgba(255, 255, 255, 0.1)",
+              }}
+            >
+              <div className="px-3 py-2 border-b border-white/5 flex items-center justify-between">
+                <span className="text-[10px] font-mono font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                  <svg className="w-3 h-3 text-blue-500" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="currentColor"/></svg>
+                  Предсказания AI
+                </span>
+                <span className="text-[9px] font-mono text-zinc-500 bg-white/5 px-1.5 py-0.5 rounded">TAB для выбора</span>
+              </div>
+              <div className="flex flex-col py-1">
+                {suggestions.map((s, i) => (
+                  <button
+                    key={i}
+                    onMouseDown={(e) => {
+                       e.preventDefault();
+                       setInputValue(s + ' ');
+                       textareaRef.current?.focus();
+                    }}
+                    onMouseEnter={() => setSuggestionIndex(i)}
+                    className="flex items-center px-3 py-2 w-full text-left transition-all cursor-pointer border-l-2"
+                    style={{
+                      background: i === suggestionIndex ? "rgba(59, 130, 246, 0.1)" : "transparent",
+                      borderColor: i === suggestionIndex ? "#3B82F6" : "transparent"
+                    }}
+                  >
+                    <span 
+                      className="text-[12px] truncate flex-1 font-sans"
+                      style={{ 
+                        color: i === suggestionIndex ? "#F5F7FA" : "#A0AEC0",
+                        fontWeight: i === suggestionIndex ? 500 : 400
+                      }}
+                    >
+                      {s}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div
+            className="flex flex-col rounded-[16px] overflow-hidden transition-all duration-200"
+            style={{
+              background: "rgba(255,255,255,0.04)",
+              border: isFocusSelectionActive 
+                ? "1px solid rgba(59, 130, 246, 0.4)" 
               : "1px solid rgba(255,255,255,0.08)",
             boxShadow: isFocusSelectionActive ? "0 0 15px rgba(59, 130, 246, 0.08)" : "none"
           }}
         >
-          <textarea
-            ref={textareaRef}
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={isProcessing}
+            <textarea
+              ref={textareaRef}
+              value={inputValue}
+              onChange={(e) => {
+                 setInputValue(e.target.value);
+                 if (!showPredictor) setShowPredictor(true);
+              }}
+              onFocus={() => setShowPredictor(true)}
+              onBlur={() => setTimeout(() => setShowPredictor(false), 200)}
+              onKeyDown={handleKeyDown}
+              disabled={isProcessing}
             placeholder={
               isAgentTyping
                 ? 'AI is thinking...'
@@ -1121,6 +1252,7 @@ export default function ChatSidebar({
           </div>
         </div>
       </div>
+    </div>
     </div>
   );
 }

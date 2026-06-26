@@ -1626,6 +1626,10 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                             onClearFocus={() => setFocusedClipId(null)}
                             isFocusSelectionActive={isFocusSelectionActive}
                             onToggleFocusSelection={() => setIsFocusSelectionActive(prev => !prev)}
+                            transcript={transcript}
+                            activeEdits={activeEditsWithSubtitles}
+                            mediaLibrary={mediaLibrary}
+                            videoUrl={currentVideo}
                         />
                     </div>
                 )}
