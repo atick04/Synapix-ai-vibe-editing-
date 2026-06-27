@@ -498,12 +498,21 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
                                     if "</think>" in cur_buf:
                                         cur_thinking = False
                                         parts = cur_buf.split("</think>", 1)
-                                        # Skip yielding internal thoughts to frontend to avoid cluttering the checklist
+                                        # Stream the final thinking fragment before closing
+                                        think_fragment = parts[0].strip()
+                                        if think_fragment:
+                                            yield json.dumps({"type": "thinking_chunk", "content": think_fragment, "done": True}) + "\n"
+                                        else:
+                                            yield json.dumps({"type": "thinking_chunk", "content": "", "done": True}) + "\n"
                                         cur_buf = parts[1]
                                     else:
-                                        # Consume and clear newlines from thoughts buffer without yielding
+                                        # Stream thinking content line-by-line for real-time display
                                         if "\n" in cur_buf:
-                                            _, cur_buf = cur_buf.rsplit("\n", 1)
+                                            lines_parts = cur_buf.rsplit("\n", 1)
+                                            think_text = lines_parts[0].strip()
+                                            if think_text:
+                                                yield json.dumps({"type": "thinking_chunk", "content": think_text, "done": False}) + "\n"
+                                            cur_buf = lines_parts[1]
                                 else:
                                     # Conversational reply extraction & streaming
                                     if not found_reply_start:

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { ThinkingBar } from "@/components/ui/thinking-bar";
 import { Markdown } from "@/components/ui/markdown";
+import AIThinkingBlock from "@/components/ui/ai-thinking-block";
 
 /* ─────────────────────────────────────────────
    Types
@@ -364,6 +365,127 @@ function HistoricalReasoning({ steps, index }: { steps: ReasoningStep[]; index: 
 }
 
 /* ─────────────────────────────────────────────
+   AI Thinking Block (streaming internal reasoning)
+───────────────────────────────────────────── */
+function ThinkingBlock({ text = "", steps = [], done }: { text?: string; steps?: any[]; done?: boolean }) {
+  const [expanded, setExpanded] = useState(true);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll the thinking content as it streams in
+  useEffect(() => {
+    if (expanded && contentRef.current) {
+      contentRef.current.scrollTop = contentRef.current.scrollHeight;
+    }
+  }, [text, steps, expanded]);
+
+  // Auto-collapse when done
+  useEffect(() => {
+    if (done) {
+      const timer = setTimeout(() => setExpanded(false), 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [done]);
+
+  const lines = text.split('\n').filter(l => l.trim());
+  if (lines.length === 0 && steps.length === 0) return null;
+
+  return (
+    <div
+      className="w-full rounded-xl overflow-hidden transition-all duration-300 my-1"
+      style={{
+        background: "rgba(255,255,255,0.015)",
+        border: `1px solid ${done ? "rgba(255,255,255,0.04)" : "rgba(59,130,246,0.12)"}`,
+      }}
+    >
+      <button
+        onClick={() => setExpanded(v => !v)}
+        className="w-full flex items-center justify-between px-3.5 py-2.5 cursor-pointer group select-none"
+      >
+        <div className="flex items-center gap-2">
+          {!done ? (
+            <span
+              className="w-1.5 h-1.5 rounded-full shrink-0 animate-pulse"
+              style={{ background: "#3B82F6", display: "inline-block" }}
+            />
+          ) : (
+            <svg className="w-3 h-3 shrink-0 text-zinc-600" viewBox="0 0 24 24" fill="none">
+              <path d="M5 13l4 4L19 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          )}
+          <span
+            className="text-[11px] font-mono tracking-wide"
+            style={{
+              color: done ? "#4A5568" : "#8B95A7",
+              ...(done ? {} : {
+                background: "linear-gradient(90deg, #64748b 0%, #94a3b8 50%, #64748b 100%)",
+                backgroundSize: "200% auto",
+                WebkitBackgroundClip: "text",
+                WebkitTextFillColor: "transparent",
+                animation: "shimmer 3s linear infinite",
+              })
+            }}
+          >
+            {done ? `Thought process (${lines.length} lines, ${steps.length} tools)` : "Thinking..."}
+          </span>
+        </div>
+        <svg
+          className="w-3 h-3 transition-transform duration-200"
+          style={{ color: "#4A5568", transform: expanded ? "rotate(180deg)" : "rotate(0deg)" }}
+          viewBox="0 0 24 24" fill="none"
+        >
+          <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </button>
+
+      {expanded && (
+        <div
+          ref={contentRef}
+          className="px-3.5 pb-3 border-t overflow-y-auto"
+          style={{
+            borderColor: "rgba(255,255,255,0.03)",
+            maxHeight: "300px",
+          }}
+        >
+          <div className="flex flex-col gap-1.5 pt-2">
+            {lines.map((line, i) => (
+              <p
+                key={`line-${i}`}
+                className="text-[11px] leading-relaxed font-mono"
+                style={{
+                  color: i === lines.length - 1 && !done ? "#8B95A7" : "#5A6478",
+                  opacity: i === lines.length - 1 && !done ? 1 : 0.8,
+                }}
+              >
+                {line}
+              </p>
+            ))}
+            
+            {steps.length > 0 && (
+              <div className="mt-2 flex flex-col gap-1 border-t border-zinc-800/50 pt-2">
+                {steps.map((step, i) => {
+                  const isDone = step.status === "done" || step.step.includes("[выполнено]");
+                  return (
+                    <div key={`step-${i}`} className="flex items-center gap-2">
+                      <span className="flex items-center justify-center w-3 h-3 rounded-full border border-zinc-700 bg-zinc-900 shrink-0">
+                         {isDone ? <svg className="w-1.5 h-1.5 text-zinc-500" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg> : <span className="w-1 h-1 bg-zinc-400 rounded-full animate-pulse" />}
+                      </span>
+                      <span className="text-[10px] font-mono text-zinc-500 truncate">
+                        {step.step.replace("⚒ Вызов:", "tool:").replace("[выполнено] ✓", "").trim().toLowerCase()}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+/* ─────────────────────────────────────────────
    Interactive Checklist
 ───────────────────────────────────────────── */
 function InteractiveChecklist({
@@ -532,7 +654,7 @@ function InteractiveChecklist({
    Main ChatSidebar
 ───────────────────────────────────────────── */
 interface ChatSidebarProps {
-  chat: { role: string; text?: string; steps?: any[]; variants?: any[] }[];
+  chat: { role: string; text?: string; steps?: any[]; variants?: any[]; done?: boolean }[];
   message: string;
   setMessage: (msg: string) => void;
   handleSend: (customMessage?: string, isInitial?: boolean, forceEdits?: any[]) => void;
@@ -546,28 +668,105 @@ interface ChatSidebarProps {
   onClearFocus?: () => void;
   isFocusSelectionActive?: boolean;
   onToggleFocusSelection?: () => void;
+  // Context for predictor
+  transcript?: any;
+  activeEdits?: any[];
+  mediaLibrary?: any[];
+  videoUrl?: string | null;
 }
 
 export default function ChatSidebar({
   chat, message, setMessage, handleSend, isProcessing,
   isAgentTyping, isRenderingBackground, logs, chatEndRef, isMobile,
-  focusedItem, onClearFocus, isFocusSelectionActive = false, onToggleFocusSelection
+  focusedItem, onClearFocus, isFocusSelectionActive = false, onToggleFocusSelection,
+  transcript, activeEdits = [], mediaLibrary = [], videoUrl
 }: ChatSidebarProps) {
 
   const [sidebarWidth, setSidebarWidth] = useState(290);
   const [isResizingWidth, setIsResizingWidth] = useState(false);
   const [inputValue, setInputValue] = useState('');
-  const [showTechnicalLogs, setShowTechnicalLogs] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Resizing Horizontal Handler - moved inline with pointer capture
+  // --- Contextual Predictor State ---
+  const [showPredictor, setShowPredictor] = useState(false);
+  const [suggestionIndex, setSuggestionIndex] = useState(0);
+
+  const suggestions = useMemo(() => {
+    let list: string[] = [];
+    const q = inputValue.trim().toLowerCase();
+
+    const hasSubtitles = activeEdits.some(e => e.action === 'add_subtitles' || e.is_subtitle);
+    const hasBroll = activeEdits.some(e => e.action === 'add_broll');
+    const hasMusic = activeEdits.some(e => e.action === 'add_audio' || e.action === 'add_music');
+
+    if (!q) {
+      if (focusedItem) {
+        list.push(`Удали этот ${focusedItem.type === 'broll' ? 'b-roll' : 'фрагмент'}`);
+        if (focusedItem.type === 'scene') {
+          list.push('Сделай цветокоррекцию ярче (vibrant)');
+          list.push('Замени этот фрагмент на подходящую перебивку');
+        } else if (focusedItem.type === 'subtitles') {
+          list.push('Сделай субтитры крупнее и измени цвет на желтый');
+        } else {
+          list.push('Сделай зум (наезд камеры) на этот момент');
+        }
+      } else {
+        if (!hasSubtitles) list.push('Сгенерируй крутые субтитры для видео');
+        if (!hasBroll) list.push('Добавь кинематографичные b-roll перебивки');
+        if (!hasMusic) list.push('Наложи фоновую музыку (lo-fi)');
+        if (transcript && transcript.words && transcript.words.length > 0) {
+          list.push('Удали все слова-паразиты и паузы');
+        } else {
+          list.push('Удали все пустые паузы (сделай jump cuts)');
+        }
+      }
+    } else {
+      const pool = [
+        'Сгенерируй субтитры (шрифт Impact, желтый цвет)',
+        'Добавь B-roll перебивки на словах о природе',
+        'Обрежь тишину и сделай динамичный монтаж',
+        'Сделай зум (camera_zoom) на важных словах',
+        'Наложи lo-fi музыку на фон',
+        'Добавь звуковые эффекты (swoosh) на смене кадров',
+        'Сделай цветокоррекцию (теплые тона)',
+        'Удали этот фрагмент',
+        'Замени это на эпичное слоу-мо',
+        'Сделай стильные переходы между сценами'
+      ];
+      list = pool.filter(s => s.toLowerCase().includes(q) && s.toLowerCase() !== q);
+    }
+    return list.slice(0, 4);
+  }, [inputValue, focusedItem, activeEdits]);
+
+  useEffect(() => {
+    setSuggestionIndex(0);
+  }, [suggestions]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (showPredictor && suggestions.length > 0) {
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSuggestionIndex(prev => (prev > 0 ? prev - 1 : suggestions.length - 1));
+        return;
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSuggestionIndex(prev => (prev < suggestions.length - 1 ? prev + 1 : 0));
+        return;
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        setInputValue(suggestions[suggestionIndex] + ' ');
+        return;
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       if (inputValue.trim() && !isProcessing) {
         handleSend(inputValue.trim());
         setInputValue('');
+        setShowPredictor(false);
       }
     }
   };
@@ -693,18 +892,6 @@ export default function ChatSidebar({
         </div>
 
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => setShowTechnicalLogs(v => !v)}
-            className="text-[11px] font-mono px-1.5 py-0.5 rounded-md border transition-all cursor-pointer select-none"
-            style={{
-              background: showTechnicalLogs ? "rgba(59,130,246,0.12)" : "rgba(255,255,255,0.02)",
-              borderColor: showTechnicalLogs ? "rgba(59,130,246,0.35)" : "rgba(255,255,255,0.08)",
-              color: showTechnicalLogs ? "#3B82F6" : "#4A5568",
-            }}
-          >
-            {showTechnicalLogs ? "Logs: ON" : "Logs: OFF"}
-          </button>
-          
           {isAgentTyping && (
             <div className="flex items-center gap-1.5 shrink-0">
               {[0, 0.15, 0.3].map((delay, i) => (
@@ -747,16 +934,12 @@ export default function ChatSidebar({
         ) : (
           <>
             {chat.map((msg, idx) => {
-              /* ── Reasoning block (historical) ── */
+              /* ── Unified Reasoning/Thinking Block ── */
               if (msg.role === 'reasoning') {
-                const blockIdx = ++reasoningBlockIndex;
-                if (!showTechnicalLogs) return null;
                 return (
-                  <HistoricalReasoning
-                    key={idx}
-                    steps={msg.steps || []}
-                    index={blockIdx}
-                  />
+                  <div key={idx} className="w-full flex justify-start my-1">
+                    <ThinkingBlock text={msg.text || ''} steps={msg.steps || []} done={msg.done} />
+                  </div>
                 );
               }
 
@@ -849,56 +1032,7 @@ export default function ChatSidebar({
               return null;
             })}
 
-            {/* Live reasoning while agent is typing — full pipeline (Logs ON) */}
-            {isAgentTyping && visibleSteps.length > 0 && showTechnicalLogs && (
-              <div
-                className="w-full rounded-lg px-3 py-2 animate-fade-blur"
-                style={{
-                  background: "rgba(255,255,255,0.02)",
-                  border: "1px solid rgba(59,130,246,0.1)",
-                }}
-              >
-                <div className="flex items-center justify-between mb-1.5">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="w-1.5 h-1.5 rounded-full animate-pulse"
-                      style={{ background: "#3B82F6", display: "inline-block" }}
-                    />
-                    <span className="text-[11px] font-mono uppercase tracking-widest" style={{ color: "rgba(59,130,246,0.6)" }}>
-                      reasoning pipeline
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => setShowTechnicalLogs(false)}
-                    className="text-zinc-500 hover:text-zinc-300 border-zinc-700 hover:border-zinc-500 border-b border-dotted text-[15px] font-mono transition-colors focus:outline-none select-none cursor-pointer"
-                  >
-                    Hide logs
-                  </button>
-                </div>
-                <LiveActivityFeed steps={visibleSteps} logs={logs} />
-              </div>
-            )}
 
-            {/* Minimal thinking indicator — Logs OFF */}
-            {isAgentTyping && !showTechnicalLogs && (
-              <div className="w-full animate-fade-blur py-1">
-                <ThinkingBar 
-                  text="Analyzing video & compiling timeline" 
-                  onClick={() => setShowTechnicalLogs(true)}
-                />
-              </div>
-            )}
-
-            {/* Typing shimmer with steps loading — Logs ON only */}
-            {isAgentTyping && visibleSteps.length === 0 && showTechnicalLogs && (
-              <div className="w-full animate-fade-blur py-1">
-                <ThinkingBar 
-                  text="Initializing pipeline..." 
-                  onStop={() => setShowTechnicalLogs(false)}
-                  stopLabel="Hide logs"
-                />
-              </div>
-            )}
           </>
         )}
 
@@ -970,22 +1104,75 @@ export default function ChatSidebar({
           </div>
         )}
 
-        <div
-          className="flex flex-col rounded-[16px] overflow-hidden transition-all duration-200"
-          style={{
-            background: "rgba(255,255,255,0.04)",
-            border: isFocusSelectionActive 
-              ? "1px solid rgba(59, 130, 246, 0.4)" 
+        <div className="relative">
+          {/* Predictor Menu */}
+          {showPredictor && suggestions.length > 0 && (
+            <div 
+              className="absolute bottom-full mb-3 left-0 w-full rounded-[14px] border shadow-2xl z-50 overflow-hidden backdrop-blur-xl animate-in slide-in-from-bottom-2 fade-in duration-200"
+              style={{
+                background: "rgba(20, 20, 25, 0.9)",
+                borderColor: "rgba(255, 255, 255, 0.1)",
+              }}
+            >
+              <div className="px-3 py-2 border-b border-white/5 flex items-center justify-between">
+                <span className="text-[10px] font-mono font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                  <svg className="w-3 h-3 text-blue-500" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="currentColor"/></svg>
+                  Предсказания AI
+                </span>
+                <span className="text-[9px] font-mono text-zinc-500 bg-white/5 px-1.5 py-0.5 rounded">TAB для выбора</span>
+              </div>
+              <div className="flex flex-col py-1">
+                {suggestions.map((s, i) => (
+                  <button
+                    key={i}
+                    onMouseDown={(e) => {
+                       e.preventDefault();
+                       setInputValue(s + ' ');
+                       textareaRef.current?.focus();
+                    }}
+                    onMouseEnter={() => setSuggestionIndex(i)}
+                    className="flex items-center px-3 py-2 w-full text-left transition-all cursor-pointer border-l-2"
+                    style={{
+                      background: i === suggestionIndex ? "rgba(59, 130, 246, 0.1)" : "transparent",
+                      borderColor: i === suggestionIndex ? "#3B82F6" : "transparent"
+                    }}
+                  >
+                    <span 
+                      className="text-[12px] truncate flex-1 font-sans"
+                      style={{ 
+                        color: i === suggestionIndex ? "#F5F7FA" : "#A0AEC0",
+                        fontWeight: i === suggestionIndex ? 500 : 400
+                      }}
+                    >
+                      {s}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div
+            className="flex flex-col rounded-[16px] overflow-hidden transition-all duration-200"
+            style={{
+              background: "rgba(255,255,255,0.04)",
+              border: isFocusSelectionActive 
+                ? "1px solid rgba(59, 130, 246, 0.4)" 
               : "1px solid rgba(255,255,255,0.08)",
             boxShadow: isFocusSelectionActive ? "0 0 15px rgba(59, 130, 246, 0.08)" : "none"
           }}
         >
-          <textarea
-            ref={textareaRef}
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={isProcessing}
+            <textarea
+              ref={textareaRef}
+              value={inputValue}
+              onChange={(e) => {
+                 setInputValue(e.target.value);
+                 if (!showPredictor) setShowPredictor(true);
+              }}
+              onFocus={() => setShowPredictor(true)}
+              onBlur={() => setTimeout(() => setShowPredictor(false), 200)}
+              onKeyDown={handleKeyDown}
+              disabled={isProcessing}
             placeholder={
               isAgentTyping
                 ? 'AI is thinking...'
@@ -1065,6 +1252,7 @@ export default function ChatSidebar({
           </div>
         </div>
       </div>
+    </div>
     </div>
   );
 }

@@ -51,7 +51,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     const [fontSize, setFontSize] = useState(100);
     const [fontColor, setFontColor] = useState("White");
     const [useOutline, setUseOutline] = useState(true);
-    const [chat, setChat] = useState<{ role: string, text?: string, steps?: any[], variants?: any[] }[]>([]);
+    const [chat, setChat] = useState<{ role: string, text?: string, steps?: any[], variants?: any[], done?: boolean }[]>([]);
     const [transcript, setTranscript] = useState<any>(null);
     const [mediaLibrary, setMediaLibrary] = useState<any[]>([]);
 
@@ -1334,6 +1334,25 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                                     }
                                 });
                                 setTimeout(() => scrollToBottom(), 50);
+                            } else if (data.type === "thinking_chunk") {
+                                // Accumulate AI's internal reasoning for contextual display
+                                setChat(prev => {
+                                    const copy = [...prev];
+                                        const lastUserIdx = copy.map(m => m.role).lastIndexOf('user');
+                                        const lastReasoningIdx = copy.map(m => m.role).lastIndexOf('reasoning');
+                                        
+                                        if (lastReasoningIdx !== -1 && lastReasoningIdx > lastUserIdx) {
+                                            copy[lastReasoningIdx] = { 
+                                                ...copy[lastReasoningIdx], 
+                                                text: (copy[lastReasoningIdx].text || "") + "\n" + data.content,
+                                                done: data.done || false
+                                            };
+                                            return copy;
+                                        } else {
+                                            return [...copy, { role: "reasoning", text: data.content, done: data.done || false, steps: [] }];
+                                        }
+                                    });
+                                setTimeout(() => scrollToBottom(), 50);
                             } else if (data.type === "content_chunk") {
                                 if (data.content) {
                                     setChat(prev => {
@@ -1607,6 +1626,10 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                             onClearFocus={() => setFocusedClipId(null)}
                             isFocusSelectionActive={isFocusSelectionActive}
                             onToggleFocusSelection={() => setIsFocusSelectionActive(prev => !prev)}
+                            transcript={transcript}
+                            activeEdits={activeEditsWithSubtitles}
+                            mediaLibrary={mediaLibrary}
+                            videoUrl={currentVideo}
                         />
                     </div>
                 )}
