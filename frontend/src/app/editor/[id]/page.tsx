@@ -9,10 +9,19 @@ import ExportModal from "@/components/ExportModal";
 import ChatSidebar from "@/components/ChatSidebar";
 import ReferencesSidebar from "@/components/ReferencesSidebar";
 import SandboxPlayer from "@/components/SandboxPlayer";
+import AccessKeyModal from "@/components/AccessKeyModal";
+import MaskingSidebar from "@/components/MaskingSidebar";
+import TextSidebar from "@/components/TextSidebar";
+import GraphicsSidebar from "@/components/GraphicsSidebar";
+import MusicSidebar from "@/components/MusicSidebar";
+import TransitionsSidebar from "@/components/TransitionsSidebar";
+import { VibeProvider } from "@/context/VibeContext";
+import { useLanguage } from "@/context/LanguageContext";
 
 export default function EditorPage({ params }: { params: Promise<{ id: string }> }) {
     const resolvedParams = use(params);
     const { id } = resolvedParams;
+    const { t } = useLanguage();
     const searchParams = useSearchParams();
     const filenameParam = searchParams.get('filename');
     const [filename, setFilename] = useState<string | null>(null);
@@ -21,6 +30,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     // Sync filename state with URL param and localStorage to survive page reloads
     useEffect(() => {
         if (!id) return;
+        localStorage.setItem('last_project_id', id);
         if (filenameParam) {
             let fn = filenameParam;
             const ext = fn.split('.').pop()?.toLowerCase();
@@ -29,7 +39,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             }
             setFilename(fn);
             localStorage.setItem(`filename_${id}`, fn);
-            if (!fn.includes('_rendered')) {
+            if (!fn.includes('_rendered') && !fn.includes('_rvm_preview')) {
                 localStorage.setItem(`original_filename_${id}`, fn);
             }
         } else {
@@ -73,6 +83,10 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     const [logs, setLogs] = useState<string[]>([]);
     const [hasInitialized, setHasInitialized] = useState(false);
     const [activeEdits, setActiveEdits] = useState<any[]>([]);
+    const activeVibeConfig = useMemo(() => {
+        const vibeEdit = activeEdits.find(e => e.action === 'set_vibe_config');
+        return vibeEdit?.vibe_config || null;
+    }, [activeEdits]);
     const [canUndo, setCanUndo] = useState(false);
     const [canRedo, setCanRedo] = useState(false);
     const historyRef = useRef<{ activeEdits: any[]; multiTrackEdl: any }[]>([]);
@@ -82,14 +96,109 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     const [activeTab, setActiveTab] = useState<'text' | 'video'>('text');
     const [isChatOpen, setIsChatOpen] = useState(false);
     const [isLibraryOpen, setIsLibraryOpen] = useState(false);
+    const [isMaskingOpen, setIsMaskingOpen] = useState(false);
+    const [isTextOpen, setIsTextOpen] = useState(false);
+    const [isGraphicsOpen, setIsGraphicsOpen] = useState(false);
+    const [isMusicOpen, setIsMusicOpen] = useState(false);
+    const [isTransitionsOpen, setIsTransitionsOpen] = useState(false);
     const chatEndRef = useRef<HTMLDivElement>(null);
     const chatContainerRef = useRef<HTMLDivElement>(null);
+    const abortControllerRef = useRef<AbortController | null>(null);
     const [showExportModal, setShowExportModal] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
     const hyperframesEdits = activeEdits.filter(e => e.action === 'canvas_overlay' || e.action === 'hyperframes_html' || e.action === 'add_hyperframes_graphics');
+
+    // Access key auth
+    const [accessKeyReady, setAccessKeyReady] = useState(false);
+    const [isMounted, setIsMounted] = useState(false);
+    const [accessLogin, setAccessLogin] = useState('');
+    const [accessKey, setAccessKey] = useState('');
+    const [accessKeyError, setAccessKeyError] = useState('');
+
+    useEffect(() => {
+        setIsMounted(true);
+        const savedKey = localStorage.getItem('vibe_access_key');
+        const savedLogin = localStorage.getItem('vibe_user_login');
+        if (savedKey) {
+            setAccessKeyReady(true);
+        }
+        if (savedKey && savedLogin) {
+            setAccessKey(savedKey);
+            setAccessLogin(savedLogin);
+            
+            // Validate key immediately on mount
+            const validateOnMount = async () => {
+                try {
+                    const res = await fetch(`${API_URL}/api/admin/validate-key?key=${encodeURIComponent(savedKey)}&login=${encodeURIComponent(savedLogin)}`);
+                    const data = await res.json();
+                    if (data.valid) {
+                        setAccessKeyReady(true);
+                    } else {
+                        handleAuthError(data.reason || 'access_key_invalid');
+                    }
+                } catch (err) {
+                    setAccessKeyReady(true);
+                }
+            };
+            validateOnMount();
+        }
+    }, [API_URL]);
+
+    const handleAccessKeySuccess = (login: string, key: string) => {
+        setAccessLogin(login);
+        setAccessKey(key);
+        setAccessKeyError('');
+        setAccessKeyReady(true);
+    };
+
+    const handleAuthError = (detail: string) => {
+        localStorage.removeItem('vibe_access_key');
+        localStorage.removeItem('vibe_user_login');
+        
+        const reasons: Record<string, string> = {
+            access_key_required: 'Доступ отклонен: Требуется ключ доступа.',
+            access_key_invalid: 'Доступ отклонен: Неверный ключ или логин.',
+            access_key_expired: 'Доступ отклонен: Срок действия ключа истёк.',
+            access_key_revoked: 'Доступ отклонен: Ключ был отозван администратором.',
+            access_key_limit_reached: 'Доступ отклонен: Исчерпан лимит токенов.',
+        };
+        
+        const errorMsg = reasons[detail] || 'Доступ отклонен. Проверьте данные для входа.';
+        setAccessKeyError(errorMsg);
+        setAccessKeyReady(false);
+    };
+
+    // Periodic check to detect token expiration while the editor is open
+    useEffect(() => {
+        if (!accessKeyReady) return;
+        const interval = setInterval(async () => {
+            const savedKey = localStorage.getItem('vibe_access_key');
+            const savedLogin = localStorage.getItem('vibe_user_login');
+            if (savedKey && savedLogin) {
+                try {
+                    const res = await fetch(`${API_URL}/api/admin/validate-key?key=${encodeURIComponent(savedKey)}&login=${encodeURIComponent(savedLogin)}`);
+                    const data = await res.json();
+                    if (!data.valid) {
+                        handleAuthError(data.reason || 'access_key_invalid');
+                    }
+                } catch (err) {
+                    // Ignore network error to avoid false positives
+                }
+            }
+        }, 30000); // Check every 30 seconds
+        return () => clearInterval(interval);
+    }, [accessKeyReady, API_URL]);
     
     // Manual Format Control
     const [targetFormat, setTargetFormat] = useState<'auto' | '16:9' | '9:16'>('auto');
+
+    // Brand custom assets
+    const [brandId, setBrandId] = useState<string>("default");
+    const [brandAssets, setBrandAssets] = useState<{ fonts: any[]; luts: any[]; music?: any[] }>({ fonts: [], luts: [], music: [] });
+    const handleBrandAssetsChange = useCallback((id: string, assets: any) => {
+        setBrandId(id);
+        setBrandAssets(assets);
+    }, []);
 
     // Focus / Context Selection
     const [focusedClipId, setFocusedClipId] = useState<string | null>(null);
@@ -349,16 +458,22 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             const savedEdl = localStorage.getItem(`multiTrackEdl_${id}`);
             const savedInit = localStorage.getItem(`hasInitialized_${id}`);
 
-            if (savedChat) setChat(JSON.parse(savedChat));
+            if (savedChat) {
+                const parsed = JSON.parse(savedChat);
+                setChat(Array.isArray(parsed) && parsed.length > 0 ? parsed : [{ role: "ai", text: t.welcomeMessage }]);
+            } else {
+                setChat([{ role: "ai", text: t.welcomeMessage }]);
+            }
             if (savedEdits) setActiveEdits(JSON.parse(savedEdits));
             if (savedEdl) setMultiTrackEdl(JSON.parse(savedEdl));
             if (savedInit) setHasInitialized(JSON.parse(savedInit));
         } catch (e) {
             console.error("Failed to load state from localStorage:", e);
+            setChat([{ role: "ai", text: t.welcomeMessage }]);
         } finally {
             setIsLoaded(true);
         }
-    }, [id]);
+    }, [id, t.welcomeMessage]);
 
     // Save to localStorage when state changes
     useEffect(() => {
@@ -468,7 +583,6 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     const [selectedTemplate, setSelectedTemplate] = useState<string>("");
     const [showTemplatesDrawer, setShowTemplatesDrawer] = useState<boolean>(false);
     const templateParam = searchParams.get('template');
-    const autoComposeTriggeredRef = useRef(false);
 
     useEffect(() => {
         if (templateParam) {
@@ -486,7 +600,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     const lastUserMessageRef = useRef('');
 
     // Resizable Timeline State
-    const [timelineHeight, setTimelineHeight] = useState(200);
+    const [timelineHeight, setTimelineHeight] = useState(420);
     const [isResizing, setIsResizing] = useState(false);
 
     // Responsive Mobile Views State
@@ -571,13 +685,13 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     const userX = subEdit?.x;
                     const userY = subEdit?.y;
 
-                    const activeFont = overrideForChunk?.font || userFont || templateFont || "Arial";
+                    const activeFont = overrideForChunk?.font || userFont || templateFont || "Montserrat-ExtraBold";
                     const activeFontSize = overrideForChunk?.font_size || userFontSize || templateFontSize || 80;
-                    const activeColor = overrideForChunk?.font_color || userColor || templateColor || "White";
-                    const activeAccentColor = userAccentColor || templateAccentColor || "#F2E16A";
-                    const activeUseShadow = userUseShadow !== undefined ? userUseShadow : (templateUseShadow || false);
-                    const activeShadowBlur = userShadowBlur !== undefined ? userShadowBlur : (templateShadowBlur || 0);
-                    const activeTextCase = userTextCase || templateTextCase || "Sentence_Case";
+                    const activeColor = overrideForChunk?.font_color || userColor || templateColor || "#FFFFFF";
+                    const activeAccentColor = userAccentColor || templateAccentColor || "#FACC15";
+                    const activeUseShadow = userUseShadow !== undefined ? userUseShadow : (templateUseShadow !== undefined ? templateUseShadow : true);
+                    const activeShadowBlur = userShadowBlur !== undefined ? userShadowBlur : (templateShadowBlur || 18);
+                    const activeTextCase = userTextCase || templateTextCase || "UPPER";
                     const activePosition = overrideForChunk?.position || userPosition || "bottom";
                     const activeX = overrideForChunk?.x !== undefined ? overrideForChunk.x : userX;
                     const activeY = overrideForChunk?.y !== undefined ? overrideForChunk.y : userY;
@@ -590,7 +704,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     const activeActiveScale = overrideForChunk?.active_scale !== undefined ? overrideForChunk?.active_scale : subEdit?.active_scale;
                     const activeLetterSpacing = overrideForChunk?.letter_spacing !== undefined ? overrideForChunk?.letter_spacing : subEdit?.letter_spacing;
                     const activeLineSpacing = overrideForChunk?.line_spacing !== undefined ? overrideForChunk?.line_spacing : subEdit?.line_spacing;
-                    const activeAnimation = overrideForChunk?.animation_style || subEdit?.animation_style || "fade";
+                    const activeAnimation = overrideForChunk?.animation_style || subEdit?.animation_style || "pop";
 
                     if (overrideForChunk) {
                         if (overrideForChunk.deleted) return;
@@ -675,19 +789,20 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         return {
             font: subEdit?.font ||
                   tplSub?.font_management?.base_sans_font?.replace(/-Medium\.ttf$/, '').replace(/\.ttf$/, '') ||
-                  'Inter',
+                  'Montserrat-ExtraBold',
             font_size: subEdit?.font_size ||
-                       tplSub?.font_management?.font_size_px || 58,
+                       tplSub?.font_management?.font_size_px || 80,
             color: subEdit?.font_color ||
-                   tplSub?.color_palette?.text_main || '#F5F5F7',
+                   tplSub?.color_palette?.text_main || '#FFFFFF',
             accent_color: subEdit?.accent_color ||
-                           tplSub?.color_palette?.text_accent || '#F2E16A',
+                           tplSub?.color_palette?.text_accent || '#FACC15',
             position: subEdit?.position || 'bottom',
+            behind_speaker: !!(subEdit?.behind_speaker || subEdit?.position === 'behind_speaker'),
             x: subEdit?.x,
             y: subEdit?.y,
             use_shadow: subEdit?.use_shadow ?? tplSub?.layout?.use_shadow ?? true,
             shadow_blur: subEdit?.shadow_blur ?? tplSub?.layout?.shadow_blur_px ?? 18,
-            text_case: subEdit?.text_case ?? tplSub?.layout?.text_case ?? 'Sentence_Case',
+            text_case: subEdit?.text_case ?? tplSub?.layout?.text_case ?? 'UPPER',
             max_words: subEdit?.max_words ?? tplSub?.layout?.max_words_per_screen ?? 3,
             font_pairing: subEdit?.font_pairing || tplSub?.font_management?.accent_serif_font?.replace(/-Italic\.ttf$/, '').replace(/\.ttf$/, '') || 'Lobster',
             word_styles: subEdit?.word_styles || null,
@@ -710,7 +825,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; display: flex; align-items: center; justify-content: center; }
       .clip { position: absolute; }
-      #preview-container { width: 1080px; height: 1920px; position: relative; transform-origin: center center; background: transparent; overflow: hidden; }
+      #preview-container { width: 1920px; height: 1080px; position: relative; transform-origin: center center; background: transparent; overflow: hidden; }
     </style>
   </head>
   <body>
@@ -720,7 +835,12 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     <script>
       function resize() {
         const container = document.getElementById('preview-container');
-        const scale = Math.min(window.innerWidth / 1080, window.innerHeight / 1920);
+        const isLandscape = window.innerWidth >= window.innerHeight;
+        const dw = isLandscape ? 1920 : 1080;
+        const dh = isLandscape ? 1080 : 1920;
+        container.style.width = dw + 'px';
+        container.style.height = dh + 'px';
+        const scale = Math.min(window.innerWidth / dw, window.innerHeight / dh);
         container.style.transform = \`scale(\${scale})\`;
       }
       window.addEventListener('resize', resize);
@@ -786,13 +906,222 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         }
         if (lastEditsJsonRef.current !== editsJson) {
             lastEditsJsonRef.current = editsJson;
-            // Switch back to original video
-            if (originalFilename && filename && filename.includes('_rendered')) {
+            // Switch back to original video after full export only (keep RVM preview)
+            if (originalFilename && filename && filename.includes('_rendered') && !filename.includes('_rvm')) {
                 setFilename(originalFilename);
             }
         }
     }, [activeEdits, multiTrackEdl, originalFilename, filename]);
 
+    // RVM live preview: alpha cutout for behind-speaker / layered text, or baked composite for plain bg remove
+    const [rotoProcessing, setRotoProcessing] = useState(false);
+    const [rvmAlphaFilename, setRvmAlphaFilename] = useState<string | null>(null);
+    const [rvmMaskFilename, setRvmMaskFilename] = useState<string | null>(null);
+    const [rotoReadyFlash, setRotoReadyFlash] = useState(false);
+    const rotoKeyDoneRef = useRef<string>("");
+    const rotoRequest = useMemo(() => {
+        const bgEdit = activeEdits.find(
+            (ed: any) => ed.action === "remove_background" || ed.action === "set_video_background"
+        );
+        const subEdit = activeEdits.find((ed: any) => ed.action === "add_subtitles");
+        const behindSubs = !!(subEdit?.behind_speaker || subEdit?.position === "behind_speaker");
+
+        // Layered mode: keep original video + mask matte so text stays editable behind
+        if (behindSubs || bgEdit?.action === "set_video_background") {
+            return {
+                action: bgEdit?.action || "behind_speaker",
+                mode: "alpha" as const,
+                asset_version: 3,
+                bg_color: bgEdit?.bg_color || "#0a0a14",
+                text: bgEdit?.text || null,
+                text_color: bgEdit?.text_color || "white",
+                text_opacity: bgEdit?.text_opacity ?? 0.18,
+                font_size: bgEdit?.font_size || 220,
+                gradient_color2: bgEdit?.gradient_color2 || null,
+                bg_video_query: bgEdit?.bg_video_query || null,
+            };
+        }
+
+        if (bgEdit?.action === "remove_background") {
+            return {
+                action: "remove_background",
+                mode: "composite" as const,
+                asset_version: 3,
+                bg_color: bgEdit.bg_color && bgEdit.bg_color !== "transparent" ? bgEdit.bg_color : "#0a0a14",
+                text: null,
+                text_color: "white",
+                text_opacity: 0.12,
+                font_size: 220,
+                gradient_color2: bgEdit.gradient_color2 || null,
+                bg_video_query: bgEdit.bg_video_query || null,
+            };
+        }
+        return null;
+    }, [activeEdits]);
+
+    useEffect(() => {
+        if (!id) return;
+
+        if (!rotoRequest) {
+            rotoKeyDoneRef.current = "";
+            setRvmAlphaFilename(null);
+            setRvmMaskFilename(null);
+            if (filename && filename.includes("_rvm_preview") && originalFilename) {
+                setFilename(originalFilename);
+            }
+            setRotoProcessing(false);
+            return;
+        }
+
+        const requestKey = JSON.stringify(rotoRequest);
+        if (rotoKeyDoneRef.current === requestKey) {
+            setRotoProcessing(false);
+            return;
+        }
+
+        let cancelled = false;
+        const authHeaders = () => {
+            const accessKey = localStorage.getItem("vibe_access_key") || "";
+            const accessLogin = localStorage.getItem("vibe_user_login") || "";
+            return {
+                "Content-Type": "application/json",
+                "X-Access-Key": accessKey,
+                "X-User-Login": encodeURIComponent(accessLogin),
+            };
+        };
+
+        const applyResult = (data: { filename?: string; mode?: string; mask_filename?: string; alpha_filename?: string }) => {
+            if (!data.filename && !data.mask_filename) return;
+            rotoKeyDoneRef.current = requestKey;
+            if (data.mode === "alpha" || data.filename?.includes("_rvm_mask") || data.filename?.includes("_rvm_alpha") || data.mask_filename) {
+                const maskName = data.mask_filename
+                    || (data.filename?.includes("_rvm_mask") ? data.filename : null)
+                    || (id ? `${id}_rvm_mask.mp4` : null);
+                // Mask is the supported preview path; only keep WebM alpha if server still advertises it
+                // (backend omits alpha_filename when the file is missing).
+                const alphaName = maskName
+                    ? (data.alpha_filename || null)
+                    : (data.alpha_filename
+                        || (data.filename?.includes("_rvm_alpha") ? data.filename : null));
+                setRvmMaskFilename(maskName);
+                setRvmAlphaFilename(alphaName);
+                if (filename?.includes("_rvm_preview") && originalFilename) {
+                    setFilename(originalFilename);
+                }
+                setRotoReadyFlash(true);
+                setTimeout(() => setRotoReadyFlash(false), 4000);
+            } else {
+                setRvmMaskFilename(null);
+                setRvmAlphaFilename(null);
+                if (data.filename) setFilename(data.filename);
+            }
+            setRotoProcessing(false);
+        };
+
+        const run = async () => {
+            setRotoProcessing(true);
+            try {
+                const startRes = await fetch(`${API_URL}/api/video/${id}/roto_preview`, {
+                    method: "POST",
+                    headers: authHeaders(),
+                    body: JSON.stringify(rotoRequest),
+                });
+                if (!startRes.ok) {
+                    console.warn("[RVM] preview start failed", startRes.status);
+                    if (!cancelled) setRotoProcessing(false);
+                    return;
+                }
+                const startData = await startRes.json();
+                if (startData.status === "ready" && (startData.filename || startData.mask_filename)) {
+                    if (!cancelled) applyResult(startData);
+                    return;
+                }
+
+                // Full-HD RVM can take 15–40 min on CPU — keep polling (was 6 min and gave up)
+                for (let i = 0; i < 1200 && !cancelled; i++) {
+                    await new Promise((r) => setTimeout(r, i < 120 ? 2000 : 3000));
+                    const st = await fetch(`${API_URL}/api/video/${id}/roto_status`, {
+                        headers: authHeaders(),
+                    });
+                    if (!st.ok) continue;
+                    const data = await st.json();
+                    if (data.status === "ready" && (data.filename || data.mask_filename)) {
+                        if (!cancelled) applyResult(data);
+                        return;
+                    }
+                    if (data.status === "error") {
+                        console.warn("[RVM] preview error:", data.message);
+                        if (!cancelled) setRotoProcessing(false);
+                        return;
+                    }
+                }
+                console.warn("[RVM] preview poll timed out — will keep checking in background");
+            } catch (err) {
+                console.warn("[RVM] preview failed", err);
+            }
+            if (!cancelled) setRotoProcessing(false);
+        };
+
+        run();
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [id, API_URL, rotoRequest, originalFilename]);
+
+    // If poll timed out / page reloaded while mask already exists on server — pick it up
+    useEffect(() => {
+        if (!id || !rotoRequest || rvmMaskFilename || rvmAlphaFilename) return;
+        if (rotoProcessing) return;
+
+        let cancelled = false;
+        const authHeaders = () => {
+            const accessKey = localStorage.getItem("vibe_access_key") || "";
+            const accessLogin = localStorage.getItem("vibe_user_login") || "";
+            return {
+                "X-Access-Key": accessKey,
+                "X-User-Login": encodeURIComponent(accessLogin),
+            };
+        };
+
+        const check = async () => {
+            try {
+                const st = await fetch(`${API_URL}/api/video/${id}/roto_status`, { headers: authHeaders() });
+                if (!st.ok || cancelled) return;
+                const data = await st.json();
+                if (data.status !== "ready" || (!data.filename && !data.mask_filename)) return;
+                const maskName = data.mask_filename
+                    || (data.filename?.includes("_rvm_mask") ? data.filename : null)
+                    || (id ? `${id}_rvm_mask.mp4` : null);
+                // Don't attach missing legacy WebM when mask is available
+                const alphaName = data.alpha_filename || null;
+                if (data.mode === "alpha" || maskName) {
+                    rotoKeyDoneRef.current = JSON.stringify(rotoRequest);
+                    setRvmMaskFilename(maskName);
+                    setRvmAlphaFilename(alphaName);
+                    setRotoReadyFlash(true);
+                    setTimeout(() => setRotoReadyFlash(false), 4000);
+                    setRotoProcessing(false);
+                } else if (data.filename) {
+                    rotoKeyDoneRef.current = JSON.stringify(rotoRequest);
+                    setFilename(data.filename);
+                    setRotoProcessing(false);
+                }
+            } catch {
+                /* ignore */
+            }
+        };
+
+        check();
+        const timer = setInterval(check, 5000);
+        return () => {
+            cancelled = true;
+            clearInterval(timer);
+        };
+    }, [id, API_URL, rotoRequest, rvmMaskFilename, rvmAlphaFilename, rotoProcessing]);
+
+    const rvmAlphaSrc = rvmAlphaFilename ? `${API_URL}/uploads/${rvmAlphaFilename}` : null;
+    const rvmMaskSrc = rvmMaskFilename ? `${API_URL}/uploads/${rvmMaskFilename}` : null;
     // Initialize filename to originalFilename once media library loads and if it's currently unset
     useEffect(() => {
         if (!filename && originalFilename) {
@@ -874,7 +1203,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     setAudioPeaks(normalizedPeaks);
                 }
             } catch (error) {
-                console.error("Failed to generate audio peaks:", error);
+                console.warn("Failed to generate audio peaks (using fallback):", error);
                 if (active) {
                     setAudioPeaks(Array(100).fill(20));
                 }
@@ -894,6 +1223,50 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             }
         };
     }, [currentVideo]);
+
+    // Prefer companion .mp3 for waveform peaks (more reliable than decoding mp4 after reload)
+    useEffect(() => {
+        if (!id || !API_URL) return;
+        let active = true;
+        let audioCtx: AudioContext | null = null;
+        const generateFromMp3 = async () => {
+            const mp3Url = `${API_URL}/uploads/${id}.mp3`;
+            try {
+                const head = await fetch(mp3Url, { method: "HEAD" });
+                if (!head.ok || !active) return;
+                const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+                if (!AudioContextClass) return;
+                audioCtx = new AudioContextClass();
+                const response = await fetch(mp3Url);
+                const arrayBuffer = await response.arrayBuffer();
+                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                if (!active) return;
+                const channelData = audioBuffer.getChannelData(0);
+                const peaks: number[] = [];
+                const samples = 1000;
+                const blockSize = Math.max(1, Math.floor(channelData.length / samples));
+                for (let i = 0; i < samples; i++) {
+                    let sum = 0;
+                    const blockStart = blockSize * i;
+                    for (let j = 0; j < blockSize; j++) sum += Math.abs(channelData[blockStart + j] || 0);
+                    peaks.push(sum / blockSize);
+                }
+                const maxPeak = Math.max(...peaks, 1e-6);
+                if (active) setAudioPeaks(peaks.map((p) => (p / maxPeak) * 100));
+            } catch {
+                /* keep whatever peaks the main video effect produced */
+            } finally {
+                if (audioCtx && audioCtx.state !== "closed") {
+                    try { await audioCtx.close(); } catch { /* ignore */ }
+                }
+            }
+        };
+        generateFromMp3();
+        return () => {
+            active = false;
+            if (audioCtx && audioCtx.state !== "closed") audioCtx.close().catch(() => {});
+        };
+    }, [id, API_URL]);
 
     // Multi-track EDL playback
     useEffect(() => {
@@ -970,59 +1343,6 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         return () => clearInterval(interval);
     }, [id, transcript]);
 
-    // Automatic AI Composer trigger when template query parameter is specified
-    useEffect(() => {
-        if (!id || !selectedTemplate || autoComposeTriggeredRef.current) return;
-        
-        // Wait until both Whisper transcript and Visual analysis are completed
-        const isVisualDone = logs.some(l => l.includes("Визуальный анализ готов") || l.includes("Визуальный анализ пропущен"));
-        if (transcript && isVisualDone) {
-            const runAutoCompose = async () => {
-                autoComposeTriggeredRef.current = true;
-                setChat(prev => [...prev, { 
-                    role: "system", 
-                    text: `🪄 Инициализирую шаблон «${selectedTemplate}». Запускаю автокомпозитор для подбора саундтрека и SFX...` 
-                }]);
-                
-                try {
-                    const res = await fetch(`${API_URL}/api/video/${id}/auto_compose`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ template_id: selectedTemplate })
-                    });
-                    
-                    if (res.ok) {
-                        const data = await res.json();
-                        setChat(prev => [...prev, { 
-                            role: "ai", 
-                            text: `✅ Автоподбор завершен! Создан и наложен саундтрек «${data.bgm_filename}». Звуковые эффекты переходов синхронизированы с видеорядом.` 
-                        }]);
-                        
-                        // Add edits (BGM and SFX) to timeline
-                        if (data.edits) {
-                            setActiveEdits(prev => {
-                                const base = prev.filter(e => e.action !== "add_asset" && e.action !== "scene_override" && e.action !== "add_subtitles");
-                                return [...base, ...data.edits];
-                            });
-                        }
-                        
-                        // Refresh media library
-                        const libRes = await fetch(`${API_URL}/api/video/${id}/media_library`);
-                        if (libRes.ok) {
-                            const libData = await libRes.json();
-                            setMediaLibrary(libData);
-                        }
-                    } else {
-                        console.error("Auto-compose request failed");
-                    }
-                } catch (e) {
-                    console.error("Error running auto-compose:", e);
-                }
-            };
-            runAutoCompose();
-        }
-    }, [id, selectedTemplate, transcript, logs, API_URL]);
-
     // Fetch project media library
     useEffect(() => {
         if (!id) return;
@@ -1039,6 +1359,30 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         };
         fetchMediaLibrary();
     }, [id, API_URL]);
+
+    // After reload, URL/localStorage may hold the original upload name (e.g. reeelas.mov → reeelas.mp4)
+    // while the server stores {projectId}.mp4 — heal filename from media library.
+    useEffect(() => {
+        if (!id || !mediaLibrary.length) return;
+        const main = mediaLibrary.find((item: any) => item.id === "main");
+        const fromPath = main?.path ? String(main.path).split(/[/\\]/).pop() : null;
+        const canonical =
+            (fromPath && fromPath !== "Original Video" && fromPath.includes("."))
+                ? fromPath
+                : `${id}.mp4`;
+
+        setFilename((prev) => {
+            const looksWrong = !prev || (!prev.includes(id) && !prev.includes("_rendered") && !prev.includes("_rvm"));
+            if (!looksWrong && prev) return prev;
+            try {
+                localStorage.setItem(`filename_${id}`, canonical);
+                if (!canonical.includes("_rendered") && !canonical.includes("_rvm_preview")) {
+                    localStorage.setItem(`original_filename_${id}`, canonical);
+                }
+            } catch { /* ignore */ }
+            return canonical;
+        });
+    }, [id, mediaLibrary]);
 
     // Dynamic two-way sync of activeEdits to multiTrackEdl
     useEffect(() => {
@@ -1079,7 +1423,8 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         if (currentEdlStr !== newEdlStr) {
             setMultiTrackEdl(newEdl);
         }
-    }, [activeEdits, mainVideoDuration, multiTrackEdl]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeEdits, mainVideoDuration]);
 
     const handleUpdateSubtitleGlobal = (field: string, value: any) => {
         setActiveEdits(prev => {
@@ -1188,9 +1533,19 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     const handleEdlChange = (newEdl: any) => {
         setMultiTrackEdl(newEdl);
         
+        // Find which track actually changed compared to current multiTrackEdl to avoid overriding edits
+        let baseTrack = newEdl.v1;
+        if (multiTrackEdl) {
+            const v1Changed = JSON.stringify(newEdl.v1) !== JSON.stringify(multiTrackEdl.v1);
+            const a1Changed = JSON.stringify(newEdl.a1) !== JSON.stringify(multiTrackEdl.a1);
+            if (a1Changed && !v1Changed) {
+                baseTrack = newEdl.a1;
+            }
+        }
+
         // Sync trimmed/dragged segments back to activeEdits
-        const newStitchClips = newEdl.v1.filter((seg: any) => seg.source && seg.source !== "main");
-        const mainKeeps = newEdl.v1.filter((seg: any) => !seg.source || seg.source === "main");
+        const newStitchClips = baseTrack.filter((seg: any) => seg.source && seg.source !== "main");
+        const mainKeeps = baseTrack.filter((seg: any) => !seg.source || seg.source === "main");
         
         const newCuts: any[] = [];
         let prevEnd = 0;
@@ -1235,6 +1590,29 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         handleSend("INIT_PLAN", true);
     }, [id, chat.length, hasInitialized, transcript]);
 
+    const handleStopAgent = useCallback(() => {
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+        }
+        setIsAgentTyping(false);
+        setChat(prev => {
+            const copy = [...prev];
+            const lastReasoningIdx = copy.map(m => m.role).lastIndexOf('reasoning');
+            if (lastReasoningIdx !== -1) {
+                const target = copy[lastReasoningIdx];
+                const steps = [...(target.steps || [])];
+                if (steps.length > 0) {
+                    const lastStep = steps[steps.length - 1];
+                    lastStep.status = 'error';
+                    lastStep.details = '⏹️ Выполнение прервано пользователем.';
+                }
+                copy[lastReasoningIdx] = { ...target, steps };
+            }
+            return [...copy, { role: "system", text: "⏹️ Операция прервана пользователем." }];
+        });
+    }, []);
+
     const handleSend = async (customMessage?: string, isInitial: boolean = false, forceEdits?: any[]) => {
         const textToSend = customMessage || message;
         if (!textToSend.trim() && !forceEdits) return;
@@ -1250,9 +1628,19 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         let willRender = false;
 
         try {
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+            }
+            const controller = new AbortController();
+            abortControllerRef.current = controller;
+
+            const currentAccessKey = typeof window !== 'undefined' ? localStorage.getItem('vibe_access_key') || '' : '';
+            const currentAccessLogin = typeof window !== 'undefined' ? localStorage.getItem('vibe_user_login') || '' : '';
+
             const response = await fetch(`${API_URL}/api/chat`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                signal: controller.signal,
+                headers: { "Content-Type": "application/json", "X-Access-Key": currentAccessKey, "X-User-Login": encodeURIComponent(currentAccessLogin) },
                 body: JSON.stringify({ 
                     file_id: id, 
                     message: textToSend, 
@@ -1268,150 +1656,213 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                 })
             });
 
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                if (response.status === 403) {
+                    handleAuthError(errorData.detail || 'access_key_invalid');
+                } else {
+                    setChat(prev => [...prev, { role: "system", text: `❌ Ошибка сервера: ${response.status}` }]);
+                }
+                setIsAgentTyping(false);
+                return;
+            }
+
             const reader = response.body?.getReader();
             const decoder = new TextDecoder("utf-8");
 
             if (reader) {
+                let streamBuffer = "";
+                
+                const processParsedData = (data: any) => {
+                    if (data.type === "log") {
+                        setLogs(prev => [...prev, data.message]);
+                        setTimeout(() => scrollToBottom(), 50);
+                    } else if (data.type === "reasoning" || data.type === "reasoning_event") {
+                        // Hide technical junk (budget counters, ENG checklists, etc.)
+                        if (data.user_visible === false) {
+                            return;
+                        }
+                        setChat(prev => {
+                            const copy = [...prev];
+                            const lastUserIdx = copy.map(m => m.role).lastIndexOf('user');
+                            const lastReasoningIdx = copy.map(m => m.role).lastIndexOf('reasoning');
+                            const newStep = {
+                                step: data.step,
+                                status: data.status,
+                                details: data.details,
+                                agent: data.agent,
+                                progress: data.progress,
+                                thought: data.thought,
+                                phase: data.phase,
+                                user_visible: data.user_visible !== false,
+                            };
+
+                            // Prefer matching by thought text so narrative lines update in place
+                            const matchKey = (s: any) =>
+                                (s.thought || s.step || "").slice(0, 48);
+
+                            if (lastReasoningIdx !== -1 && lastReasoningIdx > lastUserIdx) {
+                                const target = copy[lastReasoningIdx];
+                                const newSteps = [...(target.steps || [])];
+                                const existing = newSteps.find(
+                                    s => s.step === data.step || (data.thought && matchKey(s) === matchKey(newStep))
+                                );
+                                if (existing) {
+                                    existing.status = data.status;
+                                    if (data.details != null) existing.details = data.details;
+                                    if (data.agent != null) existing.agent = data.agent;
+                                    if (data.progress != null) existing.progress = data.progress;
+                                    if (data.thought != null) existing.thought = data.thought;
+                                    if (data.phase != null) existing.phase = data.phase;
+                                    existing.user_visible = true;
+                                } else {
+                                    newSteps.push(newStep);
+                                }
+                                copy[lastReasoningIdx] = { ...target, steps: newSteps };
+                                return copy;
+                            }
+                            return [...copy, { role: "reasoning", steps: [newStep] }];
+                        });
+                        setTimeout(() => scrollToBottom(), 50);
+                    } else if (data.type === "content_chunk") {
+                        if (data.content) {
+                            setChat(prev => {
+                                const copy = [...prev];
+                                const lastUserIdx = copy.map(m => m.role).lastIndexOf('user');
+                                const lastAiIdx = copy.map(m => m.role).lastIndexOf('ai');
+                                
+                                if (lastAiIdx !== -1 && lastAiIdx > lastUserIdx) {
+                                    copy[lastAiIdx] = { 
+                                        ...copy[lastAiIdx], 
+                                        text: (copy[lastAiIdx].text || "") + data.content 
+                                    };
+                                    return copy;
+                                } else {
+                                    return [...copy, { role: "ai", text: data.content, variants: [] }];
+                                }
+                            });
+                        }
+                        setTimeout(() => scrollToBottom(), 50);
+                    } else if (data.type === "result") {
+                        if (data.content && data.content.trim() !== "") {
+                            setChat(prev => {
+                                const copy = [...prev];
+                                const lastUserIdx = copy.map(m => m.role).lastIndexOf('user');
+                                const lastAiIdx = copy.map(m => m.role).lastIndexOf('ai');
+
+                                // Snapshot reasoning chain onto the AI message, then it collapses in UI
+                                const thoughts: any[] = [];
+                                for (let i = copy.length - 1; i > lastUserIdx; i--) {
+                                    if (copy[i].role !== 'reasoning') continue;
+                                    for (const s of (copy[i].steps || [])) {
+                                        if (s.user_visible === false) continue;
+                                        const text = s.thought || (s.details || '').split('\n')[0] || '';
+                                        if (!text) continue;
+                                        thoughts.unshift({
+                                            text,
+                                            status: 'done',
+                                            phase: s.phase,
+                                        });
+                                    }
+                                }
+                                
+                                if (lastAiIdx !== -1 && lastAiIdx > lastUserIdx) {
+                                    const existingText = copy[lastAiIdx].text || "";
+                                    const newContent = data.content || "";
+                                    const isGeneric = ["готово", "готово.", "done", "done.", "ready", "ready."].includes(newContent.trim().toLowerCase());
+                                    const finalSelection = (existingText.trim() && (isGeneric || newContent.trim().length < existingText.trim().length * 0.5)) 
+                                        ? existingText 
+                                        : (newContent || existingText);
+
+                                    copy[lastAiIdx] = { 
+                                        ...copy[lastAiIdx], 
+                                        text: finalSelection, 
+                                        variants: data.variants || [],
+                                        thoughts: thoughts.length ? thoughts : copy[lastAiIdx].thoughts,
+                                    };
+                                    return copy;
+                                } else {
+                                    return [...copy, {
+                                        role: "ai",
+                                        text: data.content,
+                                        variants: data.variants || [],
+                                        thoughts: thoughts.length ? thoughts : undefined,
+                                    }];
+                                }
+                            });
+                        }
+                        if (data.edits && data.edits.length > 0) {
+                            const hasUndo = data.edits.some((e: any) => e.action === "undo");
+                            const hasRedo = data.edits.some((e: any) => e.action === "redo");
+
+                            if (hasUndo) {
+                                handleUndo();
+                            } else if (hasRedo) {
+                                handleRedo();
+                            } else {
+                                setActiveEdits((prev: any[]) => {
+                                    const newActionTypes = new Set(data.edits.map((e: any) => e.action));
+                                    const kept = prev.filter((e: any) => !newActionTypes.has(e.action));
+                                    return [...kept, ...data.edits];
+                                });
+                                const dur = duration || 10000;
+                                const cuts = data.edits.filter((e: any) => e.action === "cut_out").sort((a: any, b: any) => a.start - b.start);
+                                if (cuts.length > 0) {
+                                    let current = 0;
+                                    const keeps = [];
+                                    for (const cut of cuts) {
+                                        if (cut.start > current) keeps.push({start: current, end: cut.start});
+                                        current = Math.max(current, cut.end);
+                                    }
+                                    if (current < dur) keeps.push({start: current, end: dur});
+                                    setMultiTrackEdl({ v1: keeps, a1: keeps });
+                                }
+                            }
+                        }
+                        setTimeout(() => scrollToBottom(), 50);
+                    } else if (data.type === "error") {
+                        setChat(prev => [...prev, { role: "ai", text: "Error: " + data.message }]);
+                    }
+                };
+
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
-                    const chunk = decoder.decode(value, { stream: true });
-                    const lines = chunk.split("\n").filter(line => line.trim() !== "");
+                    streamBuffer += decoder.decode(value, { stream: true });
+                    const lines = streamBuffer.split("\n");
+                    streamBuffer = lines.pop() || "";
                     
                     for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (!trimmed) continue;
                         try {
-                            const data = JSON.parse(line);
-                            if (data.type === "log") {
-                                setLogs(prev => [...prev, data.message]);
-                                setTimeout(() => scrollToBottom(), 50);
-                            } else if (data.type === "reasoning") {
-                                setChat(prev => {
-                                    const copy = [...prev];
-                                    const lastUserIdx = copy.map(m => m.role).lastIndexOf('user');
-                                    const lastReasoningIdx = copy.map(m => m.role).lastIndexOf('reasoning');
-                                    
-                                    if (lastReasoningIdx !== -1 && lastReasoningIdx > lastUserIdx) {
-                                        const target = copy[lastReasoningIdx];
-                                        const newSteps = [...(target.steps || [])];
-                                        const existing = newSteps.find(s => s.step === data.step);
-                                        if (existing) { existing.status = data.status; }
-                                        else { newSteps.push({ step: data.step, status: data.status }); }
-                                        copy[lastReasoningIdx] = { ...target, steps: newSteps };
-                                        return copy;
-                                    } else {
-                                        return [...copy, { role: "reasoning", steps: [{ step: data.step, status: data.status }] }];
-                                    }
-                                });
-                                setTimeout(() => scrollToBottom(), 50);
-                            } else if (data.type === "reasoning_event") {
-                                setChat(prev => {
-                                    const copy = [...prev];
-                                    const lastUserIdx = copy.map(m => m.role).lastIndexOf('user');
-                                    const lastReasoningIdx = copy.map(m => m.role).lastIndexOf('reasoning');
-                                    
-                                    const newStep = { 
-                                        step: data.step, 
-                                        status: data.status,
-                                        agent: data.agent,
-                                        details: data.details,
-                                        progress: data.progress
-                                    };
-                                    
-                                    if (lastReasoningIdx !== -1 && lastReasoningIdx > lastUserIdx) {
-                                        const target = copy[lastReasoningIdx];
-                                        const newSteps = [...(target.steps || [])];
-                                        const existing = newSteps.find(s => s.step === data.step);
-                                        if (existing) {
-                                            existing.status = data.status;
-                                            existing.details = data.details;
-                                            existing.progress = data.progress;
-                                            existing.agent = data.agent;
-                                        } else { newSteps.push(newStep); }
-                                        copy[lastReasoningIdx] = { ...target, steps: newSteps };
-                                        return copy;
-                                    } else {
-                                        return [...copy, { role: "reasoning", steps: [newStep] }];
-                                    }
-                                });
-                                setTimeout(() => scrollToBottom(), 50);
-                            } else if (data.type === "content_chunk") {
-                                if (data.content) {
-                                    setChat(prev => {
-                                        const copy = [...prev];
-                                        const lastUserIdx = copy.map(m => m.role).lastIndexOf('user');
-                                        const lastAiIdx = copy.map(m => m.role).lastIndexOf('ai');
-                                        
-                                        if (lastAiIdx !== -1 && lastAiIdx > lastUserIdx) {
-                                            copy[lastAiIdx] = { 
-                                                ...copy[lastAiIdx], 
-                                                text: (copy[lastAiIdx].text || "") + data.content 
-                                            };
-                                            return copy;
-                                        } else {
-                                            return [...copy, { role: "ai", text: data.content, variants: [] }];
-                                        }
-                                    });
-                                }
-                                setTimeout(() => scrollToBottom(), 50);
-                            } else if (data.type === "result") {
-                                if (data.content && data.content.trim() !== "") {
-                                    setChat(prev => {
-                                        const copy = [...prev];
-                                        const lastUserIdx = copy.map(m => m.role).lastIndexOf('user');
-                                        const lastAiIdx = copy.map(m => m.role).lastIndexOf('ai');
-                                        
-                                        if (lastAiIdx !== -1 && lastAiIdx > lastUserIdx) {
-                                            const existingText = copy[lastAiIdx].text || "";
-                                            const newContent = data.content || "";
-                                            const isGeneric = ["готово", "готово.", "done", "done.", "ready", "ready."].includes(newContent.trim().toLowerCase());
-                                            const finalSelection = (existingText.trim() && (isGeneric || newContent.trim().length < existingText.trim().length * 0.5)) 
-                                                ? existingText 
-                                                : (newContent || existingText);
-
-                                            copy[lastAiIdx] = { 
-                                                ...copy[lastAiIdx], 
-                                                text: finalSelection, 
-                                                variants: data.variants || [] 
-                                            };
-                                            return copy;
-                                        } else {
-                                            return [...copy, { role: "ai", text: data.content, variants: data.variants || [] }];
-                                        }
-                                    });
-                                }
-                                if (data.edits && data.edits.length > 0) {
-                                    setActiveEdits((prev: any[]) => {
-                                        const newActionTypes = new Set(data.edits.map((e: any) => e.action));
-                                        const kept = prev.filter((e: any) => !newActionTypes.has(e.action));
-                                        return [...kept, ...data.edits];
-                                    });
-                                    const dur = duration || 10000;
-                                    const cuts = data.edits.filter((e: any) => e.action === "cut_out").sort((a: any, b: any) => a.start - b.start);
-                                    if (cuts.length > 0) {
-                                        let current = 0;
-                                        const keeps = [];
-                                        for (const cut of cuts) {
-                                            if (cut.start > current) keeps.push({start: current, end: cut.start});
-                                            current = Math.max(current, cut.end);
-                                        }
-                                        if (current < dur) keeps.push({start: current, end: dur});
-                                        setMultiTrackEdl({ v1: keeps, a1: keeps });
-                                    }
-                                }
-                                setTimeout(() => scrollToBottom(), 50);
-                            } else if (data.type === "error") {
-                                setChat(prev => [...prev, { role: "ai", text: "Error: " + data.message }]);
-                            }
+                            const data = JSON.parse(trimmed);
+                            processParsedData(data);
                         } catch (e) {
-                            console.error("Failed to parse chunk:", line);
+                            console.warn("Stream line partial JSON buffer:", trimmed);
                         }
                     }
                 }
+
+                if (streamBuffer.trim()) {
+                    try {
+                        const data = JSON.parse(streamBuffer.trim());
+                        processParsedData(data);
+                    } catch (e) {
+                        console.warn("Remaining stream buffer parse fallback:", streamBuffer.trim());
+                    }
+                }
             }
-        } catch (error) {
-            setChat(prev => [...prev, { role: "ai", text: "Connection error." }]);
+
+        } catch (error: any) {
+            if (error.name === 'AbortError') {
+                console.log("Chat execution aborted by user.");
+            } else {
+                setChat(prev => [...prev, { role: "ai", text: "Connection error." }]);
+            }
         } finally {
             setIsAgentTyping(false);
+            abortControllerRef.current = null;
         }
     };
 
@@ -1419,114 +1870,118 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         try {
             setIsRendering(true);
             setChat((prev: any) => [...prev, { role: "system", text: `🎬 Launching render...` }]);
-            await fetch(`${API_URL}/api/chat/render`, {
+            const currentAccessKey = typeof window !== 'undefined' ? localStorage.getItem('vibe_access_key') || '' : '';
+            const currentAccessLogin = typeof window !== 'undefined' ? localStorage.getItem('vibe_user_login') || '' : '';
+
+            const response = await fetch(`${API_URL}/api/chat/render`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", "X-Access-Key": currentAccessKey, "X-User-Login": encodeURIComponent(currentAccessLogin) },
                 body: JSON.stringify({ 
                     file_id: id, font: fontStyle, font_size: fontSize, font_color: fontColor,
                     use_outline: useOutline, position: "center",
                     edits: activeEdits.length > 0 ? activeEdits : null,
-                    edl: multiTrackEdl, template_id: selectedTemplate || null
+                    edl: multiTrackEdl, 
+                    template_id: selectedTemplate || null,
+                    brand_id: null
                 })
             });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                if (response.status === 403) {
+                    handleAuthError(errorData.detail || 'access_key_invalid');
+                } else {
+                    setChat(prev => [...prev, { role: "system", text: `❌ Ошибка рендера: ${response.status}` }]);
+                }
+                setIsRendering(false);
+                return;
+            }
         } catch (error) {
-            setChat(prev => [...prev, { role: "system", text: "❌ Render error." }]);
+            setChat(prev => [...prev, { role: "system", text: "❌ Render connection error." }]);
         }
     };
 
     return (
-        <div className="flex-1 h-full bg-[#f8f9fa] dark:bg-[#090a0b] text-neutral-800 dark:text-neutral-200 flex flex-col font-sans overflow-hidden">
-            {/* ── Soft Glass Header ── */}
-            <header
-                className="h-[44px] flex items-center px-4 justify-between z-20 shrink-0 select-none bg-white/40 dark:bg-black/20 backdrop-blur-2xl border-b border-black/5 dark:border-white/5"
-            >
-                <div className="flex items-center gap-3">
-                    {/* Brand elements removed as requested */}
-                </div>
-                <div className="flex items-center gap-3">
-                    <div
-                        className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-full border border-neutral-200 dark:border-neutral-700 bg-white/50 dark:bg-neutral-800/50"
-                    >
-                        <span className="w-1.5 h-1.5 rounded-full animate-breathe bg-blue-500" style={{ display: "inline-block" }} />
-                        <span className="text-[11px] font-mono text-neutral-500 dark:text-neutral-400">live</span>
-                    </div>
+        <div className="h-screen w-full bg-[#111111] text-neutral-200 flex flex-col font-sans overflow-hidden">
+            {isMounted && !accessKeyReady && <AccessKeyModal onSuccess={handleAccessKeySuccess} initialError={accessKeyError} />}
+            
+            {/* ── Top Navigation Bar ── */}
+            <header className="h-[56px] flex items-center px-6 justify-between z-20 shrink-0 select-none bg-[#1C1C1E] border-b border-white/5">
+                {/* Left: Project Info */}
+                <div className="flex items-center gap-6">
+                    <button className="flex items-center gap-2 text-sm text-neutral-300 hover:text-white transition-colors">
+                        Мой проект
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                    </button>
 
-                    {/* Header toggles removed as requested (now in Left Navigation Dock) */}
+                    <div className="flex items-center gap-2 text-xs text-neutral-500 ml-2">
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>
+                        Сохранено в 12:48
+                    </div>
+                </div>
+
+                {/* Right: Actions */}
+                <div className="flex items-center gap-4">
 
                     {/* Undo/Redo History Controls */}
-                    <div className="flex items-center gap-0.5 bg-neutral-100 dark:bg-neutral-800 rounded-lg p-0.5 border border-neutral-200 dark:border-neutral-700">
+                    <div className="flex items-center gap-2">
                         <button
                             onClick={handleUndo}
                             disabled={!canUndo}
-                            className={`p-1 text-[11px] rounded-md transition-all flex items-center justify-center cursor-pointer select-none ${
-                                canUndo 
-                                    ? 'text-neutral-700 dark:text-neutral-200 hover:bg-white dark:hover:bg-neutral-700 active:scale-95' 
-                                    : 'text-neutral-400 dark:text-neutral-600 opacity-40 cursor-not-allowed'
-                            }`}
-                            title="Undo (Ctrl+Z)"
+                            className={`p-1.5 rounded transition-colors ${canUndo ? 'text-neutral-300 hover:text-white hover:bg-white/10' : 'text-neutral-600 cursor-not-allowed'}`}
                         >
-                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
                             </svg>
                         </button>
                         <button
                             onClick={handleRedo}
                             disabled={!canRedo}
-                            className={`p-1 text-[11px] rounded-md transition-all flex items-center justify-center cursor-pointer select-none ${
-                                canRedo 
-                                    ? 'text-neutral-700 dark:text-neutral-200 hover:bg-white dark:hover:bg-neutral-700 active:scale-95' 
-                                    : 'text-neutral-400 dark:text-neutral-600 opacity-40 cursor-not-allowed'
-                            }`}
-                            title="Redo (Ctrl+Y)"
+                            className={`p-1.5 rounded transition-colors ${canRedo ? 'text-neutral-300 hover:text-white hover:bg-white/10' : 'text-neutral-600 cursor-not-allowed'}`}
                         >
-                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 10H11a8 8 0 00-8 8v2m18-10l-6 6m6-6l-6-6" />
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10H11a8 8 0 00-8 8v2m18-10l-6 6m6-6l-6-6" />
                             </svg>
                         </button>
                     </div>
 
-                    {/* Format Toggle UI */}
-                    <div className="hidden sm:flex items-center gap-1 mx-2 bg-neutral-100 dark:bg-neutral-800 rounded-lg p-0.5 border border-neutral-200 dark:border-neutral-700">
-                        {(['auto', '16:9', '9:16'] as const).map(fmt => (
-                            <button
-                                key={fmt}
-                                onClick={() => setTargetFormat(fmt)}
-                                className={`px-2 py-0.5 text-[11px] font-semibold rounded-md transition-all uppercase tracking-wider ${
-                                    targetFormat === fmt 
-                                        ? 'bg-blue-500 text-white shadow-sm' 
-                                        : 'text-neutral-500 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200 hover:bg-white dark:hover:bg-neutral-700'
-                                }`}
-                            >
-                                {fmt}
-                            </button>
-                        ))}
-                    </div>
+                    <div className="h-4 w-px bg-white/10 mx-1" />
+
+                    <button className="flex items-center gap-2 px-3 py-1.5 rounded text-sm font-medium text-neutral-300 hover:text-white hover:bg-white/5 transition-colors border border-white/10">
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        Предпросмотр
+                    </button>
 
                     <button
-                        id="export-btn"
                         onClick={() => setShowExportModal(true)}
                         disabled={isExporting}
-                        className="flex items-center gap-2 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all cursor-pointer select-none"
-                        style={{
-                            background: isExporting ? "rgba(255,255,255,0.04)" : "linear-gradient(135deg, rgba(59,130,246,0.2), rgba(124,58,237,0.15))",
-                            border: isExporting ? "1px solid rgba(255,255,255,0.06)" : "1px solid rgba(59,130,246,0.3)",
-                            color: isExporting ? "#3A4151" : "#F5F7FA",
-                        }}
+                        className="flex items-center gap-2 px-4 py-1.5 rounded text-sm font-semibold text-black bg-orange-500 hover:bg-orange-400 transition-colors shadow-[0_0_15px_rgba(249,115,22,0.3)]"
                     >
-                        {isExporting ? (
-                            <>
-                                <div className="w-3 h-3 rounded-full" style={{ border: "1.5px solid rgba(255,255,255,0.15)", borderTopColor: "#3B82F6", animation: "spin 0.9s linear infinite" }} />
-                                <span>Exporting...</span>
-                            </>
-                        ) : (
-                            <>
-                                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                                </svg>
-                                <span>Export</span>
-                            </>
-                        )}
+                        {isExporting ? "Экспорт..." : "Экспорт"}
                     </button>
+
+                    {/* Format Toggle UI */}
+                    <div className="flex items-center gap-1 bg-[#2C2C2E] rounded p-1 border border-white/5">
+                        <select 
+                            value={targetFormat} 
+                            onChange={(e) => setTargetFormat(e.target.value as any)}
+                            className="bg-transparent text-sm text-neutral-200 outline-none cursor-pointer pl-1 pr-4 appearance-none"
+                            style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23ffffff'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E\")", backgroundPosition: "right 0.2rem center", backgroundRepeat: "no-repeat", backgroundSize: "1em" }}
+                        >
+                            <option value="auto" className="bg-[#2C2C2E]">Auto</option>
+                            <option value="16:9" className="bg-[#2C2C2E]">16:9</option>
+                            <option value="9:16" className="bg-[#2C2C2E]">9:16</option>
+                        </select>
+                    </div>
+
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-500 to-purple-500 border border-white/20 overflow-hidden">
+                        <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Felix" alt="User" className="w-full h-full object-cover" />
+                    </div>
                 </div>
             </header>
 
@@ -1543,73 +1998,14 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     selectedTemplate={selectedTemplate}
                     onClose={() => setShowExportModal(false)}
                     onStatusChange={(status) => setIsExporting(status)}
+                    brandId={brandId}
                 />
             )}
 
-            <div className="flex-1 flex overflow-hidden flex-row min-h-0">
-                {/* ── Desktop Left Side Navigation Bar ── */}
-                <div className="hidden md:flex flex-col w-[64px] border-r border-black/5 dark:border-white/5 bg-white/40 dark:bg-black/20 backdrop-blur-2xl py-4 items-center gap-4 shrink-0 z-20">
-                    <button
-                        onClick={() => setIsChatOpen(!isChatOpen)}
-                        className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all cursor-pointer relative group ${
-                            isChatOpen 
-                                ? 'bg-zinc-950 text-amber-500 border border-white/10 shadow-sm' 
-                                : 'text-neutral-500 hover:text-neutral-200 hover:bg-white/5 border border-transparent'
-                        }`}
-                        title="AI Editor"
-                    >
-                        <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-                        </svg>
-                        <div className="absolute left-14 scale-0 group-hover:scale-100 transition-all duration-150 origin-left bg-zinc-900 border border-white/10 text-white text-[10px] font-semibold tracking-wider px-2 py-1 rounded shadow-lg whitespace-nowrap z-50">
-                            AI Editor
-                        </div>
-                    </button>
-
-                    <button
-                        onClick={() => setIsLibraryOpen(!isLibraryOpen)}
-                        className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all cursor-pointer relative group ${
-                            isLibraryOpen 
-                                ? 'bg-zinc-950 text-amber-500 border border-white/10 shadow-sm' 
-                                : 'text-neutral-500 hover:text-neutral-200 hover:bg-white/5 border border-transparent'
-                        }`}
-                        title="Media Library"
-                    >
-                        <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
-                            <circle cx="9" cy="9" r="2"/>
-                            <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
-                        </svg>
-                        <div className="absolute left-14 scale-0 group-hover:scale-100 transition-all duration-150 origin-left bg-zinc-900 border border-white/10 text-white text-[10px] font-semibold tracking-wider px-2 py-1 rounded shadow-lg whitespace-nowrap z-50">
-                            Media Library
-                        </div>
-                    </button>
-                </div>
-
+            <div className="flex-1 flex overflow-hidden flex-row min-h-0 relative">
                 {/* Main Content Area */}
-                <div className="flex-1 flex overflow-hidden flex-col md:flex-row relative p-1.5 md:p-3 gap-1.5 md:gap-3 min-h-0">
+                <div className="flex-1 flex overflow-hidden flex-row relative p-1.5 md:p-3 gap-1.5 md:gap-3 min-h-0">
                 
-                {/* 1. Left Sidebar: Chat Assistant */}
-                {(!isMobile || activeMobileTab === 'chat') && isChatOpen && (
-                    <div className="w-full md:w-[290px] h-full min-h-0 flex-shrink-0 rounded-2xl border border-black/5 dark:border-white/5 bg-white/60 dark:bg-neutral-900/40 backdrop-blur-2xl transition-all duration-300 z-10 shadow-sm overflow-hidden flex flex-col">
-                        <ChatSidebar 
-                            chat={chat} 
-                            message={message} 
-                            setMessage={setMessage} 
-                            handleSend={handleSend} 
-                            isProcessing={isProcessing} 
-                            isAgentTyping={isAgentTyping} 
-                            isRenderingBackground={isRenderingBackground} 
-                            logs={logs} 
-                            chatEndRef={chatEndRef} 
-                            isMobile={isMobile}
-                            focusedItem={focusedItem}
-                            onClearFocus={() => setFocusedClipId(null)}
-                            isFocusSelectionActive={isFocusSelectionActive}
-                            onToggleFocusSelection={() => setIsFocusSelectionActive(prev => !prev)}
-                        />
-                    </div>
-                )}
                 {/* 2. Center: Preview + Timeline */}
                 {(!isMobile || activeMobileTab === 'editor') && (
                     <div className="flex-1 flex flex-col min-w-0 h-full gap-3 min-h-0">
@@ -1617,109 +2013,119 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                         <div
                             className="flex-1 overflow-hidden relative rounded-2xl bg-black/5 dark:bg-white/5 shadow-sm border border-black/5 dark:border-white/10"
                         >
-                            <SandboxPlayer
-                                ref={videoRef}
-                                videoSrc={currentVideo}
-                                edits={activeEditsWithSubtitles}
-                                edl={multiTrackEdl}
-                                isPlaying={isPlaying}
-                                targetFormat={targetFormat}
-                                onTogglePlay={() => setIsPlaying(!isPlaying)}
-                                onTimeUpdate={(t: number) => {
-                                    // time updates are already handled by SandboxPlayer internally
-                                }}
-                                duration={duration}
-                                mediaLibrary={mediaLibrary}
-                                transcript={transcript}
-                                subtitleConfig={sandboxSubtitleConfig}
-                                focusedClipId={focusedClipId}
-                                onUpdateEdit={handleUpdateEditByIndex}
-                                onUpdateSubtitleGlobal={handleUpdateSubtitleGlobal}
-                                onUpdateSubtitleGlobalMultiple={handleUpdateSubtitleGlobalMultiple}
-                                onUpdateSubtitleChunk={handleUpdateSubtitleChunk}
-                            />
+                            <VibeProvider currentConfig={activeVibeConfig}>
+                                <SandboxPlayer
+                                    ref={videoRef}
+                                    videoSrc={currentVideo}
+                                    rvmAlphaSrc={rvmAlphaSrc}
+                                    rvmMaskSrc={rvmMaskSrc}
+                                    edits={activeEditsWithSubtitles}
+                                    edl={multiTrackEdl}
+                                    isPlaying={isPlaying}
+                                    targetFormat={targetFormat}
+                                    onTogglePlay={() => setIsPlaying(!isPlaying)}
+                                    onTimeUpdate={(t: number) => {
+                                        // time updates are already handled by SandboxPlayer internally
+                                    }}
+                                    duration={duration}
+                                    mediaLibrary={mediaLibrary}
+                                    transcript={transcript}
+                                    subtitleConfig={sandboxSubtitleConfig}
+                                    focusedClipId={focusedClipId}
+                                    onUpdateEdit={handleUpdateEditByIndex}
+                                    onUpdateSubtitleGlobal={handleUpdateSubtitleGlobal}
+                                    onUpdateSubtitleGlobalMultiple={handleUpdateSubtitleGlobalMultiple}
+                                    onUpdateSubtitleChunk={handleUpdateSubtitleChunk}
+                                    brandId={brandId}
+                                    brandAssets={brandAssets}
+                                    selectedTemplate={selectedTemplate}
+                                />
+                                {rotoProcessing && (
+                                    <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
+                                        <div className="px-3 py-1.5 rounded-full bg-black/70 border border-fuchsia-500/40 text-[11px] text-fuchsia-200 shadow-lg backdrop-blur-sm">
+                                            RVM: вырезаю спикера для текста за ним…
+                                        </div>
+                                    </div>
+                                )}
+                                {!rotoProcessing && rotoReadyFlash && (
+                                    <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
+                                        <div className="px-3 py-1.5 rounded-full bg-black/70 border border-emerald-500/40 text-[11px] text-emerald-200 shadow-lg backdrop-blur-sm">
+                                            RVM готов — текст за спикером
+                                        </div>
+                                    </div>
+                                )}
+                            </VibeProvider>
                         </div>
 
-                        {/* Resizer pill */}
-                        {!isMobile && (
-                            <div
-                                className="h-4 w-full cursor-row-resize flex items-center justify-center group relative z-50"
-                                onPointerDown={(e) => {
-                                    e.preventDefault();
-                                    e.currentTarget.setPointerCapture(e.pointerId);
-                                    setIsResizing(true);
-                                }}
-                                onPointerMove={(e) => {
-                                    if (!isResizing) return;
-                                    const windowHeight = window.innerHeight;
-                                    let newHeight = windowHeight - e.clientY - 24;
-                                    newHeight = Math.max(150, Math.min(windowHeight * 0.7, newHeight));
-                                    setTimelineHeight(newHeight);
-                                }}
-                                onPointerUp={(e) => {
-                                    try {
-                                        e.currentTarget.releasePointerCapture(e.pointerId);
-                                    } catch (err) {}
-                                    setIsResizing(false);
-                                }}
-                            >
-                                <div
-                                    className="w-8 h-1 rounded-full transition-all duration-200"
-                                    style={{ background: isResizing ? "rgba(59,130,246,0.5)" : "rgba(255,255,255,0.08)" }}
-                                />
-                                {isResizing && <div className="fixed inset-0 cursor-row-resize z-[100]" />}
-                            </div>
-                        )}
+                        {/* Quick Actions Row */}
+                        <div className="flex items-center justify-center gap-2 mb-1 z-20">
+                            {[
+                                { icon: "✨", label: "Auto Edit", primary: true, prompt: "Сделай авто-монтаж ролика: добавь музыку, динамичные зумы, переходы и субтитры" },
+                                { icon: "🎨", label: "Графика", prompt: "Добавь красивую 3D инфографику (A-roll) по смыслу видео на ключевых моментах с Three.js и Remotion" },
+                                { icon: "🎬", label: "B-roll", prompt: "Добавь стоковые видео-перебивки B-roll по теме видео на ключевых моментах" },
+                                { icon: "📝", label: "Субтитры", prompt: "Настрой стиль субтитров (крупный шрифт Montserrat, тени, караоке-анимация pop)" },
+                                { icon: "🎵", label: "Музыка", prompt: "Подбери фоновую музыку под настроение ролика" },
+                                { icon: "⚡", label: "Улучшить", prompt: "Проведи критический аудит ролика и добавь недостающие зумы или перебивки" },
+                            ].map((btn, i) => (
+                                <button 
+                                    key={i}
+                                    onClick={() => handleSend(btn.prompt)}
+                                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-medium transition-colors border ${
+                                        btn.primary 
+                                            ? "bg-[#2A1D15] text-orange-500 border-orange-500/30 hover:bg-[#36251A]" 
+                                            : "bg-[#1C1C1E] text-neutral-300 border-white/5 hover:bg-[#2C2C2E]"
+                                    }`}
+                                >
+                                    <span>{btn.icon}</span>
+                                    {btn.label}
+                                </button>
+                            ))}
+                            <button className="flex items-center justify-center w-9 h-9 rounded-xl bg-[#1C1C1E] border border-white/5 hover:bg-[#2C2C2E] text-neutral-400 transition-colors">
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h.01M12 12h.01M19 12h.01M6 12a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0z" />
+                                </svg>
+                            </button>
+                        </div>
+
+                        {/* Statically fixed timeline panel */}
 
                         {/* Timeline Panel */}
                         <div
-                            className="flex-shrink-0 flex flex-col overflow-hidden relative bg-white/60 dark:bg-neutral-900/40 backdrop-blur-2xl shadow-sm"
-                            style={{
-                                height: isMobile ? "220px" : timelineHeight,
-                                borderRadius: "1rem", /* rounded-2xl */
-                                border: "1px solid rgba(0,0,0,0.05)",
-                            }}
+                            className="flex-shrink-0 flex flex-col overflow-hidden relative bg-[#161618] border border-white/5 rounded-2xl"
+                            style={{ height: isMobile ? "220px" : timelineHeight }}
                         >
                             {/* Timeline toolbar */}
-                            <div
-                                className="h-9 flex items-center px-3 justify-between shrink-0 border-b border-black/5 dark:border-white/5"
-                            >
-                                <div className="flex gap-1 items-center">
+                            <div className="h-10 flex items-center px-4 justify-between shrink-0 border-b border-white/5 bg-[#1C1C1E]">
+                                <div className="flex bg-[#161618] p-1 rounded-lg border border-white/5 gap-1">
                                     {(['text', 'video'] as const).map(tab => (
                                         <button
                                             key={tab}
                                             onClick={() => setActiveTab(tab)}
-                                            className="px-2 py-0.5 rounded-md text-[11px] font-mono transition-all cursor-pointer"
-                                            style={{
-                                                background: activeTab === tab ? "rgba(59,130,246,0.12)" : "transparent",
-                                                color: activeTab === tab ? "rgba(59,130,246,0.9)" : "#3A4151",
-                                                border: activeTab === tab ? "1px solid rgba(59,130,246,0.2)" : "1px solid transparent",
-                                            }}
+                                            className={`px-3 py-1 rounded-md text-[10px] font-semibold tracking-wide uppercase transition-all ${
+                                                activeTab === tab 
+                                                    ? "bg-[#2C2C2E] text-white shadow-sm" 
+                                                    : "text-neutral-500 hover:text-neutral-300"
+                                            }`}
                                         >
-                                            {tab === 'text' ? 'Text Timeline' : 'Track Timeline'}
+                                            {tab === 'text' ? 'Текст' : 'Медиа'}
                                         </button>
                                     ))}
                                 </div>
                                 {activeTab === 'text' && (
                                     <button
                                         onClick={handleDirectRender}
-                                        className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] font-medium transition-all cursor-pointer"
-                                        style={{
-                                            background: "rgba(255,255,255,0.04)",
-                                            border: "1px solid rgba(255,255,255,0.08)",
-                                            color: "#9AA4B2",
-                                        }}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-orange-500/10 text-orange-500 border border-orange-500/20 hover:bg-orange-500/20 transition-colors"
                                     >
-                                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                                         </svg>
-                                        <span>Render</span>
+                                        <span>Рендер</span>
                                     </button>
                                 )}
                             </div>
 
-                            <div className="flex-1 p-2 overflow-hidden">
+                            <div className="flex-1 overflow-hidden">
                                 {activeTab === 'text' ? (
                                     <TimelineEditor 
                                         transcript={transcript} 
@@ -1760,36 +2166,239 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     </div>
                 )}
 
-                {/* 3. Right Sidebar: Asset Library */}
-                {(!isMobile || activeMobileTab === 'library') && isLibraryOpen && (
-                    <div className="w-full md:w-[290px] h-full min-h-0 flex-shrink-0 rounded-2xl border border-black/5 dark:border-white/5 bg-white/60 dark:bg-neutral-900/40 backdrop-blur-2xl transition-all duration-300 z-10 shadow-sm overflow-hidden flex flex-col">
-                        <ReferencesSidebar 
-                            activeEdits={activeEdits} 
-                            onActiveEditsChange={setActiveEdits} 
-                            duration={duration} 
-                            onClose={isMobile ? undefined : () => setIsLibraryOpen(false)}
-                            isMobile={isMobile}
-                            fileId={id as string}
-                            mediaLibrary={mediaLibrary}
-                            onMediaLibraryChange={setMediaLibrary}
-                            focusedClipId={focusedClipId}
-                            focusedItem={focusedItem}
-                            onClearFocus={() => setFocusedClipId(null)}
-                            multiTrackEdl={multiTrackEdl}
-                            onEdlChange={handleEdlChange}
-                            onDragStateChange={setDraggingAssetType}
-                            onStitchClip={(assetId: string, assetDuration: number) => {
-                                setActiveEdits(prev => [
-                                    ...prev,
-                                    { action: "stitch_clip", source: assetId, start: 0, end: assetDuration }
-                                ]);
-                            }}
-                            videoRef={videoRef}
-                            selectedSubIndices={selectedSubIndices}
-                            subtitleChunks={subtitleChunks}
-                        />
+                {/* ── Right Sidebars Area ── */}
+                {isChatOpen && (
+                    <div className="rainbow-glow-container w-full md:w-[330px] h-full min-h-0 flex-shrink-0 transition-all duration-300 z-10">
+                        <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
+                            <ChatSidebar 
+                                chat={chat} 
+                                message={message} 
+                                setMessage={setMessage} 
+                                handleSend={handleSend} 
+                                isProcessing={isProcessing} 
+                                isAgentTyping={isAgentTyping} 
+                                isRenderingBackground={isRenderingBackground} 
+                                logs={logs} 
+                                chatEndRef={chatEndRef} 
+                                isMobile={isMobile}
+                                focusedItem={focusedItem}
+                                onClearFocus={() => setFocusedClipId(null)}
+                                isFocusSelectionActive={isFocusSelectionActive}
+                                onToggleFocusSelection={() => setIsFocusSelectionActive(prev => !prev)}
+                                onStopAgent={handleStopAgent}
+                            />
+                        </div>
                     </div>
                 )}
+
+                {isLibraryOpen && (
+                    <div className="rainbow-glow-container w-full md:w-[330px] h-full min-h-0 flex-shrink-0 transition-all duration-300 z-10">
+                        <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
+                            <ReferencesSidebar 
+                                activeEdits={activeEdits} 
+                                onActiveEditsChange={setActiveEdits} 
+                                duration={duration} 
+                                onClose={isMobile ? undefined : () => setIsLibraryOpen(false)}
+                                isMobile={isMobile}
+                                fileId={id as string}
+                                mediaLibrary={mediaLibrary}
+                                onMediaLibraryChange={setMediaLibrary}
+                                focusedClipId={focusedClipId}
+                                focusedItem={focusedItem}
+                                onClearFocus={() => setFocusedClipId(null)}
+                                multiTrackEdl={multiTrackEdl}
+                                onEdlChange={handleEdlChange}
+                                onDragStateChange={setDraggingAssetType}
+                                onStitchClip={(assetId: string, assetDuration: number) => {
+                                    setActiveEdits(prev => [
+                                        ...prev,
+                                        { action: "stitch_clip", source: assetId, start: 0, end: assetDuration }
+                                    ]);
+                                }}
+                                videoRef={videoRef}
+                                selectedSubIndices={selectedSubIndices}
+                                subtitleChunks={subtitleChunks}
+                                onBrandAssetsChange={handleBrandAssetsChange}
+                                onUpdateSubtitleGlobal={handleUpdateSubtitleGlobal}
+                            />
+                        </div>
+                    </div>
+                )}
+
+                {isTextOpen && (
+                    <div className="rainbow-glow-container w-full md:w-[330px] h-full min-h-0 flex-shrink-0 transition-all duration-300 z-10">
+                        <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
+                            <TextSidebar
+                                fontStyle={fontStyle}
+                                setFontStyle={setFontStyle}
+                                fontSize={fontSize}
+                                setFontSize={setFontSize}
+                                fontColor={fontColor}
+                                setFontColor={setFontColor}
+                                useOutline={useOutline}
+                                setUseOutline={setUseOutline}
+                                onClose={() => setIsTextOpen(false)}
+                            />
+                        </div>
+                    </div>
+                )}
+
+                {isGraphicsOpen && (
+                    <div className="rainbow-glow-container w-full md:w-[330px] h-full min-h-0 flex-shrink-0 transition-all duration-300 z-10">
+                        <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
+                            <GraphicsSidebar
+                                activeEdits={activeEdits}
+                                onEditsChange={setActiveEdits}
+                                onClose={() => setIsGraphicsOpen(false)}
+                                currentTime={videoRef.current ? videoRef.current.currentTime : 0}
+                            />
+                        </div>
+                    </div>
+                )}
+
+                {isMusicOpen && (
+                    <div className="rainbow-glow-container w-full md:w-[330px] h-full min-h-0 flex-shrink-0 transition-all duration-300 z-10">
+                        <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
+                            <MusicSidebar
+                                activeEdits={activeEdits}
+                                onEditsChange={setActiveEdits}
+                                onClose={() => setIsMusicOpen(false)}
+                            />
+                        </div>
+                    </div>
+                )}
+
+                {isMaskingOpen && (
+                    <div className="rainbow-glow-container w-full md:w-[330px] h-full min-h-0 flex-shrink-0 transition-all duration-300 z-10">
+                        <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
+                            <MaskingSidebar
+                                activeEdits={activeEdits}
+                                onEditsChange={setActiveEdits}
+                                onClose={() => setIsMaskingOpen(false)}
+                            />
+                        </div>
+                    </div>
+                )}
+
+                {isTransitionsOpen && (
+                    <div className="rainbow-glow-container w-full md:w-[330px] h-full min-h-0 flex-shrink-0 transition-all duration-300 z-10">
+                        <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
+                            <TransitionsSidebar
+                                activeEdits={activeEdits}
+                                onEditsChange={setActiveEdits}
+                                onClose={() => setIsTransitionsOpen(false)}
+                                currentTime={videoRef.current ? videoRef.current.currentTime : 0}
+                                fileId={id}
+                            />
+                        </div>
+                    </div>
+                )}
+                </div>
+
+                {/* ── Right Tool Navigation (matches global Sidebar style) ── */}
+                <div className="hidden md:flex flex-col w-[64px] hover:w-[200px] m-2 p-3 rounded-[16px] bg-neutral-900/70 backdrop-blur-[20px] border border-white/[0.07] shadow-lg z-20 shrink-0 h-auto self-start transition-all duration-300 group overflow-hidden">
+
+                    {/* Tool buttons */}
+                    {[
+                        {
+                            id: "chat",
+                            label: "Чат",
+                            isOpen: isChatOpen,
+                            badge: true,
+                            onClick: () => { setIsChatOpen(!isChatOpen); setIsLibraryOpen(false); setIsTextOpen(false); setIsGraphicsOpen(false); setIsMusicOpen(false); setIsMaskingOpen(false); setIsTransitionsOpen(false); },
+                            icon: (
+                                <svg className="w-[18px] h-[18px] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                                </svg>
+                            )
+                        },
+                        {
+                            id: "library",
+                            label: "Медиа",
+                            isOpen: isLibraryOpen,
+                            onClick: () => { setIsLibraryOpen(!isLibraryOpen); setIsChatOpen(false); setIsTextOpen(false); setIsGraphicsOpen(false); setIsMusicOpen(false); setIsMaskingOpen(false); setIsTransitionsOpen(false); },
+                            icon: (
+                                <svg className="w-[18px] h-[18px] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                </svg>
+                            )
+                        },
+                        {
+                            id: "text",
+                            label: "Текст",
+                            isOpen: isTextOpen,
+                            onClick: () => { setIsTextOpen(!isTextOpen); setIsChatOpen(false); setIsLibraryOpen(false); setIsGraphicsOpen(false); setIsMusicOpen(false); setIsMaskingOpen(false); setIsTransitionsOpen(false); },
+                            icon: (
+                                <svg className="w-[18px] h-[18px] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M4 6h16M4 12h16m-7 6h7" />
+                                </svg>
+                            )
+                        },
+                        {
+                            id: "graphics",
+                            label: "Графика",
+                            isOpen: isGraphicsOpen,
+                            onClick: () => { setIsGraphicsOpen(!isGraphicsOpen); setIsChatOpen(false); setIsLibraryOpen(false); setIsTextOpen(false); setIsMusicOpen(false); setIsMaskingOpen(false); setIsTransitionsOpen(false); },
+                            icon: (
+                                <svg className="w-[18px] h-[18px] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M14 10l-2 1m0 0l-2-1m2 1v2.5M20 7l-2 1m2-1l-2-1m2 1v2.5M14 4l-2-1-2 1M4 7l2-1M4 7l2 1M4 7v2.5M12 21l-2-1m2 1l2-1m-2 1v-2.5M6 18l-2-1v-2.5M18 18l2-1v-2.5" />
+                                </svg>
+                            )
+                        },
+                        {
+                            id: "music",
+                            label: "Музыка",
+                            isOpen: isMusicOpen,
+                            onClick: () => { setIsMusicOpen(!isMusicOpen); setIsChatOpen(false); setIsLibraryOpen(false); setIsTextOpen(false); setIsGraphicsOpen(false); setIsMaskingOpen(false); setIsTransitionsOpen(false); },
+                            icon: (
+                                <svg className="w-[18px] h-[18px] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                                </svg>
+                            )
+                        },
+                        {
+                            id: "masking",
+                            label: "Маскинг",
+                            isOpen: isMaskingOpen,
+                            onClick: () => { setIsMaskingOpen(!isMaskingOpen); setIsChatOpen(false); setIsLibraryOpen(false); setIsTextOpen(false); setIsGraphicsOpen(false); setIsMusicOpen(false); setIsTransitionsOpen(false); },
+                            icon: (
+                                <svg className="w-[18px] h-[18px] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                                </svg>
+                            )
+                        },
+                        {
+                            id: "transitions",
+                            label: "Переходы",
+                            isOpen: isTransitionsOpen,
+                            onClick: () => { setIsTransitionsOpen(!isTransitionsOpen); setIsChatOpen(false); setIsLibraryOpen(false); setIsTextOpen(false); setIsGraphicsOpen(false); setIsMusicOpen(false); setIsMaskingOpen(false); },
+                            icon: (
+                                <svg className="w-[18px] h-[18px] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                                </svg>
+                            )
+                        },
+                    ].map((item) => (
+                        <button
+                            key={item.id}
+                            onClick={item.onClick}
+                            className={`relative flex items-center gap-3.5 px-2.5 py-2.5 rounded-[12px] text-[13px] font-medium transition-all duration-200 w-full text-left mb-1 ${
+                                item.isOpen
+                                    ? "bg-orange-500/15 text-orange-400 border border-orange-500/20"
+                                    : "text-neutral-400 hover:bg-white/[0.06] hover:text-neutral-100 border border-transparent"
+                            }`}
+                        >
+                            <span className="relative shrink-0">
+                                {item.icon}
+                                {item.badge && (
+                                    <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-orange-500 rounded-full border border-neutral-900" />
+                                )}
+                            </span>
+                            <span className="whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-300 text-[13px]">
+                                {item.label}
+                            </span>
+                        </button>
+                    ))}
                 </div>
             </div>
 
@@ -1814,7 +2423,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                         </svg>
-                        <span className="text-[13px] font-semibold uppercase tracking-wider">AI Editor</span>
+                        <span className="text-[13px] font-semibold uppercase tracking-wider">ИИ Чат</span>
                     </button>
                     <button
                         onClick={() => setActiveMobileTab('editor')}
@@ -1824,7 +2433,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 022 2z" />
                         </svg>
-                        <span className="text-[13px] font-semibold uppercase tracking-wider">Edit</span>
+                        <span className="text-[13px] font-semibold uppercase tracking-wider">Монтаж</span>
                     </button>
                     <button
                         onClick={() => {
@@ -1837,7 +2446,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
                         </svg>
-                        <span className="text-[13px] font-semibold uppercase tracking-wider">Library</span>
+                        <span className="text-[13px] font-semibold uppercase tracking-wider">Библиотека</span>
                     </button>
                 </div>
             )}

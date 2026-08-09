@@ -5,6 +5,17 @@ Replaces ad-hoc list modifications with declarative mutations.
 
 from typing import Dict, Any, List, Optional
 
+# Fullscreen visual layers that cover the entire screen and are mutually exclusive
+FULLSCREEN_VISUAL_LAYERS = {
+    "add_broll",
+    "semantic_scene",
+    "scene_override",
+    "canvas_overlay",
+    "hyperframes_html",
+    "add_hyperframes_graphics",
+    "add_motion_graphic"
+}
+
 class TimelineState:
     def __init__(self, initial_edits: Optional[List[Dict[str, Any]]] = None):
         self.edits = []
@@ -22,24 +33,42 @@ class TimelineState:
         self.edits.append(edit)
         return edit
 
-    def add_broll(self, start: float, end: float, query: str) -> Dict[str, Any]:
+    def add_broll(self, start: float, end: float, query: str, layout: str = "full") -> Dict[str, Any]:
         """Insert a B-roll clip from stock database."""
+        # Remove any existing conflicting visual layers (B-roll, scenes, html overlays)
+        self.remove_visual_collisions(start, end)
+        
         edit = {
             "action": "add_broll",
             "start": round(start, 2),
             "end": round(end, 2),
-            "query": query.strip()
+            "query": query.strip(),
+            "layout": layout
         }
-        # Remove any existing conflicting B-rolls at overlapping timesteps
-        self.remove_overlapping("add_broll", start, end)
         self.edits.append(edit)
         return edit
 
-    def add_zoom(self, start: float, end: float, type: str = "zoom_in") -> Dict[str, Any]:
-        """Add a cinematic camera punch/zoom effect."""
+    def add_youtube_broll(self, start: float, end: float, query_or_url: str, resolved_path: str, layout: str = "full") -> Dict[str, Any]:
+        """Insert a YouTube or web-search downloaded B-roll clip."""
+        self.remove_visual_collisions(start, end)
+        
+        edit = {
+            "action": "add_broll",
+            "start": round(start, 2),
+            "end": round(end, 2),
+            "query": query_or_url.strip(),
+            "resolved_path": resolved_path,
+            "layout": layout
+        }
+        self.edits.append(edit)
+        return edit
+
+    def add_zoom(self, start: float, end: float, type: str = "zoom_in", intensity: float = 1.14) -> Dict[str, Any]:
+        """Add a cinematic camera punch/zoom effect (smooth settle, no hard cut)."""
         edit = {
             "action": "camera_zoom",
             "type": type,
+            "intensity": round(float(intensity or 1.14), 3),
             "start": round(start, 2),
             "end": round(end, 2)
         }
@@ -65,7 +94,8 @@ class TimelineState:
         inactive_opacity: Optional[float] = None,
         active_scale: Optional[float] = None,
         x: Optional[float] = None,
-        y: Optional[float] = None
+        y: Optional[float] = None,
+        behind_speaker: Optional[bool] = None
     ) -> Dict[str, Any]:
         """Apply global kinetic typography configurations (all style parameters, incremental merge)."""
         # Find existing subtitles edit or create a default one
@@ -77,8 +107,8 @@ class TimelineState:
                 "font_size": 80,
                 "font_color": "#FFFFFF",
                 "accent_color": "#FACC15",
-                "use_outline": True,
-                "use_shadow": False,
+                "use_outline": False,
+                "use_shadow": True,
                 "shadow_blur": 18,
                 "animation_style": "pop",
                 "position": "bottom",
@@ -93,7 +123,10 @@ class TimelineState:
         if font_color is not None: edit["font_color"] = font_color
         if use_outline is not None: edit["use_outline"] = use_outline
         if animation_style is not None: edit["animation_style"] = animation_style
-        if position is not None: edit["position"] = position
+        if position is not None: 
+            edit["position"] = position
+            if position == "behind_speaker":
+                edit["behind_speaker"] = True
         if accent_color is not None: edit["accent_color"] = accent_color
         if use_shadow is not None: edit["use_shadow"] = use_shadow
         if shadow_blur is not None: edit["shadow_blur"] = shadow_blur
@@ -105,6 +138,7 @@ class TimelineState:
         if active_scale is not None: edit["active_scale"] = active_scale
         if x is not None: edit["x"] = x
         if y is not None: edit["y"] = y
+        if behind_speaker is not None: edit["behind_speaker"] = behind_speaker
 
         return edit
 
@@ -129,18 +163,50 @@ class TimelineState:
         self.edits.append(edit)
         return edit
 
-    def add_graphics(self, start: float, duration: float, data: Any, type: str = "canvas_overlay") -> Dict[str, Any]:
-        """Add highly engaging infographic or styled sticker layers."""
+    def add_graphics(
+        self,
+        start: float,
+        duration: float,
+        data: Any,
+        type: str = "canvas_overlay",
+        mode: str = "overlay",
+        layout: Optional[str] = None,
+        design_aspect: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Add overlay plates or fullscreen graphic B-rolls. Persists mode for preview/export."""
+        end = start + duration
+        normalized_mode = "full_broll" if mode in ("full_broll", "fullscreen", "cover", "full") else (
+            "split" if mode == "split" or layout == "split" else "overlay"
+        )
+
+        # Fullscreen idea-plates wipe other covering layers; overlay cards only replace other HTML plates
+        if normalized_mode == "full_broll":
+            self.remove_visual_collisions(start, end)
+        else:
+            for action in (
+                "hyperframes_html",
+                "canvas_overlay",
+                "add_hyperframes_graphics",
+                "add_motion_graphic",
+                "add_dynamic_graphic",
+                "semantic_scene",
+                "scene_override",
+            ):
+                self.remove_overlapping(action, start, end)
+
         edit = {
             "action": type,
             "start": round(start, 2),
-            "end": round(start + duration, 2)
+            "end": round(end, 2),
+            "mode": normalized_mode,
+            "layout": layout or normalized_mode,
+            "design_aspect": design_aspect or "16:9",
         }
         if type == "semantic_scene":
             edit["scene_data"] = data
         else:
             edit["html_content"] = data
-            
+
         self.edits.append(edit)
         return edit
 
@@ -158,9 +224,79 @@ class TimelineState:
 
         self.edits = [e for e in self.edits if not overlaps(e)]
 
+    def remove_visual_collisions(self, start: float, end: float):
+        """Remove any overlapping fullscreen visual elements to prevent visual clutter/stacking."""
+        def overlaps(e):
+            if e.get("action") not in FULLSCREEN_VISUAL_LAYERS:
+                return False
+            e_start = e.get("start")
+            e_end = e.get("end")
+            if e_start is None or e_end is None:
+                return False
+            # Check overlap: max(start1, start2) < min(end1, end2)
+            return max(start, e_start) < min(end, e_end)
+
+        self.edits = [e for e in self.edits if not overlaps(e)]
+
     def remove_action_types(self, action_types: List[str]):
         """Clear specific tool types entirely from the timeline."""
         self.edits = [e for e in self.edits if e.get("action") not in action_types]
+
+    def toggle_speaker_masking(self, enabled: bool, effect_type: str = "behind_text", blur_strength: float = 10.0) -> Dict[str, Any]:
+        """Toggle AI speaker masking and background separation effects."""
+        # Remove any existing speaker masking edits
+        self.edits = [e for e in self.edits if e.get("action") != "speaker_masking"]
+        
+        edit = {
+            "action": "speaker_masking",
+            "enabled": enabled,
+            "effect_type": effect_type,
+            "blur_strength": blur_strength
+        }
+        self.edits.append(edit)
+        return edit
+
+    def add_motion_graphic(self, start: float, duration: float, text: str, subtext: str = "", position: str = "top-right", style: str = "cinematic", accent_color: str = "#a78bfa", geometry: str = None, material: str = None, custom_shader: str = None, animation: str = None, particle_count: int = None, speed: float = None) -> Dict[str, Any]:
+        """Add premium Three.js motion graphics overlay (cinematic, blueprint, liquid, or custom)."""
+        end = start + duration
+        self.remove_visual_collisions(start, end)
+        edit = {
+            "action": "add_motion_graphic",
+            "start": round(start, 2),
+            "end": round(end, 2),
+            "text": text,
+            "subtext": subtext,
+            "position": position,
+            "style": style,
+            "accent_color": accent_color
+        }
+        if geometry:
+            edit["geometry"] = geometry
+        if material:
+            edit["material"] = material
+        if custom_shader:
+            edit["custom_shader"] = custom_shader
+        if animation:
+            edit["animation"] = animation
+        if particle_count is not None:
+            edit["particle_count"] = particle_count
+        if speed is not None:
+            edit["speed"] = speed
+            
+        self.edits.append(edit)
+        return edit
+
+    def set_vibe_config(self, vibe_config: Dict[str, Any]) -> Dict[str, Any]:
+        """Set the global visual identity and animation physics tokens."""
+        # Remove any existing set_vibe_config edit to keep it unique
+        self.edits = [e for e in self.edits if e.get("action") != "set_vibe_config"]
+        
+        edit = {
+            "action": "set_vibe_config",
+            "vibe_config": vibe_config
+        }
+        self.edits.append(edit)
+        return edit
 
     def get_serialized_edits(self) -> List[Dict[str, Any]]:
         """Return the flat list representation for video compile and preview rendering."""

@@ -1,4 +1,5 @@
-from fastapi import APIRouter, File, UploadFile, HTTPException, BackgroundTasks
+from fastapi import APIRouter, File, UploadFile, HTTPException, BackgroundTasks, Depends
+from app.api.admin import validate_user_access_key
 import os
 import uuid
 import shutil
@@ -10,7 +11,10 @@ from app.services.vlm_service import analyze_video_scenes, format_visual_context
 
 router = APIRouter(prefix="/api/video", tags=["Video"])
 
-UPLOAD_DIR = "uploads"
+from app.core.paths import UPLOAD_DIR as _UPLOAD_PATH, ensure_data_dirs
+
+ensure_data_dirs()
+UPLOAD_DIR = str(_UPLOAD_PATH)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 def log_progress(file_id: str, message: str):
@@ -116,7 +120,7 @@ async def process_video_pipeline(video_path: str, audio_path: str, file_id: str)
         log_progress(file_id, f"⚠️ Визуальный анализ пропущен (нет кадров или ошибка VLM ({VLM_MODEL})).")
 
 @router.post("/upload")
-async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = File(...), _key=Depends(validate_user_access_key)):
     ext = os.path.splitext(file.filename)[1].lower()
     c_type = file.content_type or ""
     # We allow any file here to prevent strict browser rejections. 
@@ -357,6 +361,7 @@ class ExportSettings(BaseModel):
     font_color: Optional[str] = "white"
     use_outline: Optional[bool] = True
     template_id: Optional[str] = None
+    brand_id: Optional[str] = None
 
 RESOLUTION_MAP = {
     "720p":  (1280, 720),
@@ -420,6 +425,7 @@ async def run_export_task(file_id: str, settings: ExportSettings):
             use_outline=settings.use_outline if settings.use_outline is not None else True,
             font_color=settings.font_color or "white",
             template_id=settings.template_id,
+            brand_id=settings.brand_id,
         )
         log_progress(file_id, f"✅ Экспорт завершён! Файл готов к скачиванию.")
     except Exception as e:
@@ -557,7 +563,7 @@ class RecommendAudioRequest(BaseModel):
     template_id: str = "promotional"
 
 @router.post("/{file_id}/recommend_audio")
-async def recommend_audio_endpoint(file_id: str, req: RecommendAudioRequest):
+async def recommend_audio_endpoint(file_id: str, req: RecommendAudioRequest, _key=Depends(validate_user_access_key)):
     from app.services.audio_recommendation_service import get_audio_recommendation
     try:
         rec = await get_audio_recommendation(file_id, req.template_id)
@@ -569,168 +575,548 @@ class AutoComposeRequest(BaseModel):
     template_id: str = "promotional"
 
 @router.post("/{file_id}/auto_compose")
-async def auto_compose_endpoint(file_id: str, req: AutoComposeRequest):
+async def auto_compose_endpoint(file_id: str, req: AutoComposeRequest, _key=Depends(validate_user_access_key)):
     import time
-    from app.services.audio_recommendation_service import get_audio_recommendation
-    from app.services.stable_audio_service import generate_audio_via_replicate
-    from app.services.asset_manager import resolve_asset_query
+    import os
     from app.services.template_service import get_template
     
     try:
-        # 1. Получаем ИИ-рекомендации
-        rec = await get_audio_recommendation(file_id, req.template_id)
-        bgm_prompt = rec.get("bgm_prompt", "Ambient premium lofi music")
-        bgm_duration = rec.get("bgm_duration", 10)
-        sfx_events = rec.get("sfx_events", [])
-        
-        # 2. Получаем настройки громкости из шаблона
         tpl = get_template(req.template_id) or get_template("promotional")
-        ducking_vol = -12.0
-        if tpl and tpl.sound_design:
-            ducking_vol = float(tpl.sound_design.background_music.ducking_volume_db)
-            
-        # 3. Генерируем аудио через Replicate
-        try:
-            audio_url = generate_audio_via_replicate(bgm_prompt, bgm_duration)
-            
-            # 4. Скачиваем фоновую музыку на сервер
-            asset_id = f"ai_audio_{int(time.time())}"
-            local_path = download_stock_asset(asset_id, audio_url)
-            if not local_path:
-                raise RuntimeError("Failed to download replicate audio")
-        except Exception as e:
-            print(f"[AutoCompose] Stable Audio generation failed: {e}. Falling back to local premium lofi music track...")
-            import shutil
-            import random
-            bg_dir = os.path.join("assets", "Music", "Background")
-            if os.path.exists(bg_dir):
-                tracks = [f for f in os.listdir(bg_dir) if f.lower().endswith(".mp3")]
-            else:
-                tracks = []
-            
-            asset_id = f"ai_audio_{int(time.time())}"
-            local_path = os.path.join("uploads", f"{asset_id}.mp3")
-            if tracks:
-                selected_track = random.choice(tracks)
-                shutil.copy(os.path.join(bg_dir, selected_track), local_path)
-                print(f"[AutoCompose] Successfully copied fallback track: {selected_track}")
-                bgm_prompt = f"Lofi Fallback ({selected_track.split(' - ')[-1].replace('.mp3', '')})"
-            else:
-                raise HTTPException(status_code=500, detail=f"Stable Audio failed and no fallback music is available: {str(e)}")
-            
-        # 5. Регистрируем в медиабиблиотеке
-        add_to_media_library(
-            file_id=file_id,
-            asset_id=asset_id,
-            filename=f"AI: {bgm_prompt[:30]}",
-            path=local_path.replace("\\", "/"),
-            duration=float(bgm_duration)
-        )
         
-        # 6. Формируем список правок на таймлайне
-        applied_edits = []
-        
-        # Вычисляем длительность субтитров на основе Whisper-транскрипта
-        transcript_duration = 300.0
-        transcript_path = os.path.join("uploads", f"{file_id}_transcript.json")
-        if os.path.exists(transcript_path):
-            try:
-                import json
-                with open(transcript_path, "r", encoding="utf-8") as f:
-                    t_data = json.load(f)
-                    words_data = t_data.get("words", [])
-                    if words_data:
-                        transcript_duration = float(words_data[-1].get("end", 300.0)) + 5.0
-            except Exception as e:
-                print(f"[AutoCompose] Error loading transcript for duration: {e}")
-            
-        # Добавляем субтитры с полными настройками из шаблона
-        sub_font = "Inter"
-        sub_size = 58
-        sub_accent_color = "#F2E16A"
-        sub_color = "#F5F5F7"
-        sub_position = "bottom"
-        sub_use_shadow = True
-        sub_shadow_blur = 18
-        sub_text_case = "Sentence_Case"
-        sub_max_words = 3
-
+        # 1. Update session with template settings so the AI Director behaves according to the template
+        sub_font = "Montserrat-ExtraBold"
+        sub_accent_color = "#FACC15"
         if tpl and tpl.subtitles:
             sub = tpl.subtitles
             if sub.font_management:
                 sub_font = sub.font_management.base_sans_font.replace("-Medium.ttf", "").replace(".ttf", "")
-                sub_size = sub.font_management.font_size_px
-            if sub.color_palette:
-                if sub.color_palette.text_main:
-                    sub_color = sub.color_palette.text_main
-                if sub.color_palette.text_accent:
-                    sub_accent_color = sub.color_palette.text_accent
-            if sub.layout:
-                sub_use_shadow = bool(sub.layout.use_shadow)
-                sub_shadow_blur = sub.layout.shadow_blur_px or 18
-                sub_text_case = sub.layout.text_case or "Sentence_Case"
-                sub_max_words = sub.layout.max_words_per_screen or 3
+            if sub.color_palette and sub.color_palette.text_accent:
+                sub_accent_color = sub.color_palette.text_accent
 
-        applied_edits.append({
-            "action": "add_subtitles",
-            "start": 0,
-            "end": transcript_duration,
-            "font": sub_font,
-            "font_size": sub_size,
-            "font_color": sub_color,
-            "accent_color": sub_accent_color,
-            "position": sub_position,
-            "use_outline": False,
-            "use_shadow": sub_use_shadow,
-            "shadow_blur": sub_shadow_blur,
-            "text_case": sub_text_case,
-            "max_words": sub_max_words,
-        })
+        try:
+            from app.workflows.production_session import update_session
+            session_updates = {
+                "creative_goal": tpl.description or "Сделать динамичное и вовлекающее видео с профессиональным ритмом монтажа.",
+                "visual_identity": {
+                    "dominant_color": sub_accent_color,
+                    "font_family": sub_font,
+                    "graphics_template": "dynamic_ai_generation"
+                },
+                "editing_strategy": {
+                    "zoom_frequency": "adaptive",
+                    "broll_frequency": "adaptive",
+                    "pacing": "adaptive"
+                },
+                "style_profile": {
+                    "font_family": sub_font,
+                    "bg_color": "rgba(22, 22, 24, 0.8)",
+                    "border_color": "rgba(255,255,255,0.15)",
+                    "color_accent": sub_accent_color,
+                    "glow_color": "rgba(255,255,255,0.05)",
+                    "camera_motion": "adaptive"
+                }
+            }
+            update_session(file_id, session_updates)
+            print(f"[AutoCompose] Updated production session with {req.template_id} settings.")
+        except Exception as e:
+            print(f"[AutoCompose] Failed to update session settings: {e}")
+
+        # 2. Run the LangGraph Cinematic Reasoning Workflow (the AI Director!) to dynamically build the timeline
+        from app.workflows.graph import editor_graph
+        initial_state = {
+            "file_id": file_id,
+            "user_message": f"Сделай авто-монтаж ролика по шаблону {req.template_id}: проанализируй речь, расставь наезды камеры (zoom), выдели хук в начале с помощью графики, добавь подходящую фоновую музыку и SFX переходы, настроить кинетическую караоке-типографику.",
+            "is_evaluation": False,
+            "template_id": req.template_id,
+            "active_edits": [],
+            "critic_retry_count": 0,
+            "focused_item": None
+        }
         
-        # Добавляем фоновую музыку
-        applied_edits.append({
-            "action": "add_asset",
-            "start": 0,
-            "end": bgm_duration,
-            "asset_query": f"AI: {bgm_prompt[:30]}",
-            "resolved_path": local_path.replace("\\", "/"),
-            "asset_type": "audio",
-            "volume": ducking_vol,
-            "is_bgm": True
-        })
+        final_state = await editor_graph.ainvoke(initial_state)
+        applied_edits = final_state.get("active_edits", [])
         
-        # Добавляем SFX
-        for sfx in sfx_events:
-            ev_type = sfx.get("event", "video_hard_cut")
-            t_sec = float(sfx.get("time_sec", 0.0))
-            vol = float(sfx.get("volume_scale", 0.5))
+        # 3. Extract the BGM details if added by the agent, for frontend compatibility
+        bgm_edit = next((e for e in applied_edits if e.get("action") == "add_asset" and e.get("asset_type") == "audio" and e.get("is_bgm")), None)
+        if bgm_edit:
+            asset_id = bgm_edit.get("asset_id", f"bgm_{int(time.time())}")
+            bgm_prompt = bgm_edit.get("asset_query", "AI Sound Track")
+            local_path = bgm_edit.get("resolved_path", "")
+            bgm_duration = bgm_edit.get("end", 30.0) - bgm_edit.get("start", 0.0)
+            if bgm_duration <= 0 or bgm_duration > 1000:
+                bgm_duration = 30.0
+        else:
+            asset_id = "bgm_default"
+            bgm_prompt = "Silent Mood"
+            local_path = ""
+            bgm_duration = 0.0
             
-            # Подбираем звук
-            query = "whoosh" if "cut" in ev_type.lower() else "click" if "popup" in ev_type.lower() else "swipe"
-            resolved = resolve_asset_query(query)
-            if resolved:
-                import math
-                vol_db = -10.0
-                if vol > 0:
-                    vol_db = max(-45.0, min(0.0, 20.0 * math.log10(vol)))
-
-                applied_edits.append({
-                    "action": "add_asset",
-                    "start": max(0.0, t_sec - 0.25),
-                    "end": t_sec + 0.75,
-                    "asset_query": query,
-                    "resolved_path": resolved.get("rel_path"),
-                    "asset_type": "audio",
-                    "volume": vol_db
-                })
-                
+        print(f"[AutoCompose] Dynamically generated {len(applied_edits)} edits via AI Cinematic Director.")
+        
         return {
             "status": "success",
             "bgm_asset_id": asset_id,
             "bgm_filename": f"AI: {bgm_prompt[:30]}",
-            "bgm_url": f"/uploads/{os.path.basename(local_path)}",
+            "bgm_url": f"/uploads/{os.path.basename(local_path)}" if local_path else "",
             "bgm_duration": float(bgm_duration),
             "edits": applied_edits
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/brand/{brand_id}/upload_font")
+async def upload_brand_font(brand_id: str, file: UploadFile = File(...)):
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in [".ttf", ".otf"]:
+        raise HTTPException(status_code=400, detail="Only .ttf and .otf font files are supported")
+    
+    brand_dir = os.path.join(UPLOAD_DIR, "brands", brand_id, "fonts")
+    os.makedirs(brand_dir, exist_ok=True)
+    
+    file_path = os.path.join(brand_dir, file.filename)
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save font: {str(e)}")
+        
+    return {
+        "message": "Font uploaded successfully",
+        "name": os.path.splitext(file.filename)[0],
+        "filename": file.filename,
+        "path": f"uploads/brands/{brand_id}/fonts/{file.filename}".replace("\\", "/")
+    }
+
+@router.post("/brand/{brand_id}/upload_lut")
+async def upload_brand_lut(brand_id: str, file: UploadFile = File(...)):
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext != ".cube":
+        raise HTTPException(status_code=400, detail="Only .cube LUT files are supported")
+        
+    brand_dir = os.path.join(UPLOAD_DIR, "brands", brand_id, "luts")
+    os.makedirs(brand_dir, exist_ok=True)
+    
+    file_path = os.path.join(brand_dir, file.filename)
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save LUT: {str(e)}")
+        
+    return {
+        "message": "LUT uploaded successfully",
+        "name": os.path.splitext(file.filename)[0],
+        "filename": file.filename,
+        "path": f"uploads/brands/{brand_id}/luts/{file.filename}".replace("\\", "/")
+    }
+
+@router.post("/brand/{brand_id}/upload_music")
+async def upload_brand_music(brand_id: str, file: UploadFile = File(...)):
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext != ".mp3":
+        raise HTTPException(status_code=400, detail="Only .mp3 audio files are supported")
+        
+    brand_dir = os.path.join(UPLOAD_DIR, "brands", brand_id, "music")
+    os.makedirs(brand_dir, exist_ok=True)
+    
+    file_path = os.path.join(brand_dir, file.filename)
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save music: {str(e)}")
+        
+    return {
+        "message": "Music uploaded successfully",
+        "name": os.path.splitext(file.filename)[0],
+        "filename": file.filename,
+        "path": f"uploads/brands/{brand_id}/music/{file.filename}".replace("\\", "/")
+    }
+
+@router.get("/brand/{brand_id}/assets")
+async def get_brand_assets(brand_id: str):
+    brand_dir = os.path.join(UPLOAD_DIR, "brands", brand_id)
+    fonts_dir = os.path.join(brand_dir, "fonts")
+    luts_dir = os.path.join(brand_dir, "luts")
+    music_dir = os.path.join(brand_dir, "music")
+    
+    fonts = []
+    if os.path.exists(fonts_dir):
+        for f in os.listdir(fonts_dir):
+            if os.path.isfile(os.path.join(fonts_dir, f)) and os.path.splitext(f)[1].lower() in [".ttf", ".otf"]:
+                fonts.append({
+                    "name": os.path.splitext(f)[0],
+                    "filename": f,
+                    "path": f"uploads/brands/{brand_id}/fonts/{f}".replace("\\", "/")
+                })
+                
+    luts = []
+    if os.path.exists(luts_dir):
+        for f in os.listdir(luts_dir):
+            if os.path.isfile(os.path.join(luts_dir, f)) and os.path.splitext(f)[1].lower() == ".cube":
+                luts.append({
+                    "name": os.path.splitext(f)[0],
+                    "filename": f,
+                    "path": f"uploads/brands/{brand_id}/luts/{f}".replace("\\", "/")
+                })
+
+    music = []
+    if os.path.exists(music_dir):
+        for f in os.listdir(music_dir):
+            if os.path.isfile(os.path.join(music_dir, f)) and os.path.splitext(f)[1].lower() == ".mp3":
+                music.append({
+                    "name": os.path.splitext(f)[0],
+                    "filename": f,
+                    "path": f"uploads/brands/{brand_id}/music/{f}".replace("\\", "/")
+                })
+                
+    return {
+        "fonts": fonts,
+        "luts": luts,
+        "music": music
+    }
+
+@router.post("/{file_id}/smart_cut")
+async def run_smart_cut(file_id: str):
+    """Analyze Whisper transcript to automatically detect bad takes, pauses, and filler words."""
+    transcript_path = os.path.join(UPLOAD_DIR, f"{file_id}_transcript.json")
+    if not os.path.exists(transcript_path):
+        raise HTTPException(status_code=404, detail="Транскрипт не найден. Сначала загрузите видео.")
+        
+    try:
+        with open(transcript_path, "r", encoding="utf-8") as f:
+            transcript_data = json.load(f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка чтения транскрипта: {str(e)}")
+        
+    from app.services.smart_cut_service import suggest_smart_cuts
+    cuts = suggest_smart_cuts(transcript_data)
+    return {"status": "success", "cuts": cuts}
+
+
+@router.post("/{file_id}/topic_transitions")
+async def detect_topic_transitions(
+    file_id: str,
+    use_llm: bool = False,
+    min_gap_sec: float = 5.0,
+):
+    """Detect topic-change moments in speech for montage transitions."""
+    transcript_path = os.path.join(UPLOAD_DIR, f"{file_id}_transcript.json")
+    if not os.path.exists(transcript_path):
+        raise HTTPException(status_code=404, detail="Транскрипт не найден. Сначала загрузите видео.")
+
+    try:
+        with open(transcript_path, "r", encoding="utf-8") as f:
+            transcript_data = json.load(f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка чтения транскрипта: {str(e)}")
+
+    from app.services.topic_transition_service import (
+        detect_topic_boundaries,
+        detect_topic_boundaries_llm,
+        boundaries_to_transition_edits,
+    )
+
+    if use_llm:
+        boundaries = await detect_topic_boundaries_llm(
+            transcript_data, min_gap_sec=min_gap_sec
+        )
+    else:
+        boundaries = detect_topic_boundaries(
+            transcript_data, min_gap_sec=min_gap_sec
+        )
+
+    edits = boundaries_to_transition_edits(boundaries)
+    return {
+        "status": "success",
+        "count": len(boundaries),
+        "boundaries": boundaries,
+        "edits": edits,
+    }
+
+
+def _resolve_source_video(file_id: str, *, prefer_full_res: bool = False) -> Optional[str]:
+    """Pick source for RVM. Full-res for quality mattes; proxy only when explicitly allowed."""
+    proxy = os.path.join(UPLOAD_DIR, f"{file_id}_proxy.mp4")
+
+    def from_library() -> Optional[str]:
+        lib_path = os.path.join(UPLOAD_DIR, f"{file_id}_media_library.json")
+        if not os.path.exists(lib_path):
+            return None
+        try:
+            with open(lib_path, "r", encoding="utf-8") as f:
+                library = json.load(f)
+            main = next((x for x in library if x.get("id") == "main"), None)
+            if main and main.get("path"):
+                p = main["path"]
+                if not os.path.isabs(p):
+                    p = os.path.join(UPLOAD_DIR, os.path.basename(p))
+                if os.path.exists(p) and os.path.getsize(p) > 0:
+                    return p
+        except Exception:
+            pass
+        return None
+
+    def from_upload() -> Optional[str]:
+        skip = ("_rendered", "_rvm", "_transcript", "_visual", ".log", ".mp3",
+                ".rendering", ".roto", ".ass", "_media_library", "_proxy", "_mask", "_text")
+        for f in os.listdir(UPLOAD_DIR):
+            if not f.startswith(file_id):
+                continue
+            if any(x in f for x in skip):
+                continue
+            if os.path.splitext(f)[1].lower() in (".mp4", ".mov", ".avi", ".mkv", ".webm"):
+                path = os.path.join(UPLOAD_DIR, f)
+                if os.path.getsize(path) > 0:
+                    return path
+        return None
+
+    # Quality path: never use 270x480 proxy for rotoscope mattes
+    if prefer_full_res:
+        return from_library() or from_upload() or (
+            proxy if os.path.exists(proxy) and os.path.getsize(proxy) > 0 else None
+        )
+
+    if os.path.exists(proxy) and os.path.getsize(proxy) > 0:
+        return proxy
+    return from_library() or from_upload()
+
+
+class RotoPreviewRequest(BaseModel):
+    action: str = "remove_background"  # or set_video_background / behind_speaker
+    mode: str = "composite"  # "composite" = baked MP4, "alpha" = WebM speaker cutout for live layers
+    bg_color: str = "#0a0a14"
+    text: Optional[str] = None
+    text_color: str = "white"
+    text_opacity: float = 0.12
+    font_size: int = 220
+    gradient_color2: Optional[str] = None
+    bg_video_query: Optional[str] = None
+
+
+def _roto_artifact_names(file_id: str, mode: str):
+    """Return primary preview artifact (+ optional alpha webm for alpha mode)."""
+    if mode == "alpha":
+        # Grayscale H.264 matte — reliable with canvas destination-in (unlike VP8 WebM alpha)
+        return f"{file_id}_rvm_mask.mp4", f"{file_id}_rvm_alpha.webm"
+    return f"{file_id}_rvm_preview.mp4", None
+
+
+def _run_roto_preview_task(file_id: str, req: RotoPreviewRequest):
+    lock = os.path.join(UPLOAD_DIR, f"{file_id}.roto")
+    mode = (req.mode or "composite").lower()
+    out_name, alpha_name = _roto_artifact_names(file_id, mode)
+    out_path = os.path.join(UPLOAD_DIR, out_name)
+    alpha_path = os.path.join(UPLOAD_DIR, alpha_name) if alpha_name else None
+    status_path = os.path.join(UPLOAD_DIR, f"{file_id}_roto_status.json")
+
+    def write_status(status: str, **extra):
+        payload = {}
+        if os.path.exists(status_path):
+            try:
+                with open(status_path, "r", encoding="utf-8") as f:
+                    payload = json.load(f)
+            except Exception:
+                payload = {}
+        payload.update(extra)
+        payload["status"] = status
+        payload["mode"] = mode
+        payload["asset_version"] = 3
+        payload["filename"] = out_name if status == "ready" else None
+        if status == "ready" and mode == "alpha":
+            payload["mask_filename"] = out_name
+            # Only advertise legacy WebM alpha when the file actually exists on disk
+            if alpha_name and alpha_path and os.path.exists(alpha_path) and os.path.getsize(alpha_path) > 1024:
+                payload["alpha_filename"] = alpha_name
+            else:
+                payload.pop("alpha_filename", None)
+        try:
+            with open(status_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f)
+        except Exception:
+            pass
+
+    try:
+        write_status("processing", message=f"RVM {mode} started", action=req.action)
+        log_progress(file_id, f"🎭 RVM preview ({mode}): обработка началась…")
+
+        source = _resolve_source_video(file_id, prefer_full_res=True)
+        if not source:
+            write_status("error", message="Source video not found")
+            log_progress(file_id, "❌ RVM preview: исходное видео не найдено")
+            return
+
+        from app.services.rotoscope_service import process_roto_preview, remove_background_rvm
+
+        log_progress(file_id, f"🎭 RVM source: {os.path.basename(source)}")
+
+        if mode == "alpha":
+            # Full-res matte (mask). Skip heavy WebM alpha for preview — canvas uses mask.
+            # downsample 0.4 ≈ sharp edges on 1080p without full native cost
+            result = remove_background_rvm(
+                input_video_path=source,
+                output_path=alpha_path or out_path,
+                bg_color="transparent",
+                downsample_ratio=0.4,
+            )
+            mask_ok = os.path.exists(out_path) and os.path.getsize(out_path) > 0
+            if result and mask_ok:
+                write_status("ready", message="RVM mask ready (full-res)", action=req.action)
+                log_progress(file_id, f"✅ RVM preview готов: {out_name}")
+            elif result and not mask_ok:
+                write_status("error", message="RVM mask missing after alpha pass")
+                log_progress(file_id, "❌ RVM preview: маска не создалась")
+            else:
+                write_status("error", message="RVM processing failed")
+                log_progress(file_id, "❌ RVM preview: обработка не удалась")
+            return
+        else:
+            bg_video_path = None
+            if req.bg_video_query:
+                try:
+                    from app.services.pexels_service import download_broll
+                    bg_video_path = download_broll(req.bg_video_query)
+                except Exception as e:
+                    log_progress(file_id, f"⚠️ RVM preview: сток-фон не скачался ({e})")
+
+            result = process_roto_preview(
+                input_video_path=source,
+                output_path=out_path,
+                action=req.action,
+                bg_color=req.bg_color or "#0a0a14",
+                text=req.text,
+                text_color=req.text_color or "white",
+                text_opacity=float(req.text_opacity or 0.12),
+                font_size=int(req.font_size or 220),
+                gradient_color2=req.gradient_color2,
+                bg_video_path=bg_video_path,
+                downsample_ratio=0.4,
+            )
+
+        if result and os.path.exists(result):
+            if os.path.abspath(result) != os.path.abspath(out_path):
+                shutil.copy2(result, out_path)
+            write_status("ready", message="RVM preview ready", action=req.action)
+            log_progress(file_id, f"✅ RVM preview готов: {out_name}")
+        else:
+            write_status("error", message="RVM processing failed")
+            log_progress(file_id, "❌ RVM preview: обработка не удалась")
+    except Exception as e:
+        write_status("error", message=str(e))
+        log_progress(file_id, f"❌ RVM preview error: {e}")
+    finally:
+        try:
+            if os.path.exists(lock):
+                os.remove(lock)
+        except Exception:
+            pass
+
+
+@router.post("/{file_id}/roto_preview")
+async def start_roto_preview(
+    file_id: str,
+    req: RotoPreviewRequest,
+    background_tasks: BackgroundTasks,
+    _key=Depends(validate_user_access_key),
+):
+    """Start async RVM rotoscoping for live preview (not full export)."""
+    lock = os.path.join(UPLOAD_DIR, f"{file_id}.roto")
+    mode = (req.mode or "composite").lower()
+    out_name, alpha_name = _roto_artifact_names(file_id, mode)
+    out_path = os.path.join(UPLOAD_DIR, out_name)
+    status_path = os.path.join(UPLOAD_DIR, f"{file_id}_roto_status.json")
+
+    if os.path.exists(lock):
+        return {"status": "processing", "filename": None, "mode": mode, "message": "Already processing"}
+
+    if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+        try:
+            with open(status_path, "r", encoding="utf-8") as f:
+                prev = json.load(f)
+            same = (
+                prev.get("action") == req.action
+                and prev.get("mode") == mode
+                and prev.get("bg_color") == req.bg_color
+                and prev.get("text") == req.text
+                and prev.get("gradient_color2") == req.gradient_color2
+                and prev.get("bg_video_query") == req.bg_video_query
+                and prev.get("asset_version") == 3
+            )
+            if same and prev.get("status") == "ready":
+                payload = {"status": "ready", "filename": out_name, "mode": mode}
+                if mode == "alpha":
+                    payload["mask_filename"] = out_name
+                    alpha_path = os.path.join(UPLOAD_DIR, alpha_name) if alpha_name else None
+                    if alpha_path and os.path.exists(alpha_path) and os.path.getsize(alpha_path) > 1024:
+                        payload["alpha_filename"] = alpha_name
+                return payload
+        except Exception:
+            pass
+
+    open(lock, "w").close()
+    with open(status_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "status": "processing",
+            "filename": None,
+            "mode": mode,
+            "action": req.action,
+            "bg_color": req.bg_color,
+            "text": req.text,
+            "gradient_color2": req.gradient_color2,
+            "bg_video_query": req.bg_video_query,
+            "asset_version": 3,
+        }, f)
+
+    background_tasks.add_task(_run_roto_preview_task, file_id, req)
+    return {"status": "processing", "filename": None, "mode": mode}
+
+
+@router.get("/{file_id}/roto_status")
+async def get_roto_status(file_id: str, _key=Depends(validate_user_access_key)):
+    """Poll RVM preview job status."""
+    lock = os.path.join(UPLOAD_DIR, f"{file_id}.roto")
+    status_path = os.path.join(UPLOAD_DIR, f"{file_id}_roto_status.json")
+
+    data = {}
+    if os.path.exists(status_path):
+        try:
+            with open(status_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+
+    mode = data.get("mode") or "composite"
+    out_name, alpha_name = _roto_artifact_names(file_id, mode)
+    if data.get("filename"):
+        out_name = data["filename"]
+    out_path = os.path.join(UPLOAD_DIR, out_name)
+
+    def _ready_payload(name: str):
+        payload = {"status": "ready", "filename": name, "mode": mode, "message": data.get("message")}
+        if mode == "alpha":
+            mask_name = name if str(name).endswith("_rvm_mask.mp4") else (data.get("mask_filename") or f"{file_id}_rvm_mask.mp4")
+            payload["mask_filename"] = mask_name
+            # Prefer mask-only preview; never point clients at a missing WebM
+            candidate = data.get("alpha_filename") or alpha_name
+            if candidate:
+                alpha_path = os.path.join(UPLOAD_DIR, candidate)
+                if os.path.exists(alpha_path) and os.path.getsize(alpha_path) > 1024:
+                    payload["alpha_filename"] = candidate
+        return payload
+
+    if os.path.exists(lock):
+        return {"status": "processing", "filename": None, "mode": mode, "message": data.get("message")}
+    if data.get("status") == "ready" and os.path.exists(out_path):
+        return _ready_payload(out_name)
+    if data.get("status") == "error":
+        return {"status": "error", "filename": None, "mode": mode, "message": data.get("message")}
+    if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+        return _ready_payload(out_name)
+    # Mask may exist even if status JSON is stale / points at missing alpha
+    mask_fallback = os.path.join(UPLOAD_DIR, f"{file_id}_rvm_mask.mp4")
+    if os.path.exists(mask_fallback) and os.path.getsize(mask_fallback) > 0:
+        return _ready_payload(f"{file_id}_rvm_mask.mp4")
+    return {"status": "idle", "filename": None, "mode": mode}
+
+
+

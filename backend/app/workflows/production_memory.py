@@ -22,6 +22,14 @@ class ProductionMemory:
         if "pacing_history" not in self.session:
             self.session["pacing_history"] = []
 
+    def set_cloned_style(self, style_profile: Dict[str, Any]):
+        """Save a cloned style profile to the session."""
+        self.session["cloned_style"] = style_profile
+
+    def get_cloned_style(self) -> Optional[Dict[str, Any]]:
+        """Retrieve the cloned style profile if available."""
+        return self.session.get("cloned_style")
+
     def get_style_profile(self) -> Dict[str, Any]:
         """Retrieve unified style preferences."""
         return {

@@ -1,7 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import url("https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300..700;1,300..700&family=Inter:ital,wght@0,300..700;1,300..700&family=Marck+Script&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300..800;1,300..800&family=Inter:ital,wght@0,300..800;1,300..800&family=JetBrains+Mono:wght@400;500;600&family=Montserrat:wght@300;400;500;600&family=Outfit:wght@300;400;500;600&family=Space+Grotesk:wght@400;500;600&display=swap");
 
 @custom-variant dark (&:is(.dark *));
 
@@ -54,9 +54,10 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-inter), 'Inter', system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), 'JetBrains Mono', monospace;
-  --font-heading: var(--font-inter), 'Inter', system-ui, sans-serif;
+  --font-sans: 'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  --font-serif: 'Playfair Display', serif;
+  --font-heading: 'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -92,6 +93,14 @@
   --radius-xl:  calc(var(--radius) * 1.4);
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.4);
+  --spacing: var(--spacing);
+  --letter-spacing: var(--letter-spacing);
+  --shadow-blur: var(--shadow-blur);
+  --shadow-color: var(--shadow-color);
+  --shadow-spread: var(--shadow-spread);
+  --shadow-opacity: var(--shadow-opacity);
+  --shadow-offset-x: var(--shadow-offset-x);
+  --shadow-offset-y: var(--shadow-offset-y);
 }
 
 /* ═══════════════════════════════════════════
@@ -106,142 +115,149 @@
 ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.15); }
 
 /* ═══════════════════════════════════════════
-   ROOT (LIGHT — not used, kept for compat)
+   ROOT (LIGHT MODE — Zen Linen)
 ═══════════════════════════════════════════ */
 :root {
   --hu-font-geist: var(--font-geist);
   --hu-font-jetbrains: var(--font-jetbrains-mono);
-  --radius: 0.875rem; /* 14px base */
+  
+  /* Zen Linen Palette for Light Mode */
+  --card: #F4EFE4;
+  --ring: #2E2E2E;
+  --input: #D2CBBB;
+  --muted: #CFC8B8;
+  --accent: #E6E4D7;
+  --border: #D2CBBB;
+  --radius: 0.5rem;
+  --chart-1: #F26A4B;
+  --chart-2: #1E1E1E;
+  --chart-3: #5E5A52;
+  --chart-4: #A89F8F;
+  --chart-5: #CFC8B8;
+  --popover: #F4EFE4;
+  --primary: #2E2E2E;
+  --sidebar: #E3DDCF;
+  --spacing: 0.25rem;
+  --font-mono: "JetBrains Mono", monospace;
+  --font-sans: "Inter", sans-serif;
+  --secondary: #D8D2C4;
+  --background: #E9E4D8;
+  --font-serif: "Playfair Display", serif;
+  --foreground: #1E1E1E;
+  --destructive: #DC2626;
+  --shadow-blur: 10px;
+  --shadow-color: #000000;
+  --sidebar-ring: #2E2E2E;
+  --shadow-spread: 0px;
+  --letter-spacing: 0.01em;
+  --shadow-opacity: 0.1;
+  --sidebar-accent: #E6E4D7;
+  --sidebar-border: #D2CBBB;
+  --card-foreground: #1E1E1E;
+  --shadow-offset-x: 0px;
+  --shadow-offset-y: 4px;
+  --sidebar-primary: #2E2E2E;
+  --muted-foreground: #5E5A52;
+  --accent-foreground: #2E2E2E;
+  --popover-foreground: #1E1E1E;
+  --primary-foreground: #E6E4D7;
+  --sidebar-foreground: #1E1E1E;
+  --secondary-foreground: #2E2E2E;
+  --destructive-foreground: #FFFFFF;
+  --sidebar-accent-foreground: #2E2E2E;
+  --sidebar-primary-foreground: #E6E4D7;
 
-  /* Cinematic Palette */
-  --syn-bg:         #0B0B0F;
-  --syn-bg2:        #111318;
-  --syn-surface:    rgba(255, 255, 255, 0.04);
-  --syn-surface2:   rgba(255, 255, 255, 0.07);
-  --syn-border:     rgba(255, 255, 255, 0.07);
-  --syn-border2:    rgba(255, 255, 255, 0.12);
-  --syn-text:       #F5F7FA;
-  --syn-text2:      #9AA4B2;
-  --syn-text3:      #5A6478;
+  /* Map Cinematic variables to Zen Linen light mode */
+  --syn-bg:         var(--background);
+  --syn-bg2:        var(--card);
+  --syn-surface:    var(--secondary);
+  --syn-surface2:   var(--accent);
+  --syn-border:     var(--border);
+  --syn-border2:    var(--border);
+  --syn-text:       var(--foreground);
+  --syn-text2:      var(--muted-foreground);
+  --syn-text3:      var(--muted-foreground);
+  --syn-ease:       cubic-bezier(0.22, 1, 0.36, 1);
   --syn-blue:       #3B82F6;
   --syn-blue-dim:   rgba(59, 130, 246, 0.15);
   --syn-violet:     #7C3AED;
   --syn-violet-dim: rgba(124, 58, 237, 0.12);
   --syn-cyan:       #06B6D4;
   --syn-cyan-dim:   rgba(6, 182, 212, 0.12);
-  --syn-shadow:     0 8px 32px rgba(0, 0, 0, 0.35);
-  --syn-shadow-sm:  0 2px 12px rgba(0, 0, 0, 0.25);
-  --syn-ease:       cubic-bezier(0.22, 1, 0.36, 1);
-
-  /* shadcn compat — light (not used) */
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
-  --hu-background: 0, 0%, 100%;
-  --hu-foreground: 0, 0%, 14%;
-  --hu-card: 0, 0%, 99%;
-  --hu-card-foreground: 0, 0%, 14%;
-  --hu-primary: 235, 100%, 60%;
-  --hu-primary-foreground: 0, 0%, 98%;
-  --hu-secondary: 0, 0%, 97%;
-  --hu-secondary-foreground: 0, 0%, 20%;
-  --hu-muted: 0, 0%, 97%;
-  --hu-muted-foreground: 0, 0%, 56%;
-  --hu-accent: 0, 0%, 96%;
-  --hu-accent-foreground: 0, 0%, 20%;
-  --hu-destructive: 9, 96%, 47%;
-  --hu-destructive-foreground: 0, 0%, 98%;
-  --hu-border: 0, 0%, 92%;
-  --hu-input: 0, 0%, 100%;
-  --hu-ring: 0, 0%, 71%;
-  --color-fd-background: hsl(var(--hu-background));
-  --color-fd-card: hsl(var(--hu-background));
+  --syn-shadow:     var(--shadow-offset-x) var(--shadow-offset-y) var(--shadow-blur) rgba(0, 0, 0, var(--shadow-opacity));
 }
 
 /* ═══════════════════════════════════════════
-   DARK THEME — CINEMATIC
+   DARK MODE — Zen Linen Dark
 ═══════════════════════════════════════════ */
 .dark {
-  --hu-background: 0, 0%, 4%;
-  --hu-foreground: 0, 0%, 96%;
-  --hu-card: 0, 0%, 6%;
-  --hu-card-foreground: 0, 0%, 96%;
-  --hu-primary: 0, 0%, 96%;
-  --hu-primary-foreground: 0, 0%, 4%;
-  --hu-secondary: 0, 0%, 8%;
-  --hu-secondary-foreground: 0, 0%, 96%;
-  --hu-muted: 0, 0%, 8%;
-  --hu-muted-foreground: 0, 0%, 50%;
-  --hu-accent: 0, 0%, 8%;
-  --hu-accent-foreground: 0, 0%, 96%;
-  --hu-destructive: 0, 84%, 50%;
-  --hu-destructive-foreground: 0, 0%, 98%;
-  --hu-border: 0, 0%, 10%;
-  --hu-input: 0, 0%, 8%;
-  --hu-ring: 0, 0%, 30%;
-  --color-fd-background: hsl(var(--hu-background));
-  --color-fd-card: hsl(var(--hu-background));
+  --hu-background: 0, 0%, 8%;
+  --hu-foreground: 0, 0%, 91%;
+  
+  /* Zen Linen Palette for Dark Mode */
+  --card: #1C1C1C;
+  --ring: #D1CFC0;
+  --input: #2C2C2C;
+  --muted: #2A2A2A;
+  --accent: #363636;
+  --border: #2C2C2C;
+  --radius: 0.5rem;
+  --chart-1: #F26A4B;
+  --chart-2: #D9CFC2;
+  --chart-3: #8E8A83;
+  --chart-4: #5C5A56;
+  --chart-5: #3B3B3B;
+  --popover: #1C1C1C;
+  --primary: #D1CFC0;
+  --sidebar: #101010;
+  --spacing: 0.25rem;
+  --font-mono: "JetBrains Mono", monospace;
+  --font-sans: "Inter", sans-serif;
+  --secondary: #222222;
+  --background: #141414;
+  --font-serif: "Playfair Display", serif;
+  --foreground: #E8E3DA;
+  --destructive: #EF4444;
+  --shadow-blur: 15px;
+  --shadow-color: #000000;
+  --sidebar-ring: #D1CFC0;
+  --shadow-spread: 0px;
+  --letter-spacing: 0.01em;
+  --shadow-opacity: 0.3;
+  --sidebar-accent: #363636;
+  --sidebar-border: #2C2C2C;
+  --card-foreground: #E8E3DA;
+  --shadow-offset-x: 0px;
+  --shadow-offset-y: 6px;
+  --sidebar-primary: #D1CFC0;
+  --muted-foreground: #8E8A83;
+  --accent-foreground: #D1CFC0;
+  --popover-foreground: #E8E3DA;
+  --primary-foreground: #363636;
+  --sidebar-foreground: #E8E3DA;
+  --secondary-foreground: #D1CFC0;
+  --destructive-foreground: #FFFFFF;
+  --sidebar-accent-foreground: #D1CFC0;
+  --sidebar-primary-foreground: #363636;
 
-  /* Map shadcn tokens → cinematic palette */
-  --background:            #0B0B0F;
-  --foreground:            #F5F7FA;
-  --card:                  #111318;
-  --card-foreground:       #F5F7FA;
-  --popover:               #111318;
-  --popover-foreground:    #F5F7FA;
-  --primary:               #F5F7FA;
-  --primary-foreground:    #0B0B0F;
-  --secondary:             rgba(255,255,255,0.04);
-  --secondary-foreground:  #F5F7FA;
-  --muted:                 rgba(255,255,255,0.04);
-  --muted-foreground:      #9AA4B2;
-  --accent:                rgba(255,255,255,0.06);
-  --accent-foreground:     #F5F7FA;
-  --destructive:           oklch(0.65 0.2 25);
-  --border:                rgba(255, 255, 255, 0.07);
-  --input:                 rgba(255, 255, 255, 0.06);
-  --ring:                  rgba(59, 130, 246, 0.4);
-  --chart-1:               oklch(0.7 0.1 240);
-  --chart-2:               oklch(0.6 0.08 280);
-  --chart-3:               oklch(0.55 0.07 200);
-  --chart-4:               oklch(0.5 0.05 260);
-  --chart-5:               oklch(0.4 0.04 230);
-  --sidebar:               #0D0D12;
-  --sidebar-foreground:    #F5F7FA;
-  --sidebar-primary:       #F5F7FA;
-  --sidebar-primary-foreground: #0B0B0F;
-  --sidebar-accent:        rgba(255,255,255,0.05);
-  --sidebar-accent-foreground: #F5F7FA;
-  --sidebar-border:        rgba(255,255,255,0.06);
-  --sidebar-ring:          rgba(59,130,246,0.3);
+  /* Map Cinematic variables to Zen Linen dark mode */
+  --syn-bg:         var(--background);
+  --syn-bg2:        var(--card);
+  --syn-surface:    var(--secondary);
+  --syn-surface2:   var(--accent);
+  --syn-border:     var(--border);
+  --syn-border2:    var(--border);
+  --syn-text:       var(--foreground);
+  --syn-text2:      var(--muted-foreground);
+  --syn-text3:      var(--muted-foreground);
+  --syn-ease:       cubic-bezier(0.22, 1, 0.36, 1);
+  --syn-blue:       #3B82F6;
+  --syn-blue-dim:   rgba(59, 130, 246, 0.15);
+  --syn-violet:     #7C3AED;
+  --syn-violet-dim: rgba(124, 58, 237, 0.12);
+  --syn-cyan:       #06B6D4;
+  --syn-cyan-dim:   rgba(6, 182, 212, 0.12);
+  --syn-shadow:     var(--shadow-offset-x) var(--shadow-offset-y) var(--shadow-blur) rgba(0, 0, 0, var(--shadow-opacity));
 }
 
 /* ═══════════════════════════════════════════
@@ -308,8 +324,117 @@
 .animate-pulse-glow { animation: pulseGlow 2s ease-in-out infinite; }
 .animate-dot-pulse  { animation: dotPulse 1.4s ease-in-out infinite; }
 
+@keyframes rainbow-border {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.rainbow-glow-container {
+  position: relative;
+  background: linear-gradient(90deg, 
+    rgba(239, 68, 68, 0.5), 
+    rgba(168, 85, 247, 0.5), 
+    rgba(59, 130, 246, 0.5), 
+    rgba(34, 197, 94, 0.5), 
+    rgba(234, 179, 8, 0.5), 
+    rgba(239, 68, 68, 0.5)
+  );
+  background-size: 300% 300%;
+  animation: rainbow-border 10s ease infinite;
+  border-radius: 1rem;
+  padding: 1.5px;
+  overflow: hidden; /* Clips any outer glow, directing it strictly inside the glass block */
+}
+
+/* Shifting ambient glow and deep space background inside the glass */
+.rainbow-glow-container::before {
+  content: '';
+  position: absolute;
+  inset: 1.5px;
+  background: 
+    radial-gradient(circle at 90% 30%, rgba(99, 102, 241, 0.28), transparent 50%),
+    radial-gradient(circle at 10% 75%, rgba(139, 92, 246, 0.22), transparent 50%),
+    linear-gradient(135deg, #090a0f 0%, #030305 100%);
+  border-radius: 0.95rem;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.rainbow-glass-panel {
+  position: relative;
+  z-index: 1; /* forces content to render above the glow layer */
+  background-color: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: inset 0 0 50px rgba(255, 255, 255, 0.01);
+  transition: background-color 0.3s ease;
+}
+
+.dark .rainbow-glass-panel {
+  background-color: rgba(6, 6, 8, 0.12);
+  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.4);
+}
+
 /* Force all iframes to be transparent to prevent browser default white background flash or display */
 iframe {
   background: transparent !important;
   background-color: transparent !important;
+}
+
+/* ═══════════════════════════════════════════
+   MINIMALIST LIQUID GLASS (SLEEK & REFINED)
+═══════════════════════════════════════════ */
+.liquid-glass {
+  background: rgba(18, 18, 24, 0.45);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.25);
+  position: relative;
+}
+
+.liquid-glass-pill {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.15), 0 4px 16px -2px rgba(0, 0, 0, 0.3);
+  border-radius: 9999px;
+}
+
+.liquid-glass-card {
+  background: rgba(18, 18, 24, 0.45);
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.08),
+    0 12px 32px -8px rgba(0, 0, 0, 0.35);
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.liquid-glass-card:hover {
+  border-color: rgba(56, 189, 248, 0.35);
+  box-shadow: 
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.15),
+    0 0 25px -5px rgba(56, 189, 248, 0.18),
+    0 16px 40px -10px rgba(0, 0, 0, 0.45);
+  transform: translateY(-1px);
+}
+
+.font-syne {
+  font-family: 'Syne', sans-serif;
+}
+.font-space {
+  font-family: 'Space Grotesk', sans-serif;
+}
+.font-unbounded {
+  font-family: 'Unbounded', sans-serif;
+}
+.font-outfit {
+  font-family: 'Outfit', sans-serif;
+}
+.font-montserrat {
+  font-family: 'Montserrat', sans-serif;
 }

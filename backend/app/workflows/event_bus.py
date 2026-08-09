@@ -61,6 +61,23 @@ def emit(event_type: str, payload: Dict[str, Any]):
         event["details"] = f"Предупреждение: {payload.get('message', '')}"
         event["progress"] = 0.95
 
+    elif event_type == "graphics_generated":
+        # Surface generative graphics completion in the chat activity feed
+        event["type"] = "reasoning_event"
+        event["agent"] = payload.get("agent") or "Graphics Developer"
+        event["step"] = payload.get("step") or "GRAPHICS: Графическая сцена готова"
+        event["status"] = payload.get("status") or "done"
+        event["details"] = payload.get("details") or payload.get("message") or "Графика добавлена на таймлайн"
+        event["progress"] = payload.get("progress", 0.88)
+
+    elif event_type == "graphics_progress":
+        event["type"] = "reasoning_event"
+        event["agent"] = payload.get("agent") or "Graphics Developer"
+        event["step"] = payload.get("step") or "GRAPHICS: Генерация сцены"
+        event["status"] = payload.get("status") or "running"
+        event["details"] = payload.get("details") or payload.get("message") or "Генерирую графическую сцену…"
+        event["progress"] = payload.get("progress", 0.75)
+
     # Humanize step if it exists in the event
     if "step" in event:
         try:
@@ -68,6 +85,14 @@ def emit(event_type: str, payload: Dict[str, Any]):
             event["step"] = humanize_step(event["step"])
         except Exception as e:
             logger.error(f"Failed to humanize step: {e}")
+
+    # Attach short human thought for chat UI (hide technical junk)
+    if event.get("type") in ("reasoning_event", "reasoning", "graphics_progress", "graphics_generated"):
+        try:
+            from app.workflows.thought_narrator import enrich_event
+            event = enrich_event(event)
+        except Exception as e:
+            logger.error(f"Failed to narrate thought: {e}")
             
     try:
         callback = _event_callback.get()
@@ -75,4 +100,8 @@ def emit(event_type: str, payload: Dict[str, Any]):
     except LookupError:
         # Fallback print for offline tests / local regression suites
         msg = payload.get("message") or payload.get("step") or payload.get("tool") or ""
-        print(f"📡 [Event Bus - {event_type}] {msg}")
+        try:
+            print(f"[Event Bus - {event_type}] {msg}")
+        except Exception:
+            logger.info(f"[Event Bus - {event_type}] {msg}")
+

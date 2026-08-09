@@ -20,12 +20,39 @@ def download_broll(query: str, duration: float, aspect_ratio: str = "vertical") 
             print(f"Pexels API Error: Видео не найдено для '{query}'")
             return None
             
+        # Rank top candidates using OpenAI CLIP aesthetic & semantic model
+        candidates = data["videos"][:5]
         best_video = None
-        for v in data["videos"]:
-            if v.get("duration", 0) >= duration:
-                best_video = v
-                break
         
+        try:
+            from app.services.clip_service import get_clip_similarity
+            scored_candidates = []
+            for v in candidates:
+                img_url = v.get("image")
+                score = 0.5
+                if img_url:
+                    try:
+                        img_res = requests.get(img_url, timeout=3)
+                        tmp_img = f"uploads/_tmp_broll_{uuid.uuid4().hex[:6]}.jpg"
+                        with open(tmp_img, "wb") as f:
+                            f.write(img_res.content)
+                        score = get_clip_similarity(query, tmp_img)
+                        if os.path.exists(tmp_img):
+                            os.remove(tmp_img)
+                    except Exception:
+                        pass
+                scored_candidates.append((score, v))
+            
+            scored_candidates.sort(key=lambda x: x[0], reverse=True)
+            best_video = scored_candidates[0][1]
+            print(f"🧠 [OpenAI CLIP] Picked top aesthetic B-roll for '{query}' (CLIP score: {scored_candidates[0][0]:.3f})")
+        except Exception as err:
+            print(f"⚠️ CLIP B-roll ranking fallback: {err}")
+            for v in data["videos"]:
+                if v.get("duration", 0) >= duration:
+                    best_video = v
+                    break
+
         if not best_video:
             best_video = data["videos"][0]
             

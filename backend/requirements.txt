@@ -19,3 +19,8 @@ langgraph
 langchain
 langchain-openai
 langchain-groq
+requests
+opencv-python-headless
+rembg[cpu]
+torch
+torchvision

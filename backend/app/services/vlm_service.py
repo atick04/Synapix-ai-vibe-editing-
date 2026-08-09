@@ -114,6 +114,11 @@ async def analyze_with_gemini(sampled_frames: list[str], frame_times: list[float
             })
 
         print(f"[VLM] ✅ Gemini Vision successfully analyzed {len(result)} scenes.")
+        try:
+            from app.agents.base_agent import record_raw_tokens
+            record_raw_tokens(len(result) * 300)
+        except Exception as e:
+            print(f"[VLM] Token tracking failed: {e}")
         return result
     except Exception as e:
         print(f"[VLM] Gemini Vision failed: {e}")
@@ -219,6 +224,11 @@ async def analyze_video_scenes(video_path: str, fps: float = 0.5) -> list[dict]:
                 })
 
             print(f"[VLM] ✅ VLM Model analyzed {len(result)} scenes.")
+            try:
+                from app.agents.base_agent import record_raw_tokens
+                record_raw_tokens(len(result) * 300)
+            except Exception as e:
+                print(f"[VLM] Token tracking failed: {e}")
             return result
 
         except json.JSONDecodeError as e:

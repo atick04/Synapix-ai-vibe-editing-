@@ -8,7 +8,8 @@ TRANSLATIONS = {
     "create_zoom": "Adding dynamic camera zooms",
     "cut_clip": "Trimming unnecessary footage",
     "add_broll": "Injecting contextual stock footage (B-roll)",
-    "create_scene": "Designing semantic infographic scenes",
+    "create_scene": "Генерирую графическую сцену",
+    "GRAPHICS": "Графика",
     "build_transition": "Adding stylized scene transitions",
     "modify_clip": "Modifying specific focused segment on the timeline",
     
@@ -65,9 +66,13 @@ def humanize_step(step: str) -> str:
         return "Sound effects resolved and mixed"
     if "B-roll по теме" in step_clean:
         return "Injecting contextual stock footage (B-roll)"
+
+    # Keep GRAPHICS: activity lines readable in Russian (do not English-rewrite)
+    if step_clean.startswith("GRAPHICS:") or step_clean.startswith("REASONING:"):
+        return step_clean
         
     # Strip emojis and technical prefixes if not translated
-    step_clean = re.sub(r"^[🎬🔍🧠📁⚠️🔊📹⚙️⚒️🛠️✓✗]\s*", "", step_clean)
+    step_clean = re.sub(r"^[🎬🔍🧠📁⚠️🔊📹⚙️⚒️🛠️✓✗🎨📊]\s*", "", step_clean)
     step_clean = re.sub(r"^\[(?:Инструмент|Критик)\]\s*", "", step_clean)
     
     return step_clean

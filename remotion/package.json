@@ -1,0 +1,22 @@
+{
+  "name": "vibe-edit-remotion-test",
+  "version": "1.0.0",
+  "description": "Remotion and Three.js E2E Integration Test",
+  "scripts": {
+    "build": "remotion bundle"
+  },
+  "dependencies": {
+    "@remotion/lottie": "^4.0.489",
+    "lottie-web": "^5.13.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "remotion": "^4.0.0",
+    "three": "^0.160.0"
+  },
+  "devDependencies": {
+    "@remotion/cli": "^4.0.0",
+    "@types/react": "^18.2.0",
+    "@types/three": "^0.160.0",
+    "typescript": "^5.0.0"
+  }
+}

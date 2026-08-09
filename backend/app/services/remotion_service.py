@@ -35,13 +35,14 @@ async def render_remotion_overlay(
 
     cmd = [
         "npx", "remotion", "render",
-        "src/index.ts",
+        "src/index.tsx",
         composition_id,
         output_path,
         f"--props={props_file}",
         "--frames", f"0-{duration_frames - 1}",
         "--codec", "vp8",              # WebM with transparency
         "--pixel-format", "yuva420p",  # Keeps alpha channel
+        "--image-format", "png",       # Required for transparency
         "--log", "error",
     ]
 
@@ -142,6 +143,7 @@ async def apply_motion_graphic(
     start_time: float = 0.0,
     position: str = "top-right",
     accent_color: str = "#a78bfa",
+    vibe_config: dict = None,
     tmp_dir: str = "uploads",
 ) -> bool:
     """
@@ -156,6 +158,7 @@ async def apply_motion_graphic(
         "text": text.upper(),
         "subtext": subtext.upper(),
         "accentColor": accent_color,
+        "vibeConfig": vibe_config,
     }
 
     # Step 1: Render the Remotion animation to a transparent WebM

@@ -1,6 +1,11 @@
 "use client";
 import { useRef, useEffect, useState, useCallback, useImperativeHandle, useMemo, forwardRef } from "react";
 import { getApiUrl } from "@/utils/api";
+import { useVibe } from "@/context/VibeContext";
+import { SemanticSceneOverlay } from "@/components/SemanticSceneOverlay";
+import { RemotionGraphicPlayer } from "@/components/RemotionGraphicPlayer";
+import { ReactBitsPlayer } from "@/components/ReactBitsPlayer";
+
 
 // ──────────────────────────────────────────────────────────────────
 //  Types
@@ -18,7 +23,8 @@ interface Edit {
     position?: string;
     use_outline?: boolean;
     animation_style?: string;
-    type?: string;       // zoom_in | zoom_out
+    type?: string;       // zoom_in | zoom_out | zoom_hold
+    intensity?: number;  // peak zoom scale
     speed?: number;
     html_content?: string;
     query?: string;
@@ -33,6 +39,21 @@ interface Edit {
     transition_type?: string;
     sfx_type?: string;
     html?: string;
+    behind_speaker?: boolean;
+    bg_color?: string;
+    text_color?: string;
+    text_opacity?: number;
+    gradient_color2?: string;
+    mode?: string;       // overlay | full_broll | fullscreen | split
+    layout?: string;
+    design_aspect?: string; // "16:9" | "9:16" — canvas HTML was authored for
+    offset_x?: number;
+    offset_y?: number;
+    scale_x?: number;
+    scale_y?: number;
+    preset?: string;
+    component?: string;
+
     volume?: number;
     accent_font?: string;
     accent_color?: string;
@@ -41,23 +62,41 @@ interface Edit {
     text_case?: string;
     is_subtitle?: boolean;
     chunk_index?: number;
+    duration?: number;
     font_pairing?: string;
     word_styles?: string;
     inactive_opacity?: number;
     active_scale?: number;
     x?: number;
     y?: number;
+    /** Manual drag offset of HTML graphic overlay (% of frame). */
+    offset_x?: number;
+    offset_y?: number;
+    /** Manual scale of HTML graphic overlay (1 = 100%). */
+    scale_x?: number;
+    scale_y?: number;
     width?: number;
     height?: number;
     letter_spacing?: number;
     line_spacing?: number;
     scene_data?: any;
-    preset?: string;
     lut?: string;
+
     brightness?: number;
     contrast?: number;
     saturation?: number;
     hue?: number;
+    style?: string;
+    subtext?: string;
+    geometry?: string;
+    material?: string;
+    animation?: string;
+    particle_count?: number;
+    particle_size?: number;
+    custom_shader?: string;
+    vibe_config?: any;
+    layout?: string;
+    is_split?: boolean;
 }
 
 interface EDL {
@@ -77,6 +116,7 @@ interface SubtitleConfig {
     color?: string;
     accent_color?: string;
     position?: string;
+    behind_speaker?: boolean;
     x?: number;
     y?: number;
     use_shadow?: boolean;
@@ -94,6 +134,7 @@ interface SubtitleConfig {
 interface DrawnTextBox {
     id: string;
     isSub: boolean;
+    isBgText?: boolean;
     editIndex?: number;
     chunkIndex?: number;
     left: number;
@@ -109,6 +150,10 @@ interface DrawnTextBox {
 
 interface Props {
     videoSrc: string | null;
+    /** @deprecated Prefer rvmMaskSrc — VP8 WebM alpha is unreliable in canvas */
+    rvmAlphaSrc?: string | null;
+    /** Grayscale H.264 matte for reliable behind-speaker cutout */
+    rvmMaskSrc?: string | null;
     edits: Edit[];
     edl: EDL | null;
     isPlaying: boolean;
@@ -125,6 +170,9 @@ interface Props {
     onUpdateSubtitleGlobal?: (field: string, value: any) => void;
     onUpdateSubtitleGlobalMultiple?: (fields: Record<string, any>) => void;
     onUpdateSubtitleChunk?: (chunkIndex: number, text: string) => void;
+    brandId?: string;
+    brandAssets?: { fonts: any[]; luts: any[]; music?: any[] };
+    selectedTemplate?: string;
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -132,17 +180,37 @@ interface Props {
 // ──────────────────────────────────────────────────────────────────
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
+function easeInOutCubic(t: number): number {
+    const x = Math.min(1, Math.max(0, t));
+    return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+}
+
+/** Soft punch envelope: rise → settle back to 0 so scale never cliffs when the edit ends */
+function zoomPunchEnvelope(p: number): number {
+    if (p <= 0) return 0;
+    if (p >= 1) return 0;
+    if (p < 0.55) return easeInOutCubic(p / 0.55);
+    return 1 - easeInOutCubic((p - 0.55) / 0.45);
+}
+
+// Google Fonts (Cyrillic-capable). Prefer CSS load over latin-only fontsource files.
+const CYRILLIC_FONT_CSS =
+    'https://fonts.googleapis.com/css2?family=Comfortaa:wght@700&family=Inter:wght@700;900&family=JetBrains+Mono:wght@700&family=Manrope:wght@700;800&family=Montserrat:wght@700;800;900&family=Oswald:wght@700&family=Playfair+Display:wght@700&family=Rubik:wght@700;800&family=Unbounded:wght@700;900&family=Bebas+Neue&family=IBM+Plex+Sans:wght@700&display=swap';
+
 const FONT_URLS: Record<string, string> = {
-    'Inter': 'https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.8/files/inter-latin-700-normal.woff2',
-    'Manrope': 'https://cdn.jsdelivr.net/npm/@fontsource/manrope@5.0.8/files/manrope-latin-700-normal.woff2',
-    'Rubik': 'https://cdn.jsdelivr.net/npm/@fontsource/rubik@5.0.8/files/rubik-latin-700-normal.woff2',
-    'Oswald': 'https://cdn.jsdelivr.net/npm/@fontsource/oswald@5.0.8/files/oswald-latin-700-normal.woff2',
-    'Montserrat': 'https://cdn.jsdelivr.net/npm/@fontsource/montserrat@5.0.8/files/montserrat-latin-800-normal.woff2',
-    'Comfortaa': 'https://cdn.jsdelivr.net/npm/@fontsource/comfortaa@5.0.8/files/comfortaa-latin-700-normal.woff2',
-    'Lobster': 'https://cdn.jsdelivr.net/npm/@fontsource/lobster@5.0.8/files/lobster-latin-400-normal.woff2',
-    'JetBrainsMono': 'https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.8/files/jetbrains-mono-latin-700-normal.woff2',
-    'IBMPlexSans': 'https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.8/files/ibm-plex-sans-latin-700-normal.woff2',
-    'BebasNeue': 'https://cdn.jsdelivr.net/npm/@fontsource/bebas-neue@5.0.8/files/bebas-neue-latin-400-normal.woff2'
+    // Fallback files — prefer Cyrillic subsets from fontsource when CSS load fails
+    'Inter': 'https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.8/files/inter-cyrillic-700-normal.woff2',
+    'Manrope': 'https://cdn.jsdelivr.net/npm/@fontsource/manrope@5.0.8/files/manrope-cyrillic-700-normal.woff2',
+    'Rubik': 'https://cdn.jsdelivr.net/npm/@fontsource/rubik@5.0.8/files/rubik-cyrillic-700-normal.woff2',
+    'Oswald': 'https://cdn.jsdelivr.net/npm/@fontsource/oswald@5.0.8/files/oswald-cyrillic-700-normal.woff2',
+    'Montserrat': 'https://cdn.jsdelivr.net/npm/@fontsource/montserrat@5.0.8/files/montserrat-cyrillic-800-normal.woff2',
+    'Comfortaa': 'https://cdn.jsdelivr.net/npm/@fontsource/comfortaa@5.0.8/files/comfortaa-cyrillic-700-normal.woff2',
+    'Lobster': 'https://cdn.jsdelivr.net/npm/@fontsource/lobster@5.0.8/files/lobster-cyrillic-400-normal.woff2',
+    'JetBrainsMono': 'https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.8/files/jetbrains-mono-cyrillic-700-normal.woff2',
+    'IBMPlexSans': 'https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.8/files/ibm-plex-sans-cyrillic-700-normal.woff2',
+    'Unbounded': 'https://cdn.jsdelivr.net/npm/@fontsource/unbounded@5.0.8/files/unbounded-cyrillic-700-normal.woff2',
+    'PlayfairDisplay': 'https://cdn.jsdelivr.net/npm/@fontsource/playfair-display@5.0.8/files/playfair-display-cyrillic-700-normal.woff2',
+    'BebasNeue': 'https://cdn.jsdelivr.net/npm/@fontsource/bebas-neue@5.0.8/files/bebas-neue-latin-400-normal.woff2',
 };
 
 const LUT_PRESETS: Record<string, { brightness: number; contrast: number; saturation: number; hue: number }> = {
@@ -171,10 +239,32 @@ function getZoomScale(edits: Edit[], t: number): number {
             t >= (e.start as number) && t < (e.end as number)
     );
     if (!zoom) return 1;
-    const progress = (t - (zoom.start as number)) / ((zoom.end as number) - (zoom.start as number));
-    if (zoom.type === 'zoom_in') return lerp(1, 1.14, Math.min(progress, 1));
-    if (zoom.type === 'zoom_out') return lerp(1.14, 1, Math.min(progress, 1));
-    return 1;
+
+    const start = zoom.start as number;
+    const end = zoom.end as number;
+    const dur = Math.max(0.05, end - start);
+    const p = Math.min(1, Math.max(0, (t - start) / dur));
+    const peak = typeof (zoom as any).intensity === 'number'
+        ? Math.min(1.35, Math.max(1.05, (zoom as any).intensity))
+        : 1.14;
+
+    const zType = zoom.type || 'zoom_in';
+
+    // Hold zoomed with soft ramp in/out — no hard cut at boundaries
+    if (zType === 'zoom_hold' || zType === 'hold') {
+        if (p < 0.18) return lerp(1, peak, easeInOutCubic(p / 0.18));
+        if (p > 0.82) return lerp(peak, 1, easeInOutCubic((p - 0.82) / 0.18));
+        return peak;
+    }
+
+    // Default punch: ease to peak then settle back to 1 before edit ends
+    const envelope = zoomPunchEnvelope(p);
+    if (zType === 'zoom_out') {
+        // Slow pull-back that also settles (starts zoomed, eases toward 1)
+        return lerp(peak, 1, easeInOutCubic(p));
+    }
+    // zoom_in / punch
+    return lerp(1, peak, envelope);
 }
 
 function isCutAt(edl: EDL | null, t: number): boolean {
@@ -233,6 +323,8 @@ function fmtTime(s: number): string {
 //  Component
 const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer({
     videoSrc,
+    rvmAlphaSrc = null,
+    rvmMaskSrc = null,
     edits,
     edl,
     isPlaying,
@@ -249,16 +341,40 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
     onUpdateSubtitleGlobal,
     onUpdateSubtitleGlobalMultiple,
     onUpdateSubtitleChunk,
+    brandId,
+    brandAssets,
+    selectedTemplate,
 }, ref) {
+    const { vibeConfig } = useVibe();
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const localVideoRef = useRef<HTMLVideoElement>(null);
     const videoRef = (ref as React.RefObject<HTMLVideoElement | null>) || localVideoRef;
+    const rvmAlphaVideoRef = useRef<HTMLVideoElement>(null);
+    const rvmMaskVideoRef = useRef<HTMLVideoElement>(null);
+    const cutoutCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    const maskAlphaCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    const [rvmAlphaReady, setRvmAlphaReady] = useState(false);
+    const [rvmMaskReady, setRvmMaskReady] = useState(false);
+
+    // Behind-speaker must use 2D canvas — Three.js path never draws the layered stack
+    const behindModeActive = useMemo(() => {
+        const setBg = edits.some(e => e.action === 'set_video_background');
+        const sub = edits.find(e => e.action === 'add_subtitles');
+        const behindSubs = !!(
+            sub?.behind_speaker ||
+            sub?.position === 'behind_speaker' ||
+            (subtitleConfig as any)?.behind_speaker ||
+            (subtitleConfig as any)?.position === 'behind_speaker'
+        );
+        return !!(setBg || behindSubs);
+    }, [edits, subtitleConfig]);
     const gsapIframeRef = useRef<HTMLIFrameElement>(null);
     const rafRef = useRef<number | null>(null);
     const edlRef = useRef(edl);
     const editsRef = useRef(edits);
     const drawnTextBoxesRef = useRef<DrawnTextBox[]>([]);
     const [selectedEntity, setSelectedEntity] = useState<{ sceneEditIndex: number; entityId: string } | null>(null);
+    const [selectedGraphicEditIndex, setSelectedGraphicEditIndex] = useState<number | null>(null);
     const [editingEntity, setEditingEntity] = useState<{
         sceneEditIndex: number;
         entityId: string;
@@ -271,15 +387,96 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
     const dragStartDimsRef = useRef({ width: 0, height: 0, fontSize: 0 });
     const dragModeRef = useRef<'move' | 'resize-TL' | 'resize-TR' | 'resize-BL' | 'resize-BR' | 'resize-T' | 'resize-B' | 'resize-L' | 'resize-R' | null>(null);
 
+    const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    const webglCanvasRef = useRef<HTMLCanvasElement | null>(null); // Dedicated WebGL canvas — never gets a 2D context
+    const threeCompositorRef = useRef<any>(null);
+    const [threeReady, setThreeReady] = useState(false); // Controls DOM rendering and updates dependency array
+
     const [currentTime, setCurrentTime] = useState(0);
     const [dur, setDur] = useState(duration || 0);
     const [videoReady, setVideoReady] = useState(false);
+
+    useEffect(() => {
+        if (videoReady) {
+            if (!overlayCanvasRef.current) {
+                overlayCanvasRef.current = document.createElement('canvas');
+            }
+
+            // Size the WebGL and Overlay canvas to match the main canvas dimensions
+            const mainCanvas = canvasRef.current;
+            if (mainCanvas && webglCanvasRef.current) {
+                webglCanvasRef.current.width = mainCanvas.width || 1280;
+                webglCanvasRef.current.height = mainCanvas.height || 720;
+                overlayCanvasRef.current.width = mainCanvas.width || 1280;
+                overlayCanvasRef.current.height = mainCanvas.height || 720;
+            }
+
+            if (threeCompositorRef.current) {
+                threeCompositorRef.current.destroy();
+                threeCompositorRef.current = null;
+                setThreeReady(false);
+            }
+
+            import('@/utils/threeCompositor').then(({ ThreeCompositor }) => {
+                if (!videoRef.current || !webglCanvasRef.current || !overlayCanvasRef.current) return;
+                try {
+                    threeCompositorRef.current = new ThreeCompositor(
+                        webglCanvasRef.current,
+                        videoRef.current,
+                        overlayCanvasRef.current
+                    );
+                    setThreeReady(true);
+                    console.log("[SandboxPlayer] WebGL ThreeCompositor successfully initialized!");
+                } catch (err) {
+                    console.error("[SandboxPlayer] Failed to create ThreeCompositor:", err);
+                    setThreeReady(false);
+                }
+            }).catch(err => {
+                console.error("[SandboxPlayer] Failed to load ThreeCompositor:", err);
+            });
+        }
+
+        return () => {
+            setThreeReady(false);
+            if (threeCompositorRef.current) {
+                threeCompositorRef.current.destroy();
+                threeCompositorRef.current = null;
+            }
+        };
+    }, [videoReady]);
+
     const [videoAspect, setVideoAspect] = useState<number>(16 / 9);
     const targetRatio = useMemo(() => {
         if (targetFormat === '16:9') return 16 / 9;
         if (targetFormat === '9:16') return 9 / 16;
         return videoAspect;
     }, [targetFormat, videoAspect]);
+
+    const activeMG = useMemo(() => {
+        if (!videoReady) return null;
+        const raw = edits.find(e => (e.action === 'add_motion_graphic' || e.action === 'add_broll') && e.start != null && e.end != null && currentTime >= e.start && currentTime < e.end);
+        if (raw && raw.action === 'add_broll') {
+            if (raw.broll_url === 'remotion_three_js_dynamic' || (!raw.resolved_path && !raw.broll_url)) {
+                const query = raw.query || 'technology';
+                let style = 'cinematic';
+                if (/tech|data|code|blueprint|logic|graph/i.test(query)) {
+                    style = 'blueprint';
+                } else if (/fluid|flow|energy|liquid|particles/i.test(query)) {
+                    style = 'liquid';
+                }
+                return {
+                    ...raw,
+                    action: 'add_motion_graphic',
+                    style: style,
+                    text: query.toUpperCase(),
+                    subtext: 'A-ROLL VISUALIZATION',
+                    accent_color: '#a78bfa'
+                };
+            }
+            return null;
+        }
+        return raw;
+    }, [edits, currentTime, videoReady]);
     const [loadedFonts, setLoadedFonts] = useState<Set<string>>(new Set());
     
     const API_URL = getApiUrl();
@@ -302,36 +499,60 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
         setProxyFailed(false);
     }, [videoSrc]);
 
+    useEffect(() => {
+        setRvmAlphaReady(false);
+    }, [rvmAlphaSrc]);
+
+    useEffect(() => {
+        setRvmMaskReady(false);
+    }, [rvmMaskSrc]);
+
     const activeVideoSrc = useMemo(() => {
         if (!videoSrc) return null;
-        if (!isMobile || proxyFailed) return videoSrc;
-
-        // Try to find if there is a proxy path in mediaLibrary
-        if (mediaLibrary && mediaLibrary.length > 0) {
-            const filenameFromSrc = videoSrc.split('/').pop()?.toLowerCase();
-            if (filenameFromSrc) {
-                const foundItem = mediaLibrary.find((item: any) => {
-                    const itemPath = item.path || "";
-                    return itemPath.toLowerCase().endsWith(filenameFromSrc);
-                });
-                if (foundItem && foundItem.proxy_path) {
-                    return resolveMediaUrl(foundItem.proxy_path);
+        
+        let src = videoSrc;
+        if (isMobile && !proxyFailed) {
+            // Try to find if there is a proxy path in mediaLibrary
+            if (mediaLibrary && mediaLibrary.length > 0) {
+                const filenameFromSrc = videoSrc.split('/').pop()?.toLowerCase();
+                if (filenameFromSrc) {
+                    const foundItem = mediaLibrary.find((item: any) => {
+                        const itemPath = item.path || "";
+                        return itemPath.toLowerCase().endsWith(filenameFromSrc);
+                    });
+                    if (foundItem && foundItem.proxy_path) {
+                        src = resolveMediaUrl(foundItem.proxy_path);
+                    }
+                }
+            } else if (videoSrc.includes('/uploads/') && !videoSrc.includes('_rendered') && !videoSrc.includes('_proxy') && !videoSrc.includes('_rvm_preview')) {
+                // Fallback: guess proxy name if it's in uploads/ and not a rendered video
+                const parts = videoSrc.split('.');
+                if (parts.length > 1) {
+                    const ext = parts.pop();
+                    const base = parts.join('.');
+                    src = `${base}_proxy.${ext}`;
                 }
             }
         }
 
-        // Fallback: guess proxy name if it's in uploads/ and not a rendered video
-        if (videoSrc.includes('/uploads/') && !videoSrc.includes('_rendered') && !videoSrc.includes('_proxy')) {
-            const parts = videoSrc.split('.');
-            if (parts.length > 1) {
-                const ext = parts.pop();
-                const base = parts.join('.');
-                return `${base}_proxy.${ext}`;
-            }
+        // Add a query parameter to bypass browser CORS cache for WebGL texture loader
+        if (src.includes('?')) {
+            return `${src}&cors=1`;
         }
-
-        return videoSrc;
+        return `${src}?cors=1`;
     }, [videoSrc, isMobile, proxyFailed, mediaLibrary, resolveMediaUrl]);
+
+    useEffect(() => {
+        if (typeof document === 'undefined') return;
+        const id = 'vibe-cyrillic-fonts';
+        if (!document.getElementById(id)) {
+            const link = document.createElement('link');
+            link.id = id;
+            link.rel = 'stylesheet';
+            link.href = CYRILLIC_FONT_CSS;
+            document.head.appendChild(link);
+        }
+    }, []);
 
     useEffect(() => {
         const fontsToLoad = new Set<string>();
@@ -350,37 +571,56 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
             const normFont = getNormalizedFontName(rawFont);
             if (loadedFonts.has(normFont)) return;
 
-            const url = FONT_URLS[normFont];
+            const markLoaded = () => {
+                setLoadedFonts(prev => {
+                    const next = new Set(prev);
+                    next.add(normFont);
+                    return next;
+                });
+            };
+
+            const cssFamily = normFont === 'JetBrainsMono' ? 'JetBrains Mono'
+                : normFont === 'IBMPlexSans' ? 'IBM Plex Sans'
+                : normFont === 'PlayfairDisplay' ? 'Playfair Display'
+                : normFont === 'BebasNeue' ? 'Bebas Neue'
+                : normFont;
+
+            // Google Fonts CSS (with Cyrillic) → document.fonts, then optional woff2 fallback
+            if (typeof document !== 'undefined' && document.fonts?.load) {
+                document.fonts.load(`700 64px "${cssFamily}"`).then((faces) => {
+                    if (faces.length > 0) markLoaded();
+                }).catch(() => { /* fallback below */ });
+            }
+
+            let url = FONT_URLS[normFont];
+            if (!url && brandAssets?.fonts) {
+                const bFont = brandAssets.fonts.find(f => f.name.toLowerCase() === normFont.toLowerCase() || f.filename.toLowerCase() === normFont.toLowerCase());
+                if (bFont) {
+                    url = bFont.path.startsWith("http") ? bFont.path : `${getApiUrl()}/${bFont.path}`;
+                }
+            }
+
             if (!url) {
-                // If it is a standard system font, mark as loaded
                 if (['Arial', 'Helvetica', 'Times New Roman', 'sans-serif', 'serif'].includes(normFont)) {
-                    setLoadedFonts(prev => {
-                        const next = new Set(prev);
-                        next.add(normFont);
-                        return next;
-                    });
+                    markLoaded();
                 }
                 return;
             }
 
             console.log(`[SandboxPlayer] Dynamic Font Loading: ${normFont} from ${url}`);
             const font = new FontFace(normFont, `url(${url})`, {
-                weight: normFont === 'Lobster' || normFont === 'BebasNeue' ? '400' : '700'
+                weight: normFont === 'Lobster' || normFont === 'BebasNeue' ? '400' : '700',
             });
 
             font.load().then((loadedFont) => {
                 document.fonts.add(loadedFont);
-                setLoadedFonts(prev => {
-                    const next = new Set(prev);
-                    next.add(normFont);
-                    return next;
-                });
+                markLoaded();
                 console.log(`[SandboxPlayer] Font ${normFont} successfully loaded for Canvas rendering`);
             }).catch((err) => {
                 console.warn(`[SandboxPlayer] FontFace failed to load ${normFont}:`, err);
             });
         });
-    }, [subtitleConfig?.font, subtitleConfig?.font_pairing, edits, loadedFonts]);
+    }, [subtitleConfig?.font, subtitleConfig?.font_pairing, edits, loadedFonts, brandAssets]);
 
     const assetEdits = edits.filter(e => e.action === 'add_asset' && e.resolved_path);
     const assetRefs = useRef<(HTMLMediaElement | null)[]>([]);
@@ -392,30 +632,86 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
 
     const sceneEditsRef = useRef<Edit[]>([]);
 
+    const forceHtmlTransparency = (html: string) => {
+        if (!html) return '';
+        return html
+            .replace(/\bbg-white\b/g, 'bg-transparent')
+            .replace(/\bbg-slate-50\b/g, 'bg-transparent')
+            .replace(/\bbg-neutral-50\b/g, 'bg-transparent')
+            .replace(/\bbg-zinc-50\b/g, 'bg-transparent')
+            .replace(/\bbg-gray-50\b/g, 'bg-transparent')
+            .replace(/background(-color)?\s*:\s*([^;"'}]+)/gi, (match, group1, value) => {
+                const val = value.trim().toLowerCase().replace(/\s*!important/g, '');
+                const isWhiteLike = val === 'white' || 
+                                    val === '#fff' || 
+                                    val === '#ffffff' || 
+                                    val === '#f8fafc' || 
+                                    val === '#f3f4f6' || 
+                                    val === '#fafafa' || 
+                                    val === '#f5f5f5' || 
+                                    val === '#f9fafb' || 
+                                    val.includes('255,255,255') || 
+                                    val.includes('255, 255, 255') || 
+                                    val.includes('248,250,252') || 
+                                    val.includes('243,244,246');
+                if (isWhiteLike) {
+                    return 'background-color: transparent !important';
+                }
+                return match;
+            });
+    };
+
     // ── Scene Override Edits ──────────────────────────────────────
     const sceneEdits = edits.filter(e => e.action === 'scene_override' && e.html_content);
 
     // keep refs in sync to avoid stale closures in RAF
     useEffect(() => { edlRef.current = edl; }, [edl]);
     useEffect(() => { editsRef.current = edits; }, [edits]);
+    const activeSemanticScenes = useMemo(() => {
+        return edits.filter(
+            e => e.action === 'semantic_scene' && e.scene_data && e.start != null && e.end != null && currentTime >= e.start && currentTime < e.end
+        );
+    }, [edits, currentTime]);
     useEffect(() => { if (duration > 0) setDur(duration); }, [duration]);
     useEffect(() => { sceneEditsRef.current = sceneEdits; }, [sceneEdits]);
+    useEffect(() => {
+        if (isPlaying) setSelectedGraphicEditIndex(null);
+    }, [isPlaying]);
 
     // ── Graphics HTML ──────────────────────────────────────────────
-    const graphicsEdits = edits.filter(e => e.action === 'canvas_overlay' || e.action === 'hyperframes_html');
-    const graphicsHtml = graphicsEdits.length > 0 ? (() => {
-        // Extract all html_content fragments — agent produces <div id="root">...<script>...</script></div>
-        // We need to:
-        // 1. Inject GSAP first via script tag
-        // 2. Then run all inline scripts AFTER GSAP is loaded
-        const rawFragments = graphicsEdits.map(e => e.html_content || e.html || '').join('\n');
-        const fragments = rawFragments
+    const graphicsEdits = edits.filter(e => 
+        (e.action === 'canvas_overlay' || 
+         e.action === 'hyperframes_html' || 
+         e.action === 'add_hyperframes_graphics' || 
+         e.action === 'add_motion_graphic' || 
+         e.action === 'add_dynamic_graphic') && 
+        (e.html_content || e.html)
+    );
+    const buildSingleGraphicHtml = useCallback((edit: Edit) => {
+        const extractBody = (raw: string): string => {
+            if (!/<html[\s>]/i.test(raw)) return raw; // raw fragment
+            const bodyM = raw.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+            const headM = raw.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
+            const headStyles: string[] = [];
+            if (headM) {
+                const re = /<style[^>]*>([\s\S]*?)<\/style>/gi;
+                let m;
+                while ((m = re.exec(headM[1])) !== null) headStyles.push(m[1]);
+            }
+            const prefix = headStyles.length ? `<style>${headStyles.join('\n')}</style>\n` : '';
+            return prefix + (bodyM ? bodyM[1] : raw);
+        };
+
+        const isFullCover = edit.mode === 'full_broll' || edit.mode === 'fullscreen' || edit.action === 'scene_override';
+        const rawHtml = edit.html_content || edit.html || '';
+        const rawFragment = extractBody(isFullCover ? rawHtml : forceHtmlTransparency(rawHtml));
+        const fragment = rawFragment
             .replace(/src=(['"])\/assets\//g, `src=$1${API_URL}/assets/`)
             .replace(/url\((['"]?)\/assets\//g, `url($1${API_URL}/assets/`);
 
-        // Pull <script> blocks out of fragments so we can defer them
+        // Pull <script> blocks out of fragment so we can defer them after GSAP loads
         const scriptBlocks: string[] = [];
-        const fragmentWithoutScripts = fragments.replace(/<script[^>]*>([\s\S]*?)<\/script>/gi, (_, code) => {
+        const fragmentWithoutScripts = fragment.replace(/<script[^>]*>([\s\S]*?)<\/script>/gi, (_, code) => {
             scriptBlocks.push(code);
             return '';
         });
@@ -428,31 +724,99 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Graphics]', e); }
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
+  <script>
+(function(){
+  function ft(){
+    try {
+      var h=document.documentElement,b=document.body;
+      if(h){h.style.setProperty('background','transparent','important');h.style.setProperty('background-color','transparent','important');}
+      if(b){b.style.setProperty('background','transparent','important');b.style.setProperty('background-color','transparent','important');}
+      
+      var els = document.querySelectorAll('*');
+      var w = window.innerWidth || 1080;
+      var h = window.innerHeight || 1920;
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (el.tagName === 'HTML' || el.tagName === 'BODY' || el.id === 'root') continue;
+        
+        var isWrapper = false;
+        if (el.parentNode === b || (el.parentNode && el.parentNode.id === 'root')) {
+          isWrapper = true;
+        } else {
+          var rect = el.getBoundingClientRect();
+          if (rect.width >= w * 0.7 && rect.height >= h * 0.7) {
+            isWrapper = true;
+          }
+        }
+        
+        if (isWrapper) {
+          el.style.setProperty('background', 'transparent', 'important');
+          el.style.setProperty('background-color', 'transparent', 'important');
+          el.style.setProperty('background-image', 'none', 'important');
+        }
+      }
+    } catch(e) {}
+  }
+  ft();
+  document.addEventListener('DOMContentLoaded',ft);
+  window.addEventListener('load',ft);
+  setInterval(ft, 100);
+  if(window.MutationObserver){
+    new MutationObserver(function(ms){
+      ft();
+      for(var i=0; i<ms.length; i++){
+        var m=ms[i];
+        if(m.addedNodes){
+          for(var j=0; j<m.addedNodes.length; j++){
+            var n=m.addedNodes[j];
+            if(n.nodeName==='STYLE'||n.nodeName==='LINK'||n.nodeType===1) setTimeout(ft,0);
+          }
+        }
+      }
+    }).observe(document.documentElement,{childList:true,subtree:true});
+  }
+})();
+  </script>
+  <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Inter:wght@400;700;900&family=Marck+Script&family=Playfair+Display:ital,wght@0,700;1,700&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@700&family=Inter:wght@400;700;900&family=JetBrains+Mono:wght@700&family=Manrope:wght@400;700;800&family=Montserrat:wght@400;700;800;900&family=Oswald:wght@700&family=Playfair+Display:ital,wght@0,700;1,700&family=Rubik:wght@400;700;800&family=Unbounded:wght@700;900&display=swap" rel="stylesheet"/>
   <style>
     *{margin:0;padding:0;box-sizing:border-box;}
-    html,body{width:100%;height:100%;overflow:hidden;background:transparent;}
+    html,body{width:100% !important;height:100% !important;overflow:hidden !important;background:transparent !important;background-color:transparent !important;color-scheme:dark !important;}
     .clip{position:absolute;}
     #root{
-      width:1080px;height:1920px;
+      width:${targetRatio >= 1 ? 1920 : 1080}px;height:${targetRatio >= 1 ? 1080 : 1920}px;
       position:absolute;top:0;left:0;
       transform-origin:top left;
-      background:transparent;overflow:hidden;
+      background:transparent !important;background-color:transparent !important;overflow:hidden;
+    }
+    html, body, #root, .clip,
+    body > *, #root > *, #preview-container > *,
+    .min-h-screen, .h-screen, .w-screen, .inset-0,
+    [class*="min-h-screen"], [class*="h-screen"], [class*="w-screen"], [class*="inset-0"],
+    [style*="height: 100vh"], [style*="height: 100%"], [style*="width: 100%"] {
+        background: transparent !important;
+        background-color: transparent !important;
     }
   </style>
 </head>
-<body>
-  ${fragmentWithoutScripts}
+<body style="background: transparent !important; background-color: transparent !important;">
+  <div id="root">
+    ${fragmentWithoutScripts}
+  </div>
   <script>
-    // Scale #root to fit viewport
+    // Scale #root to fit viewport (match video aspect)
+    const DESIGN_W=${targetRatio >= 1 ? 1920 : 1080};
+    const DESIGN_H=${targetRatio >= 1 ? 1080 : 1920};
     function scaleRoot(){
       const r=document.getElementById('root');
       if(!r)return;
-      const s=Math.min(window.innerWidth/1080,window.innerHeight/1920);
+      r.style.width=DESIGN_W+'px';
+      r.style.height=DESIGN_H+'px';
+      const s=Math.min(window.innerWidth/DESIGN_W,window.innerHeight/DESIGN_H);
       r.style.transform='scale('+s+')';
       // Center the scaled container
-      const scaledW=1080*s, scaledH=1920*s;
+      const scaledW=DESIGN_W*s, scaledH=DESIGN_H*s;
       r.style.left=((window.innerWidth-scaledW)/2)+'px';
       r.style.top=((window.innerHeight-scaledH)/2)+'px';
     }
@@ -469,20 +833,73 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Graphics]', e); }
       window.addEventListener('message',function(ev){
         if(!ev.data||ev.data.type!=='sync_time')return;
         const t=ev.data.time;
+        const clipStart=${edit.start || 0};
+        const clipEnd=${edit.end != null ? edit.end : ((edit.start || 0) + (edit.duration || 999999))};
+        const clipDuration=Math.max(0.15, clipEnd - clipStart);
+        const relTime = ev.data.relTime !== undefined ? ev.data.relTime : (t - clipStart);
+
+        // Timeline edit window is authoritative after user stretch/trim
+        const inWindow = t >= clipStart - 0.05 && t <= clipEnd + 0.05;
+        const clips=document.querySelectorAll('.clip');
+        clips.forEach(function(clip){
+          clip.style.display = inWindow ? 'block' : 'none';
+          if (inWindow) {
+            clip.setAttribute('data-start', String(clipStart));
+            clip.setAttribute('data-duration', String(clipDuration));
+          }
+        });
+
+        // Sync GSAP timelines; hold visible pose when clip is stretched past baked anim length
         const tls=window.__timelines||{};
-        Object.values(tls).forEach(function(tl){
-          if(tl&&tl.seek){tl.pause();tl.seek(t);}
+        const found=Object.values(tls);
+        if(found.length===0 && window.gsap && window.gsap.globalTimeline){
+          found.push(window.gsap.globalTimeline);
+        }
+        found.forEach(function(tl){
+          if(tl&&tl.seek){
+            tl.pause();
+            const tlDur = tl.duration ? tl.duration() : 999;
+            if (tlDur > 0 && tlDur <= 120) {
+              const exitWindow = Math.min(0.6, Math.max(0.35, tlDur * 0.18));
+              const holdAt = Math.max(0, Math.min(tlDur * 0.72, tlDur - 0.7));
+              let seekTo = Math.max(0, relTime);
+              if (relTime > holdAt && clipDuration > tlDur + 0.05) {
+                if (relTime < clipDuration - exitWindow) {
+                  seekTo = holdAt;
+                } else {
+                  const p = Math.min(1, Math.max(0, (relTime - (clipDuration - exitWindow)) / exitWindow));
+                  seekTo = holdAt + p * (tlDur - holdAt);
+                }
+              } else {
+                seekTo = Math.min(relTime, tlDur);
+              }
+              tl.seek(seekTo);
+            } else {
+              tl.seek(t);
+            }
+          }
         });
       });
     };
     document.head.appendChild(gsapScript);
   </script>
+  <style>
+    html, body, #root, .clip,
+    body > *, #root > *, #preview-container > *,
+    .min-h-screen, .h-screen, .w-screen, .inset-0,
+    [class*="min-h-screen"], [class*="h-screen"], [class*="w-screen"], [class*="inset-0"],
+    [style*="height: 100vh"], [style*="height: 100%"], [style*="width: 100%"] {
+        background: transparent !important;
+        background-color: transparent !important;
+    }
+  </style>
 </body>
 </html>`;
-    })() : undefined;
+    }, [API_URL, forceHtmlTransparency, targetRatio]);
 
     // ── Scene Override HTML (full-frame opaque scenes) ─────────────
     const buildSceneHtml = (sceneEdit: Edit) => {
+        // Never strip solid covers — scene_override / full_broll must stay opaque
         const rawHtml = sceneEdit.html_content || '';
         const html = rawHtml
             .replace(/src=(['"])\/assets\//g, `src=$1${API_URL}/assets/`)
@@ -500,32 +917,90 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
+  <script>
+(function(){
+  function ft(){
+    try {
+      var h=document.documentElement,b=document.body;
+      if(h){h.style.setProperty('background','transparent','important');h.style.setProperty('background-color','transparent','important');}
+      if(b){b.style.setProperty('background','transparent','important');b.style.setProperty('background-color','transparent','important');}
+      
+      var els = document.querySelectorAll('*');
+      var w = window.innerWidth || 1080;
+      var h = window.innerHeight || 1920;
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (el.tagName === 'HTML' || el.tagName === 'BODY' || el.id === 'root') continue;
+        
+        var isWrapper = false;
+        if (el.parentNode === b || (el.parentNode && el.parentNode.id === 'root')) {
+          isWrapper = true;
+        } else {
+          var rect = el.getBoundingClientRect();
+          if (rect.width >= w * 0.7 && rect.height >= h * 0.7) {
+            isWrapper = true;
+          }
+        }
+        
+        if (isWrapper) {
+          el.style.setProperty('background', 'transparent', 'important');
+          el.style.setProperty('background-color', 'transparent', 'important');
+          el.style.setProperty('background-image', 'none', 'important');
+        }
+      }
+    } catch(e) {}
+  }
+  ft();
+  document.addEventListener('DOMContentLoaded',ft);
+  window.addEventListener('load',ft);
+  setInterval(ft, 100);
+  if(window.MutationObserver){
+    new MutationObserver(function(ms){
+      ft();
+      for(var i=0; i<ms.length; i++){
+        var m=ms[i];
+        if(m.addedNodes){
+          for(var j=0; j<m.addedNodes.length; j++){
+            var n=m.addedNodes[j];
+            if(n.nodeName==='STYLE'||n.nodeName==='LINK'||n.nodeType===1) setTimeout(ft,0);
+          }
+        }
+      }
+    }).observe(document.documentElement,{childList:true,subtree:true});
+  }
+})();
+  </script>
+  <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Inter:wght@400;700;900&family=Marck+Script&family=Playfair+Display:ital,wght@0,700;1,700&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@700&family=Inter:wght@400;700;900&family=JetBrains+Mono:wght@700&family=Manrope:wght@400;700;800&family=Montserrat:wght@400;700;800;900&family=Oswald:wght@700&family=Playfair+Display:ital,wght@0,700;1,700&family=Rubik:wght@400;700;800&family=Unbounded:wght@700;900&display=swap" rel="stylesheet"/>
   <style>
     *{margin:0;padding:0;box-sizing:border-box;}
-    html,body{width:100%;height:100%;overflow:hidden;background:transparent;}
+    html,body{width:100% !important;height:100% !important;overflow:hidden !important;background:transparent !important;background-color:transparent !important;color-scheme:dark !important;}
     .clip{position:absolute;}
     #root{
-      width:1080px;height:1920px;
+      width:${targetRatio >= 1 ? 1920 : 1080}px;height:${targetRatio >= 1 ? 1080 : 1920}px;
       position:absolute;top:0;left:0;
       transform-origin:top left;
-      overflow:hidden;
+      background:transparent !important;background-color:transparent !important;overflow:hidden;
     }
     img{max-width:none;}
   </style>
 </head>
-<body>
+<body style="background: transparent !important; background-color: transparent !important;">
   <div id="root">
     ${htmlWithoutScripts}
   </div>
   <script>
+    const DESIGN_W=${targetRatio >= 1 ? 1920 : 1080};
+    const DESIGN_H=${targetRatio >= 1 ? 1080 : 1920};
     function scaleRoot(){
       const r=document.getElementById('root');
       if(!r)return;
-      const s=Math.min(window.innerWidth/1080,window.innerHeight/1920);
+      r.style.width=DESIGN_W+'px';
+      r.style.height=DESIGN_H+'px';
+      const s=Math.min(window.innerWidth/DESIGN_W,window.innerHeight/DESIGN_H);
       r.style.transform='scale('+s+')';
-      const scaledW=1080*s, scaledH=1920*s;
+      const scaledW=DESIGN_W*s, scaledH=DESIGN_H*s;
       r.style.left=((window.innerWidth-scaledW)/2)+'px';
       r.style.top=((window.innerHeight-scaledH)/2)+'px';
     }
@@ -565,6 +1040,16 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
     };
     document.head.appendChild(gsapScript);
   </script>
+  <style>
+    html, body, #root, .clip,
+    body > *, #root > *, #preview-container > *,
+    .min-h-screen, .h-screen, .w-screen, .inset-0,
+    [class*="min-h-screen"], [class*="h-screen"], [class*="w-screen"], [class*="inset-0"],
+    [style*="height: 100vh"], [style*="height: 100%"], [style*="width: 100%"] {
+        background: transparent !important;
+        background-color: transparent !important;
+    }
+  </style>
 </body>
 </html>`;
     };
@@ -654,7 +1139,9 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
         // Base theme configuration
         const mainColor = ov.font_color || ov.color || subtitleConfig?.color || '#F5F5F7';
         const accentColor = ov.accent_color || subtitleConfig?.accent_color || '#F2E16A';
-        const positionPreset = ov.position || subtitleConfig?.position || 'bottom';
+        // behind_speaker is a layering flag, not a layout preset — keep bottom placement
+        const rawPosition = ov.position || subtitleConfig?.position || 'bottom';
+        const positionPreset = rawPosition === 'behind_speaker' ? 'bottom' : rawPosition;
         const shadowBlur = ov.shadow_blur ?? subtitleConfig?.shadow_blur ?? 18;
         const basePx = ov.fontsize || ov.font_size || subtitleConfig?.font_size || 58;
         
@@ -684,25 +1171,8 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
             }
 
             // Font override or pairing layout
-            let fontOverride = styleOverride.font;
-            if (!fontOverride) {
-                // Determine if this is the accent word in the sequence (e.g. 2nd word of 3 words, or 2nd of 2 words)
-                // This static layout approach avoids word jitter during active word shifting!
-                let isAccentWord = false;
-                if (wordsList.length === 3) {
-                    isAccentWord = (i === 1);
-                } else if (wordsList.length === 2) {
-                    isAccentWord = (i === 1);
-                } else if (wordsList.length === 4) {
-                    isAccentWord = (i === 1 || i === 2);
-                } else if (wordsList.length > 4) {
-                    isAccentWord = (i === 1 || i === 3);
-                }
+            let fontOverride = styleOverride.font || ov.font || subtitleConfig?.font || 'Inter';
 
-                fontOverride = (isAccentWord && ov.font_pairing) 
-                    ? ov.font_pairing 
-                    : (ov.font || subtitleConfig?.font || 'Inter');
-            }
             const fontFamily = getNormalizedFontName(fontOverride);
 
             const sizeMult = styleOverride.size !== undefined ? styleOverride.size : 1.0;
@@ -1036,28 +1506,14 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 setCtxFontAndSpacing(`${w.italic ? 'italic ' : ''}${w.bold ? 'bold ' : ''}${w.fontSize}px '${w.fontFamily}', Inter, sans-serif`);
 
                 // Fill style & Opacity mapping
-                let isAccentWord = false;
-                if (useKaraokeHighlight) {
-                    isAccentWord = isActive;
-                } else if (isSub) {
-                    // Statically highlight the accent word (2nd word of 3, or 2nd of 2)
-                    const totalWordsInChunk = wordsList.length;
-                    const accentIdx = totalWordsInChunk === 3 ? 1 : totalWordsInChunk === 2 ? 1 : -1;
-                    isAccentWord = (w.color !== null || globalWordIdx === accentIdx);
-                } else {
-                    isAccentWord = (w.color !== null || (wordsList.length === 3 && globalWordIdx === 1) || (wordsList.length === 2 && globalWordIdx === 1));
-                }
-
                 if (useKaraokeHighlight) {
                     ctx.fillStyle = w.color || (isActive ? accentColor : mainColor);
                     ctx.globalAlpha = isActive ? 1.0 : inactiveOpacity;
-                } else if (isSub) {
-                    ctx.fillStyle = w.color || (isAccentWord ? accentColor : mainColor);
-                    ctx.globalAlpha = 1.0;
                 } else {
-                    ctx.fillStyle = w.color || (isAccentWord ? accentColor : mainColor);
+                    ctx.fillStyle = w.color || mainColor;
                     ctx.globalAlpha = 1.0;
                 }
+
 
                 // Shadows & Glow
                 const useOutline = ov.use_outline !== false;
@@ -1213,6 +1669,9 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 entityId: entity.id,
                 sceneEditIndex: sceneEditIndex
             });
+            
+            // Skip 2D canvas drawing in preview player, rendered via high-fidelity Magic UI HTML overlays
+            return;
             ctx.save();
             ctx.globalAlpha = currentOpacity;
             if (currentScale !== 1.0) {
@@ -1473,27 +1932,75 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 ctx.stroke();
             }
             
-            if (entity.type !== 'loading_bar' && !entity.is_loading_bar && entity.type !== 'navbar' && entity.type !== 'input_field' && entity.type !== 'button' && entity.type !== 'tab_bar' && entity.type !== 'code_block' && entity.type !== 'metric_card' && entity.type !== 'circular_progress' && entity.type !== 'audio_waveform' && entity.type !== 'sparkline' && entity.type !== 'toggle_card' && entity.type !== 'profile_card') {
+            if (entity.type !== 'loading_bar' && !entity.is_loading_bar && entity.type !== 'navbar' && entity.type !== 'input_field' && entity.type !== 'button' && entity.type !== 'tab_bar' && entity.type !== 'code_block' && entity.type !== 'metric_card' && entity.type !== 'circular_progress' && entity.type !== 'audio_waveform' && entity.type !== 'sparkline' && entity.type !== 'toggle_card' && entity.type !== 'profile_card' && entity.type !== 'comparison_table' && entity.type !== 'feature_grid' && entity.type !== 'progress_steps' && entity.type !== 'user_review' && entity.type !== 'bar_chart') {
                 const textVal = entity.text || '';
                 if (textVal) {
-                    const lines = textVal.split('\\n');
                     const textColor = styles.color || '#F5F7FA';
-                    const fontSize = styles.font_size || Math.round(H * 0.024);
+                    const isHeadline = entity.type === 'headline';
+                    let baseFontSize = styles.font_size || (isHeadline ? Math.round(H * 0.028) : Math.round(H * 0.015));
+                    
+                    ctx.font = (styles.bold ? 'bold ' : '') + (styles.italic ? 'italic ' : '') + baseFontSize + 'px "' + itemFont + '", sans-serif';
+                    
+                    // Word wrapping logic
+                    const maxW = targetW - 24; // 12px padding on each side
+                    const words = textVal.split(' ');
+                    let lines: string[] = [];
+                    let currentLine = '';
+                    
+                    words.forEach((word: string) => {
+                        const testLine = currentLine ? `${currentLine} ${word}` : word;
+                        const metrics = ctx.measureText(testLine);
+                        if (metrics.width > maxW && currentLine) {
+                            lines.push(currentLine);
+                            currentLine = word;
+                        } else {
+                            currentLine = testLine;
+                        }
+                    });
+                    if (currentLine) {
+                        lines.push(currentLine);
+                    }
+                    
+                    // Scale down font size if height overflows
+                    let finalFontSize = baseFontSize;
+                    const maxAllowedHeight = targetH - 16;
+                    while (lines.length * (finalFontSize * 1.35) > maxAllowedHeight && finalFontSize > 12) {
+                        finalFontSize -= 2;
+                        ctx.font = (styles.bold ? 'bold ' : '') + (styles.italic ? 'italic ' : '') + finalFontSize + 'px "' + itemFont + '", sans-serif';
+                        
+                        // Re-wrap with new font size
+                        lines = [];
+                        currentLine = '';
+                        words.forEach((word: string) => {
+                            const testLine = currentLine ? `${currentLine} ${word}` : word;
+                            const metrics = ctx.measureText(testLine);
+                            if (metrics.width > maxW && currentLine) {
+                                lines.push(currentLine);
+                                currentLine = word;
+                            } else {
+                                currentLine = testLine;
+                            }
+                        });
+                        if (currentLine) {
+                            lines.push(currentLine);
+                        }
+                    }
+                    
                     ctx.fillStyle = textColor;
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
-                    ctx.font = (styles.bold ? 'bold ' : '') + (styles.italic ? 'italic ' : '') + fontSize + 'px "' + itemFont + '", sans-serif';
-                    const totalTextHeight = lines.length * (fontSize * 1.35);
-                    const startY = currentY - (totalTextHeight / 2) + (fontSize / 2);
+                    
+                    const totalTextHeight = lines.length * (finalFontSize * 1.35);
+                    const startY = currentY - (totalTextHeight / 2) + (finalFontSize / 2);
                     
                     const isDarkText = textColor.startsWith('#1') || textColor.startsWith('#2') || textColor.startsWith('#3') || textColor === 'black';
                     
                     lines.forEach((lineText: string, lIdx: number) => {
-                        const lineY = startY + lIdx * (fontSize * 1.35);
-                        if (entity.type === 'headline') {
+                        const lineY = startY + lIdx * (finalFontSize * 1.35);
+                        if (isHeadline) {
                             ctx.save();
                             ctx.strokeStyle = isDarkText ? 'rgba(255, 255, 255, 0.8)' : 'rgba(0, 0, 0, 0.8)';
-                            ctx.lineWidth = Math.max(2, fontSize * 0.06);
+                            ctx.lineWidth = Math.max(2, finalFontSize * 0.06);
                             ctx.strokeText(lineText, currentX, lineY);
                             
                             ctx.shadowColor = isDarkText ? 'rgba(255, 255, 255, 0.5)' : 'rgba(0, 0, 0, 0.7)';
@@ -1620,7 +2127,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 const staticProgress = entity.progress !== undefined ? Number(entity.progress) : undefined;
                 let currentProgress = 0;
                 if (staticProgress !== undefined) {
-                    currentProgress = easeProgress * staticProgress;
+                    currentProgress = easeProgress * (staticProgress as number);
                 } else {
                     currentProgress = easeProgress * 100;
                 }
@@ -1897,6 +2404,249 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 }
             }
 
+            // Draw customized content for comparison_table
+            if (entity.type === 'comparison_table') {
+                const leftTitle = entity.left_title || "Before";
+                const rightTitle = entity.right_title || "After";
+                const leftItems = entity.left_items || ["Manual cuts", "No graphics"];
+                const rightItems = entity.right_items || ["Smart trim", "Interactive graphics"];
+                
+                const titleSize = Math.round(targetH * 0.16);
+                const itemSize = Math.round(targetH * 0.12);
+                
+                ctx.strokeStyle = itemBorder;
+                ctx.lineWidth = 2.0;
+                ctx.beginPath();
+                ctx.moveTo(currentX, currentY - targetH * 0.42);
+                ctx.lineTo(currentX, currentY + targetH * 0.42);
+                ctx.stroke();
+                
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.font = `bold ${titleSize}px "${itemFont}", sans-serif`;
+                ctx.fillStyle = '#FF3B30';
+                ctx.fillText(leftTitle, currentX - targetW / 4, currentY - targetH * 0.28);
+                
+                ctx.fillStyle = '#34C759';
+                ctx.fillText(rightTitle, currentX + targetW / 4, currentY - targetH * 0.28);
+                
+                ctx.font = `normal ${itemSize}px "${itemFont}", sans-serif`;
+                const startY = currentY - targetH * 0.08;
+                const stepY = targetH * 0.15;
+                
+                ctx.textAlign = 'left';
+                ctx.fillStyle = 'rgba(255,255,255,0.7)';
+                leftItems.slice(0, 4).forEach((item: string, idx: number) => {
+                    ctx.fillText("❌  " + item, currentX - targetW * 0.42, startY + idx * stepY);
+                });
+                
+                ctx.fillStyle = '#FFFFFF';
+                rightItems.slice(0, 4).forEach((item: string, idx: number) => {
+                    ctx.fillText("✅  " + item, currentX + targetW * 0.08, startY + idx * stepY);
+                });
+            }
+
+            // Draw customized content for feature_grid
+            if (entity.type === 'feature_grid') {
+                const features = entity.features || [
+                    {icon: "⚡", title: "Speed", desc: "10x render"},
+                    {icon: "🎨", title: "Design", desc: "Premium styles"},
+                    {icon: "🧠", title: "AI Cut", desc: "Auto trim silence"},
+                    {icon: "🔊", title: "Audio", desc: "Smart recommendation"}
+                ];
+                
+                const colW = (targetW - 24) / 2;
+                const rowH = (targetH - 24) / 2;
+                const titleSize = Math.round(targetH * 0.12);
+                const descSize = Math.round(targetH * 0.08);
+                
+                ctx.lineWidth = 1.0;
+                ctx.strokeStyle = itemBorder;
+                
+                features.slice(0, 4).forEach((f: any, idx: number) => {
+                    const col = idx % 2;
+                    const row = Math.floor(idx / 2);
+                    const bx = currentX - targetW / 2 + col * (colW + 24);
+                    const by = currentY - targetH / 2 + row * (rowH + 24);
+                    
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.03)';
+                    drawRoundedRect(ctx, bx, by, colW, rowH, 10);
+                    ctx.fill();
+                    ctx.stroke();
+                    
+                    ctx.font = `${Math.round(rowH * 0.28)}px "${itemFont}", sans-serif`;
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'top';
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fillText(f.icon || "🌟", bx + 12, by + 10);
+                    
+                    ctx.font = `bold ${titleSize}px "${itemFont}", sans-serif`;
+                    ctx.fillText(f.title || "Feature", bx + 12, by + 10 + Math.round(rowH * 0.28));
+                    
+                    ctx.font = `normal ${descSize}px "${itemFont}", sans-serif`;
+                    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+                    ctx.fillText(f.desc || "Description", bx + 12, by + 10 + Math.round(rowH * 0.28) + titleSize + 6);
+                });
+            }
+
+            // Draw customized content for progress_steps
+            if (entity.type === 'progress_steps') {
+                const steps = entity.steps || ["Upload", "Analyze", "Export"];
+                const colorAccent = styleProfile.color_accent || '#0A84FF';
+                
+                const stepCount = steps.length;
+                const stepW = targetW / stepCount;
+                const circleR = Math.min(targetH * 0.25, stepW * 0.2);
+                const lineY = currentY - targetH * 0.1;
+                
+                ctx.strokeStyle = itemBorder;
+                ctx.lineWidth = 4.0;
+                ctx.beginPath();
+                ctx.moveTo(currentX - targetW / 2 + stepW / 2, lineY);
+                ctx.lineTo(currentX + targetW / 2 - stepW / 2, lineY);
+                ctx.stroke();
+                
+                ctx.strokeStyle = colorAccent;
+                ctx.beginPath();
+                ctx.moveTo(currentX - targetW / 2 + stepW / 2, lineY);
+                ctx.lineTo(currentX - targetW / 2 + stepW / 2 + (easeProgress * (targetW - stepW)), lineY);
+                ctx.stroke();
+                
+                steps.forEach((stepName: string, idx: number) => {
+                    const cx = currentX - targetW / 2 + idx * stepW + stepW / 2;
+                    const cy = lineY;
+                    const stepActive = easeProgress >= (idx / (stepCount - 1 || 1));
+                    
+                    ctx.fillStyle = stepActive ? colorAccent : '#1C1C1E';
+                    ctx.strokeStyle = '#FFFFFF';
+                    ctx.lineWidth = 2.0;
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, circleR, 0, 2 * Math.PI);
+                    ctx.fill();
+                    ctx.stroke();
+                    
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.font = `bold ${Math.round(circleR * 1.1)}px "${itemFont}", sans-serif`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(String(idx + 1), cx, cy);
+                    
+                    ctx.font = `bold ${Math.round(targetH * 0.12)}px "${itemFont}", sans-serif`;
+                    ctx.fillStyle = stepActive ? '#FFFFFF' : 'rgba(255,255,255,0.45)';
+                    ctx.fillText(stepName, cx, cy + circleR + 14);
+                });
+            }
+
+            // Draw customized content for user_review
+            if (entity.type === 'user_review') {
+                const name = entity.name || "Alexander";
+                const username = entity.username || "@alex_v";
+                const reviewText = entity.text || "Great tool! Saves so much time.";
+                const rating = Number(entity.rating || 5);
+                
+                const avatarD = targetH * 0.32;
+                const ax = currentX - targetW / 2 + targetW * 0.08 + avatarD / 2;
+                const ay = currentY - targetH * 0.28;
+                
+                ctx.fillStyle = styleProfile.color_accent || '#0A84FF';
+                ctx.beginPath();
+                ctx.arc(ax, ay, avatarD / 2, 0, 2 * Math.PI);
+                ctx.fill();
+                
+                ctx.fillStyle = '#FFFFFF';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.font = `bold ${Math.round(avatarD * 0.45)}px "${itemFont}", sans-serif`;
+                ctx.fillText(name.substring(0, 2).toUpperCase(), ax, ay);
+                
+                const nameSize = Math.round(targetH * 0.12);
+                ctx.font = `bold ${nameSize}px "${itemFont}", sans-serif`;
+                ctx.textAlign = 'left';
+                const nx = currentX - targetW / 2 + targetW * 0.08 + avatarD + 12;
+                ctx.fillText(name, nx, ay - nameSize / 2 - 2);
+                
+                ctx.font = `normal ${Math.round(targetH * 0.09)}px "${itemFont}", sans-serif`;
+                ctx.fillStyle = 'rgba(255,255,255,0.55)';
+                ctx.fillText(username, nx, ay + nameSize / 2 + 2);
+                
+                ctx.textAlign = 'right';
+                ctx.font = `${Math.round(targetH * 0.12)}px "${itemFont}", sans-serif`;
+                ctx.fillText("⭐".repeat(rating), currentX + targetW / 2 - targetW * 0.08, ay);
+                
+                const bodySize = Math.round(targetH * 0.11);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.82)';
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'top';
+                ctx.font = `normal 500 ${bodySize}px "${itemFont}", sans-serif`;
+                
+                const bxText = currentX - targetW / 2 + targetW * 0.08;
+                const byText = currentY + targetH * 0.02;
+                const maxTextW = targetW * 0.84;
+                
+                const words = reviewText.split(' ');
+                let line = '';
+                let currentYOffset = 0;
+                const lineHeight = bodySize * 1.35;
+                
+                words.forEach((word: string) => {
+                    const testLine = line + word + ' ';
+                    const testW = ctx.measureText(testLine).width;
+                    if (testW > maxTextW && line !== '') {
+                        ctx.fillText(line, bxText, byText + currentYOffset);
+                        line = word + ' ';
+                        currentYOffset += lineHeight;
+                    } else {
+                        line = testLine;
+                    }
+                });
+                if (line) {
+                    ctx.fillText(line, bxText, byText + currentYOffset);
+                }
+            }
+
+            // Draw customized content for bar_chart
+            if (entity.type === 'bar_chart') {
+                const bars = entity.bars || [
+                    {label: "Direct", value: 75},
+                    {label: "Social", value: 50},
+                    {label: "Organic", value: 90}
+                ];
+                const colorAccent = styleProfile.color_accent || '#0A84FF';
+                
+                const barCount = Math.min(3, bars.length);
+                const startY = currentY - targetH * 0.34;
+                const stepY = targetH * 0.26;
+                const labelSize = Math.round(targetH * 0.1);
+                const valSize = Math.round(targetH * 0.09);
+                const maxBarW = targetW * 0.54;
+                
+                bars.slice(0, barCount).forEach((bar: any, idx: number) => {
+                    const by = startY + idx * stepY;
+                    const val = Number(bar.value || 50);
+                    
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'middle';
+                    ctx.font = `bold ${labelSize}px "${itemFont}", sans-serif`;
+                    ctx.fillText(bar.label || "Bar", currentX - targetW / 2 + targetW * 0.08, by);
+                    
+                    const bx = currentX - targetW / 2 + targetW * 0.32;
+                    const bH = Math.round(targetH * 0.08);
+                    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+                    drawRoundedRect(ctx, bx, by - bH / 2, maxBarW, bH, bH / 2);
+                    ctx.fill();
+                    
+                    ctx.fillStyle = colorAccent;
+                    const actW = maxBarW * (val / 100) * easeProgress;
+                    drawRoundedRect(ctx, bx, by - bH / 2, actW, bH, bH / 2);
+                    ctx.fill();
+                    
+                    ctx.fillStyle = 'rgba(255,255,255,0.78)';
+                    ctx.font = `bold ${valSize}px "${itemFont}", sans-serif`;
+                    ctx.fillText(Math.round(val * easeProgress) + '%', bx + maxBarW + 10, by);
+                });
+            }
+
             // Draw common capsule status badge on any entity
             if (entity.badge) {
                 const badgeText = String(entity.badge).toUpperCase();
@@ -1969,7 +2719,14 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
         const video = videoRef.current;
         if (!canvas || !video || video.readyState < 2) return;
 
-        const ctx = canvas.getContext('2d');
+        // Use the ThreeCompositor only when it is fully initialized (threeReady guards the async gap)
+        // Behind-speaker layers require 2D canvas — Three path never draws them
+        const isThreeActive = threeReady && !!threeCompositorRef.current && !behindModeActive;
+        const overlayCanvas = overlayCanvasRef.current;
+        const ctx = isThreeActive && overlayCanvas
+            ? overlayCanvas.getContext('2d')
+            : canvas.getContext('2d');
+            
         if (!ctx) return;
 
         const VW = video.videoWidth || 1280;
@@ -1987,6 +2744,19 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
         if (canvas.width !== canvasW || canvas.height !== canvasH) {
             canvas.width = canvasW;
             canvas.height = canvasH;
+            // Also resize the dedicated WebGL canvas to keep them in sync
+            if (webglCanvasRef.current && (webglCanvasRef.current.width !== canvasW || webglCanvasRef.current.height !== canvasH)) {
+                webglCanvasRef.current.width = canvasW;
+                webglCanvasRef.current.height = canvasH;
+            }
+            if (threeCompositorRef.current) {
+                threeCompositorRef.current.resize(canvasW, canvasH);
+            }
+        }
+
+        if (overlayCanvas && (overlayCanvas.width !== canvasW || overlayCanvas.height !== canvasH)) {
+            overlayCanvas.width = canvasW;
+            overlayCanvas.height = canvasH;
         }
 
         const W = canvas.width;
@@ -1997,64 +2767,308 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
         ctx.save();
         ctx.clearRect(0, 0, W, H);
 
-        if (scale !== 1) {
-            ctx.translate(W / 2, H / 2);
-            ctx.scale(scale, scale);
-            ctx.translate(-W / 2, -H / 2);
-        }
+        let finalB = 1.0;
+        let finalC = 1.0;
+        let finalS = 1.0;
+        let finalH = 0.0;
+        let vignette = 0.0;
+        let filmGrain = 0.0;
 
-        // Apply color correction filter if active
         const activeColor = editsRef.current.find(e => 
             e.action === 'color_correction' && e.start != null && e.end != null && t >= e.start && t < e.end
         );
-        if (activeColor) {
-            const presetKey = activeColor.preset || activeColor.lut || 'cinema';
-            const base = LUT_PRESETS[presetKey] || { brightness: 1.0, contrast: 1.0, saturation: 1.0, hue: 0 };
-            const userB = activeColor.brightness !== undefined ? activeColor.brightness : 100;
-            const userC = activeColor.contrast !== undefined ? activeColor.contrast : 100;
-            const userS = activeColor.saturation !== undefined ? activeColor.saturation : 100;
-            const userH = activeColor.hue !== undefined ? activeColor.hue : 0;
 
-            const finalB = base.brightness * (userB / 100);
-            const finalC = base.contrast * (userC / 100);
-            const finalS = base.saturation * (userS / 100);
-            const finalH = base.hue + userH;
+        if (!isThreeActive) {
+            if (scale !== 1) {
+                ctx.translate(W / 2, H / 2);
+                ctx.scale(scale, scale);
+                ctx.translate(-W / 2, -H / 2);
+            }
 
-            ctx.filter = `brightness(${finalB}) contrast(${finalC}) saturate(${finalS}) hue-rotate(${finalH}deg)`;
+            // Apply color correction filter if active
+            if (activeColor) {
+                const presetKey = activeColor.preset || activeColor.lut || 'cinema';
+                if (presetKey.endsWith('.cube') || presetKey.includes('luts/')) {
+                    // Highly stylized professional film grade preview
+                    ctx.filter = `contrast(1.15) saturate(1.2) brightness(1.05) sepia(0.08) hue-rotate(-4deg)`;
+                } else {
+                    const base = LUT_PRESETS[presetKey] || { brightness: 1.0, contrast: 1.0, saturation: 1.0, hue: 0 };
+                    const userB = activeColor.brightness !== undefined ? activeColor.brightness : 100;
+                    const userC = activeColor.contrast !== undefined ? activeColor.contrast : 100;
+                    const userS = activeColor.saturation !== undefined ? activeColor.saturation : 100;
+                    const userH = activeColor.hue !== undefined ? activeColor.hue : 0;
+
+                    const fb = base.brightness * (userB / 100);
+                    const fc = base.contrast * (userC / 100);
+                    const fs = base.saturation * (userS / 100);
+                    const fh = base.hue + userH;
+
+                    ctx.filter = `brightness(${fb}) contrast(${fc}) saturate(${fs}) hue-rotate(${fh}deg)`;
+                }
+            } else {
+                ctx.filter = 'none';
+            }
+
+            // Draw cropped and centered video
+            let sWidth = VW;
+            let sHeight = VH;
+            let sx = 0;
+            let sy = 0;
+
+            if (videoRatio > targetRatio) {
+                sWidth = VH * targetRatio;
+                sx = (VW - sWidth) / 2;
+            } else if (videoRatio < targetRatio) {
+                sHeight = VW / targetRatio;
+                sy = (VH - sHeight) / 2;
+            }
+
+            const hasActiveOverlay = editsRef.current.some(e =>
+                (e.action === 'semantic_scene' || e.action === 'add_motion_graphic' || e.action === 'add_broll') &&
+                e.start != null && e.end != null && t >= e.start && t < e.end
+            );
+
+            const setBgEdit = editsRef.current.find(e => e.action === 'set_video_background' || e.action === 'remove_background');
+            const subEdit = editsRef.current.find(e => e.action === 'add_subtitles');
+            const isSubBehind = !!(subEdit?.behind_speaker || subEdit?.position === 'behind_speaker' || (subtitleConfig as any)?.behind_speaker || (subtitleConfig as any)?.position === 'behind_speaker');
+            const wantsBehindLayers = !!(setBgEdit || isSubBehind);
+            const maskVid = rvmMaskVideoRef.current;
+            const hasMaskCutout = !!(rvmMaskSrc && rvmMaskReady && maskVid && maskVid.readyState >= 2);
+            const hasRealRvmPreview = !!(videoSrc && String(videoSrc).includes('_rvm_preview'));
+
+            // Layered behind-speaker mode: bg → editable text → speaker cutout on top
+            if (wantsBehindLayers && !hasRealRvmPreview) {
+                // Reset any color-grade / overlay filters — they were darkening the whole stack
+                ctx.filter = 'none';
+                ctx.globalAlpha = 1;
+
+                const bgColor = setBgEdit?.bg_color && setBgEdit.bg_color !== 'transparent'
+                    ? setBgEdit.bg_color
+                    : '#0a0a14';
+                const text = setBgEdit?.text;
+                const textColor = setBgEdit?.text_color || '#FFFFFF';
+                const textOpacity = setBgEdit?.text_opacity !== undefined ? setBgEdit.text_opacity : 0.22;
+                const fontSize = setBgEdit?.font_size || 220;
+                const grad2 = setBgEdit?.gradient_color2;
+                const bgTextX = setBgEdit?.x != null ? Number(setBgEdit.x) : 50;
+                const bgTextY = setBgEdit?.y != null ? Number(setBgEdit.y) : 40;
+
+                const drawBehindTextLayers = () => {
+                    if (text) {
+                        ctx.save();
+                        ctx.globalAlpha = Math.max(0.35, textOpacity);
+                        ctx.fillStyle = textColor;
+                        const fontPx = Math.round(fontSize * (W / 1080));
+                        ctx.font = `900 ${fontPx}px "Montserrat", "Bebas Neue", "Inter", sans-serif`;
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        const tx = (bgTextX / 100) * W;
+                        const ty = (bgTextY / 100) * H;
+                        const label = String(text).toUpperCase();
+                        ctx.fillText(label, tx, ty);
+                        const metrics = ctx.measureText(label);
+                        const boxW = Math.max(40, metrics.width);
+                        const boxH = fontPx * 1.2;
+                        const bgEditIndex = editsRef.current.indexOf(setBgEdit!);
+                        drawnTextBoxesRef.current.push({
+                            id: 'bg-text',
+                            isSub: false,
+                            isBgText: true,
+                            editIndex: bgEditIndex !== -1 ? bgEditIndex : undefined,
+                            left: tx - boxW / 2,
+                            top: ty - boxH / 2,
+                            width: boxW,
+                            height: boxH,
+                            x: bgTextX,
+                            y: bgTextY,
+                        });
+                        ctx.restore();
+                    }
+                    if (isSubBehind && transcript?.words && transcript.words.length > 0) {
+                        ctx.save();
+                        drawAestheticCaptions(ctx, t, W, H);
+                        ctx.restore();
+                    }
+                    // Custom titles marked behind_speaker (not transcript subs)
+                    const behindOverlays = editsRef.current.filter(e =>
+                        e.action === 'add_text_overlay' &&
+                        !e.is_subtitle &&
+                        (e.behind_speaker || e.position === 'behind_speaker') &&
+                        e.start != null && e.end != null && t >= e.start! && t < e.end!
+                    );
+                    for (const ov of behindOverlays) {
+                        drawStyledTextOverlay(ctx, ov, t, W, H, false);
+                    }
+                };
+
+                if (hasMaskCutout && maskVid) {
+                    // CapCut-style stack: original scene → text → speaker cutout
+                    // (solid black plate looked like a void — keep the real room)
+                    const replacePlate = !!(
+                        setBgEdit?.action === 'set_video_background' &&
+                        setBgEdit?.bg_color &&
+                        setBgEdit.bg_color !== 'transparent' &&
+                        setBgEdit?.replace_background === true
+                    );
+
+                    ctx.save();
+                    ctx.filter = 'none';
+                    ctx.globalAlpha = 1;
+                    if (replacePlate) {
+                        if (grad2) {
+                            const grad = ctx.createLinearGradient(0, 0, 0, H);
+                            grad.addColorStop(0, bgColor);
+                            grad.addColorStop(1, grad2);
+                            ctx.fillStyle = grad;
+                        } else {
+                            ctx.fillStyle = bgColor;
+                        }
+                        ctx.fillRect(0, 0, W, H);
+                    } else {
+                        ctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, W, H);
+                    }
+                    ctx.restore();
+
+                    drawBehindTextLayers();
+
+                    if (!cutoutCanvasRef.current) {
+                        cutoutCanvasRef.current = document.createElement('canvas');
+                    }
+                    if (!maskAlphaCanvasRef.current) {
+                        maskAlphaCanvasRef.current = document.createElement('canvas');
+                    }
+                    const tc = cutoutCanvasRef.current;
+                    const mc = maskAlphaCanvasRef.current;
+                    if (tc.width !== W || tc.height !== H) {
+                        tc.width = W;
+                        tc.height = H;
+                    }
+                    const tctx = tc.getContext('2d', { willReadFrequently: false });
+                    const mctx = mc.getContext('2d', { willReadFrequently: true });
+                    if (tctx && mctx) {
+                        const coverCrop = (vw: number, vh: number) => {
+                            const ratio = vw / vh;
+                            let csW = vw, csH = vh, csx = 0, csy = 0;
+                            if (ratio > targetRatio) {
+                                csW = vh * targetRatio;
+                                csx = (vw - csW) / 2;
+                            } else if (ratio < targetRatio) {
+                                csH = vw / targetRatio;
+                                csy = (vh - csH) / 2;
+                            }
+                            return { csx, csy, csW, csH };
+                        };
+                        const mw = maskVid.videoWidth || 270;
+                        const mh = maskVid.videoHeight || 480;
+                        const m = coverCrop(mw, mh);
+                        const matteW = Math.max(1, Math.round(m.csW));
+                        const matteH = Math.max(1, Math.round(m.csH));
+
+                        if (mc.width !== matteW || mc.height !== matteH) {
+                            mc.width = matteW;
+                            mc.height = matteH;
+                        }
+                        mctx.clearRect(0, 0, matteW, matteH);
+                        mctx.globalCompositeOperation = 'source-over';
+                        mctx.drawImage(maskVid, m.csx, m.csy, m.csW, m.csH, 0, 0, matteW, matteH);
+                        try {
+                            const img = mctx.getImageData(0, 0, matteW, matteH);
+                            const d = img.data;
+                            for (let i = 0; i < d.length; i += 4) {
+                                const luma = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) | 0;
+                                d[i] = 255;
+                                d[i + 1] = 255;
+                                d[i + 2] = 255;
+                                d[i + 3] = luma;
+                            }
+                            mctx.putImageData(img, 0, 0);
+                        } catch (err) {
+                            console.warn('[SandboxPlayer] mask luma→alpha failed', err);
+                        }
+
+                        tctx.clearRect(0, 0, W, H);
+                        tctx.filter = 'none';
+                        tctx.globalAlpha = 1;
+                        tctx.globalCompositeOperation = 'source-over';
+                        tctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, W, H);
+                        tctx.globalCompositeOperation = 'destination-in';
+                        tctx.drawImage(mc, 0, 0, matteW, matteH, 0, 0, W, H);
+                        tctx.globalCompositeOperation = 'source-over';
+                        ctx.save();
+                        ctx.filter = 'none';
+                        ctx.globalAlpha = 1;
+                        ctx.drawImage(tc, 0, 0);
+                        ctx.restore();
+                    }
+                } else {
+                    // RVM still running: keep preview bright. Do NOT draw behind-text on top —
+                    // that looked like "text in front of speaker". Wait for matte.
+                    ctx.save();
+                    ctx.filter = 'none';
+                    ctx.globalAlpha = 1;
+                    ctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, W, H);
+                    ctx.restore();
+                }
+            } else {
+                // Normal / baked RVM preview path
+                ctx.save();
+                if (hasActiveOverlay) {
+                    ctx.filter = 'blur(10px) brightness(0.35)';
+                }
+                ctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, W, H);
+                ctx.restore();
+            }
+
         } else {
-            ctx.filter = 'none';
+            // Three.js (WebGL) handles the color correction on GPU
+            if (activeColor) {
+                const presetKey = activeColor.preset || activeColor.lut || 'cinema';
+                if (presetKey.endsWith('.cube') || presetKey.includes('luts/')) {
+                    finalB = 1.05;
+                    finalC = 1.15;
+                    finalS = 1.2;
+                    finalH = -4;
+                    vignette = 0.45;
+                    filmGrain = 0.02;
+                } else {
+                    const base = LUT_PRESETS[presetKey] || { brightness: 1.0, contrast: 1.0, saturation: 1.0, hue: 0 };
+                    const userB = activeColor.brightness !== undefined ? activeColor.brightness : 100;
+                    const userC = activeColor.contrast !== undefined ? activeColor.contrast : 100;
+                    const userS = activeColor.saturation !== undefined ? activeColor.saturation : 100;
+                    const userH = activeColor.hue !== undefined ? activeColor.hue : 0;
+
+                    finalB = base.brightness * (userB / 100);
+                    finalC = base.contrast * (userC / 100);
+                    finalS = base.saturation * (userS / 100);
+                    finalH = base.hue + userH;
+
+                    if (['cinema', 'cyberpunk', 'teal_orange'].includes(presetKey)) {
+                        vignette = 0.5;
+                        filmGrain = 0.015;
+                    }
+                }
+            }
         }
-
-        // Draw cropped and centered video
-        let sWidth = VW;
-        let sHeight = VH;
-        let sx = 0;
-        let sy = 0;
-
-        if (videoRatio > targetRatio) {
-            // Video is wider than canvas -> crop sides
-            sWidth = VH * targetRatio;
-            sx = (VW - sWidth) / 2;
-        } else if (videoRatio < targetRatio) {
-            // Video is taller than canvas -> crop top/bottom
-            sHeight = VW / targetRatio;
-            sy = (VH - sHeight) / 2;
-        }
-
-        ctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, W, H);
         ctx.restore();
 
         // ── Aesthetic Captions (word-by-word, from transcript) ──────
-        // Only render if we have transcript data AND an add_subtitles edit is active
+        // Only render foreground captions if NOT placed behind speaker
         const hasSubtitleEdit = editsRef.current.some(e => e.action === 'add_subtitles');
-        if (transcript?.words && transcript.words.length > 0 && hasSubtitleEdit) {
+        const subEditCheck = editsRef.current.find(e => e.action === 'add_subtitles');
+        const isSubBehindCheck = !!(subEditCheck?.behind_speaker || subEditCheck?.position === 'behind_speaker' || (subtitleConfig as any)?.behind_speaker || (subtitleConfig as any)?.position === 'behind_speaker');
+
+        if (transcript?.words && transcript.words.length > 0 && hasSubtitleEdit && !isSubBehindCheck) {
             drawAestheticCaptions(ctx, t, W, H);
         }
 
+
         // ── Draw text overlays (add_text_overlay) ──────
         // If hasSubtitleEdit is true, we ONLY draw custom overlays (not subtitles)
+        // Skip overlays that belong in the behind-speaker stack
         const activeTexts = textOverlays.filter(
-            e => (!hasSubtitleEdit || !e.is_subtitle) && e.start != null && e.end != null && t >= (e.start as number) && t < (e.end as number)
+            e => (!hasSubtitleEdit || !e.is_subtitle)
+                && !(e.behind_speaker || e.position === 'behind_speaker')
+                && e.start != null && e.end != null && t >= (e.start as number) && t < (e.end as number)
         );
         for (const ov of activeTexts) {
             drawStyledTextOverlay(ctx, ov, t, W, H, false);
@@ -2257,7 +3271,58 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 ctx.restore();
             }
         }
-    }, [textOverlays, drawAestheticCaptions, drawStyledTextOverlay, transcript, focusedClipId, targetRatio, selectedEntity]);
+
+        // Render Three.js compositor with latest overlay texture and color settings
+        if (isThreeActive) {
+            const showTransition = editsRef.current.some(e => 
+                (e.action === 'build_transition' || (e.action === 'add_asset' && e.asset_query?.toLowerCase().includes('transition'))) && 
+                e.start != null && t >= e.start && t < (e.start + 0.8)
+            );
+            const rawMG = editsRef.current.find(e =>
+                (e.action === 'add_motion_graphic' || (e.action === 'add_broll' && (e.broll_url === 'remotion_three_js_dynamic' || (!e.resolved_path && !e.broll_url)))) && e.start != null && e.end != null && t >= e.start && t < e.end
+            );
+            let activeMG = rawMG;
+            if (!activeMG && activeSemanticScenes.length > 0) {
+                activeMG = {
+                    action: 'add_motion_graphic',
+                    style: 'custom',
+                    geometry: vibeConfig.threeJsEnv.geometryType,
+                    material: vibeConfig.threeJsEnv.materialStyle,
+                    accent_color: vibeConfig.palette.glow,
+                    animation: vibeConfig.threeJsEnv.cameraMotion === 'music_pulse' ? 'pulse' : 'rotate',
+                    speed: 1.0,
+                    particle_count: 500
+                };
+            }
+            if (activeMG && activeMG.action === 'add_broll') {
+                const query = activeMG.query || 'technology';
+                let style = 'cinematic';
+                if (/tech|data|code|blueprint|logic|graph/i.test(query)) {
+                    style = 'blueprint';
+                } else if (/fluid|flow|energy|liquid|particles/i.test(query)) {
+                    style = 'liquid';
+                }
+                activeMG = {
+                    ...activeMG,
+                    action: 'add_motion_graphic',
+                    style: style,
+                    text: query.toUpperCase(),
+                    subtext: 'A-ROLL VISUALIZATION',
+                    accent_color: '#a78bfa'
+                };
+            }
+            threeCompositorRef.current.render({
+                brightness: finalB,
+                contrast: finalC,
+                saturation: finalS,
+                hue: finalH,
+                vignette,
+                filmGrain,
+                zoom: scale,
+                templateId: selectedTemplate,
+            }, t, showTransition, activeMG);
+        }
+    }, [textOverlays, drawAestheticCaptions, drawStyledTextOverlay, transcript, focusedClipId, targetRatio, selectedEntity, threeReady, behindModeActive, activeSemanticScenes, vibeConfig, rvmAlphaSrc, rvmAlphaReady, rvmMaskSrc, rvmMaskReady, videoSrc, subtitleConfig]);
 
     // ── RAF Render + EDL enforcement loop ────────────────────────
     useEffect(() => {
@@ -2271,10 +3336,40 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
             setCurrentTime(t);
             onTimeUpdate?.(t);
 
-            // Sync GSAP graphics timeline
-            if (gsapIframeRef.current?.contentWindow) {
-                gsapIframeRef.current.contentWindow.postMessage({ type: 'sync_time', time: t }, '*');
+            // Keep RVM alpha cutout in sync with main playhead
+            const alphaVid = rvmAlphaVideoRef.current;
+            if (alphaVid && rvmAlphaSrc) {
+                if (Math.abs((alphaVid.currentTime || 0) - t) > 0.12) {
+                    try { alphaVid.currentTime = t; } catch { /* seeking */ }
+                }
+                if (isPlaying && alphaVid.paused) {
+                    alphaVid.play().catch(() => {});
+                } else if (!isPlaying && !alphaVid.paused) {
+                    alphaVid.pause();
+                }
             }
+            const maskVid = rvmMaskVideoRef.current;
+            if (maskVid && rvmMaskSrc) {
+                if (Math.abs((maskVid.currentTime || 0) - t) > 0.12) {
+                    try { maskVid.currentTime = t; } catch { /* seeking */ }
+                }
+                if (isPlaying && maskVid.paused) {
+                    maskVid.play().catch(() => {});
+                } else if (!isPlaying && !maskVid.paused) {
+                    maskVid.pause();
+                }
+            }
+
+            // Sync GSAP graphics timeline (send to all active graphics iframes to support multi-track isolated render)
+            const mIframes = document.querySelectorAll('.motion-graphic-iframe') as NodeListOf<HTMLIFrameElement>;
+            mIframes.forEach((iframe, idx) => {
+                if (iframe.contentWindow) {
+                    const edit = graphicsEdits[idx];
+                    const start = edit?.start ?? 0;
+                    const relTime = t - start;
+                    iframe.contentWindow.postMessage({ type: 'sync_time', time: t, relTime: relTime }, '*');
+                }
+            });
 
             // ── Scene Override detection (use ref for fresh data) ──
             const currentSceneEdits = sceneEditsRef.current;
@@ -2308,11 +3403,13 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                         }
                         if (isVideo) {
                             el.style.opacity = '1';
+                            el.style.display = 'block';
                         }
                     } else {
                         if (!el.paused) el.pause();
                         if (isVideo) {
                             el.style.opacity = '0';
+                            el.style.display = 'none';
                         }
                     }
                 });
@@ -2331,7 +3428,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
             }
 
             // EDL: skip cut regions during playback
-            if (!video.paused && edlRef.current && isCutAt(edlRef.current, t)) {
+            if (!video.paused && !video.seeking && edlRef.current && isCutAt(edlRef.current, t)) {
                 const next = nextKeepStart(edlRef.current, t);
                 if (next !== null) {
                     video.currentTime = next;
@@ -2359,16 +3456,18 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                     if (el.paused && !video.paused) {
                         el.currentTime = t - edit.start;
                         el.play().catch(() => {});
-                    } else if (!video.paused && Math.abs(el.currentTime - (t - edit.start)) > 0.3) {
+                    } else if (!video.paused && !el.seeking && Math.abs(el.currentTime - (t - edit.start)) > 0.3) {
                         el.currentTime = t - edit.start;
                     }
                     if (el.tagName === 'VIDEO') {
-                        el.style.opacity = '1';
+                        el.style.opacity = el.readyState >= 2 ? '1' : '0';
+                        el.style.display = el.readyState >= 2 ? 'block' : 'none';
                     }
                 } else {
                     if (!el.paused) el.pause();
                     if (el.tagName === 'VIDEO') {
                         el.style.opacity = '0';
+                        el.style.display = 'none';
                     }
                 }
             });
@@ -2380,18 +3479,22 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
             let brollFilter = 'none';
             if (activeColorForBroll) {
                 const presetKey = activeColorForBroll.preset || activeColorForBroll.lut || 'cinema';
-                const base = LUT_PRESETS[presetKey] || { brightness: 1.0, contrast: 1.0, saturation: 1.0, hue: 0 };
-                const userB = activeColorForBroll.brightness !== undefined ? activeColorForBroll.brightness : 100;
-                const userC = activeColorForBroll.contrast !== undefined ? activeColorForBroll.contrast : 100;
-                const userS = activeColorForBroll.saturation !== undefined ? activeColorForBroll.saturation : 100;
-                const userH = activeColorForBroll.hue !== undefined ? activeColorForBroll.hue : 0;
+                if (presetKey.endsWith('.cube') || presetKey.includes('luts/')) {
+                    brollFilter = `contrast(1.15) saturate(1.2) brightness(1.05) sepia(0.08) hue-rotate(-4deg)`;
+                } else {
+                    const base = LUT_PRESETS[presetKey] || { brightness: 1.0, contrast: 1.0, saturation: 1.0, hue: 0 };
+                    const userB = activeColorForBroll.brightness !== undefined ? activeColorForBroll.brightness : 100;
+                    const userC = activeColorForBroll.contrast !== undefined ? activeColorForBroll.contrast : 100;
+                    const userS = activeColorForBroll.saturation !== undefined ? activeColorForBroll.saturation : 100;
+                    const userH = activeColorForBroll.hue !== undefined ? activeColorForBroll.hue : 0;
 
-                const finalB = base.brightness * (userB / 100);
-                const finalC = base.contrast * (userC / 100);
-                const finalS = base.saturation * (userS / 100);
-                const finalH = base.hue + userH;
+                    const finalB = base.brightness * (userB / 100);
+                    const finalC = base.contrast * (userC / 100);
+                    const finalS = base.saturation * (userS / 100);
+                    const finalH = base.hue + userH;
 
-                brollFilter = `brightness(${finalB}) contrast(${finalC}) saturate(${finalS}) hue-rotate(${finalH}deg)`;
+                    brollFilter = `brightness(${finalB}) contrast(${finalC}) saturate(${finalS}) hue-rotate(${finalH}deg)`;
+                }
             }
 
             // Sync B-roll Overlays
@@ -2406,14 +3509,21 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                     if (el.paused && !video.paused) {
                         el.currentTime = t - edit.start;
                         el.play().catch(() => {});
-                    } else if (!video.paused && Math.abs(el.currentTime - (t - edit.start)) > 0.3) {
+                    } else if (!video.paused && !el.seeking && Math.abs(el.currentTime - (t - edit.start)) > 0.3) {
                         el.currentTime = t - edit.start;
                     }
-                    el.style.opacity = '1';
+                    if (edit.broll_url === 'remotion_three_js_dynamic') {
+                        el.style.opacity = '0';
+                        el.style.display = 'none';
+                    } else {
+                        el.style.opacity = el.readyState >= 2 ? '1' : '0';
+                        el.style.display = el.readyState >= 2 ? 'block' : 'none';
+                    }
                     el.style.filter = brollFilter;
                 } else {
                     if (!el.paused) el.pause();
                     el.style.opacity = '0';
+                    el.style.display = 'none';
                     el.style.filter = 'none';
                 }
             });
@@ -2434,8 +3544,12 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
         if (!video || !videoReady) return;
         if (isPlaying) {
             video.play().catch(() => {});
+            rvmAlphaVideoRef.current?.play().catch(() => {});
+            rvmMaskVideoRef.current?.play().catch(() => {});
         } else {
             video.pause();
+            rvmAlphaVideoRef.current?.pause();
+            rvmMaskVideoRef.current?.pause();
             assetRefs.current.forEach(el => {
                 if (el && !el.paused) el.pause();
             });
@@ -2485,7 +3599,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
     }, [selectedEntity, focusedClipId]);
 
     const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-        const canvas = canvasRef.current;
+        const canvas = e.currentTarget;
         if (!canvas) return;
 
         if (isPlaying) {
@@ -2598,33 +3712,37 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
             dragStartPointerRef.current = { x: e.clientX, y: e.clientY };
             dragStartCoordsRef.current = { x: hitBox.x, y: hitBox.y };
 
-            if (hitBox.isEntity) {
-                dragModeRef.current = 'move';
-                setSelectedEntity({ sceneEditIndex: hitBox.sceneEditIndex!, entityId: hitBox.entityId! });
-                
-                const focusId = `S1-Scene-${hitBox.sceneEditIndex}`;
-                window.dispatchEvent(new CustomEvent('select_clip_focus', { detail: focusId }));
-            } else {
-                dragModeRef.current = 'move';
-                setSelectedEntity(null);
-                
-                let focusId = "";
-                if (hitBox.isSub) {
-                    focusId = hitBox.chunkIndex !== undefined ? `T1-Sub-${hitBox.chunkIndex}` : "T1-Sub-0";
-                } else if (hitBox.editIndex !== undefined) {
-                    const graphicEdits = editsRef.current.filter(x => 
-                        x.action === "canvas_overlay" || x.action === "hyperframes_html" ||
-                        x.action === 'add_hyperframes_graphics' || x.action === 'add_motion_graphic' ||
-                        x.action === 'add_dynamic_graphic' || x.action === 'add_text_overlay'
-                    );
-                    const relIdx = graphicEdits.indexOf(editsRef.current[hitBox.editIndex]);
-                    focusId = `G1-Graphic-${relIdx !== -1 ? relIdx : 0}`;
-                }
-
-                if (focusId) {
+                if (hitBox.isEntity) {
+                    dragModeRef.current = 'move';
+                    setSelectedEntity({ sceneEditIndex: hitBox.sceneEditIndex!, entityId: hitBox.entityId! });
+                    
+                    const focusId = `S1-Scene-${hitBox.sceneEditIndex}`;
                     window.dispatchEvent(new CustomEvent('select_clip_focus', { detail: focusId }));
+                } else if (hitBox.isBgText) {
+                    dragModeRef.current = 'move';
+                    setSelectedEntity(null);
+                    window.dispatchEvent(new CustomEvent('select_clip_focus', { detail: 'BG-Text' }));
+                } else {
+                    dragModeRef.current = 'move';
+                    setSelectedEntity(null);
+                    
+                    let focusId = "";
+                    if (hitBox.isSub) {
+                        focusId = hitBox.chunkIndex !== undefined ? `T1-Sub-${hitBox.chunkIndex}` : "T1-Sub-0";
+                    } else if (hitBox.editIndex !== undefined) {
+                        const graphicEdits = editsRef.current.filter(x => 
+                            x.action === "canvas_overlay" || x.action === "hyperframes_html" ||
+                            x.action === 'add_hyperframes_graphics' || x.action === 'add_motion_graphic' ||
+                            x.action === 'add_dynamic_graphic' || x.action === 'add_text_overlay'
+                        );
+                        const relIdx = graphicEdits.indexOf(editsRef.current[hitBox.editIndex]);
+                        focusId = `G1-Graphic-${relIdx !== -1 ? relIdx : 0}`;
+                    }
+
+                    if (focusId) {
+                        window.dispatchEvent(new CustomEvent('select_clip_focus', { detail: focusId }));
+                    }
                 }
-            }
         } else {
             isDraggingRef.current = false;
             draggedBoxRef.current = null;
@@ -2634,7 +3752,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
     };
 
     const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-        const canvas = canvasRef.current;
+        const canvas = e.currentTarget;
         if (!canvas) return;
 
         const rect = canvas.getBoundingClientRect();
@@ -2742,6 +3860,13 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 });
                 onUpdateSubtitleGlobal?.('x', newX);
                 onUpdateSubtitleGlobal?.('y', newY);
+            } else if (box.isBgText && box.editIndex !== undefined) {
+                const edit = editsRef.current[box.editIndex];
+                if (edit) {
+                    edit.x = newX;
+                    edit.y = newY;
+                    onUpdateEdit?.(box.editIndex, { x: newX, y: newY });
+                }
             } else if (box.isEntity && box.sceneEditIndex !== undefined) {
                 const edit = editsRef.current[box.sceneEditIndex];
                 if (edit && edit.scene_data && edit.scene_data.entities) {
@@ -2878,7 +4003,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
 
     const handleDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
         if (isPlaying) return;
-        const canvas = canvasRef.current;
+        const canvas = e.currentTarget;
         if (!canvas) return;
 
         const rect = canvas.getBoundingClientRect();
@@ -2931,6 +4056,12 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
         const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
         const newTime = pct * dur;
         if (videoRef.current) videoRef.current.currentTime = newTime;
+        if (rvmAlphaVideoRef.current) {
+            try { rvmAlphaVideoRef.current.currentTime = newTime; } catch { /* seeking */ }
+        }
+        if (rvmMaskVideoRef.current) {
+            try { rvmMaskVideoRef.current.currentTime = newTime; } catch { /* seeking */ }
+        }
         setCurrentTime(newTime);
     };
 
@@ -2939,6 +4070,19 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
     const zoomCount = edits.filter(e => e.action === 'camera_zoom').length;
     const brollCount = edits.filter(e => e.action === 'add_broll').length;
     const textCount = edits.filter(e => e.action === 'add_text_overlay').length;
+
+    const activeBroll = useMemo(() => {
+        return brollEdits.find(e => e.start != null && e.end != null && currentTime >= e.start && currentTime < e.end);
+    }, [brollEdits, currentTime]);
+
+    const isSplitActive = useMemo(() => {
+        const hasSplitBroll = activeBroll && (activeBroll.layout === 'split' || (activeBroll as any).is_split);
+        const hasSplitScene = activeSemanticScenes.length > 0 && (
+            activeSemanticScenes[0].layout === 'split' || 
+            (activeSemanticScenes[0].scene_data && activeSemanticScenes[0].scene_data.layout === 'split')
+        );
+        return !!(hasSplitBroll || hasSplitScene);
+    }, [activeBroll, activeSemanticScenes]);
 
     return (
         <div className="relative w-full h-full flex flex-col overflow-hidden" style={{ background: '#000', minHeight: 0 }}>
@@ -2949,6 +4093,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 src={activeVideoSrc || undefined}
                 preload="auto"
                 playsInline
+                crossOrigin="anonymous"
                 style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: 0, left: 0 }}
                 onLoadedMetadata={() => {
                     const v = videoRef.current;
@@ -2962,14 +4107,51 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                     }
                 }}
                 onError={(e) => {
-                    console.error('SandboxPlayer video error:', e);
                     const video = videoRef.current;
                     if (video && video.src.includes('_proxy')) {
                         console.warn('[SandboxPlayer] Proxy video failed to load, falling back to original:', videoSrc);
                         setProxyFailed(true);
+                    } else {
+                        console.error('SandboxPlayer video error:', e);
                     }
                 }}
             />
+
+            {/* RVM alpha cutout (legacy) + grayscale mask (preferred for canvas) */}
+            {rvmAlphaSrc && (
+                <video
+                    ref={rvmAlphaVideoRef}
+                    key={`alpha-${rvmAlphaSrc}`}
+                    src={`${rvmAlphaSrc}${rvmAlphaSrc.includes('?') ? '&' : '?'}cors=1`}
+                    preload="auto"
+                    playsInline
+                    muted
+                    crossOrigin="anonymous"
+                    style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: 0, left: 0 }}
+                    onLoadedData={() => setRvmAlphaReady(true)}
+                    onError={() => {
+                        console.warn('[SandboxPlayer] RVM alpha video failed to load');
+                        setRvmAlphaReady(false);
+                    }}
+                />
+            )}
+            {rvmMaskSrc && (
+                <video
+                    ref={rvmMaskVideoRef}
+                    key={`mask-${rvmMaskSrc}`}
+                    src={`${rvmMaskSrc}${rvmMaskSrc.includes('?') ? '&' : '?'}cors=1`}
+                    preload="auto"
+                    playsInline
+                    muted
+                    crossOrigin="anonymous"
+                    style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: 0, left: 0 }}
+                    onLoadedData={() => setRvmMaskReady(true)}
+                    onError={() => {
+                        console.warn('[SandboxPlayer] RVM mask video failed to load');
+                        setRvmMaskReady(false);
+                    }}
+                />
+            )}
 
             {/* Canvas — main output */}
             <div
@@ -2986,6 +4168,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                         maxHeight: '100%',
                     }}
                 >
+                    {/* 2D Fallback / Interaction Canvas — forced on for behind-speaker */}
                     <canvas
                         ref={canvasRef}
                         onPointerDown={handlePointerDown}
@@ -2994,12 +4177,101 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                         onDoubleClick={handleDoubleClick}
                         style={{
                             width: '100%',
-                            height: '100%',
-                            objectFit: 'contain',
+                            height: isSplitActive ? '50%' : '100%',
+                            position: isSplitActive ? 'absolute' : 'relative',
+                            top: 0,
+                            left: 0,
+                            objectFit: isSplitActive ? 'cover' : 'contain',
                             cursor: 'pointer',
-                            display: videoReady && !isSceneActive ? 'block' : 'none',
+                            display: videoReady && (!threeReady || behindModeActive) ? 'block' : 'none',
                         }}
                     />
+
+                    {/* WebGL Composer Canvas */}
+                    <canvas
+                        ref={webglCanvasRef}
+                        onPointerDown={handlePointerDown}
+                        onPointerMove={handlePointerMove}
+                        onPointerUp={handlePointerUp}
+                        onDoubleClick={handleDoubleClick}
+                        style={{
+                            width: '100%',
+                            height: isSplitActive ? '50%' : '100%',
+                            position: isSplitActive ? 'absolute' : 'relative',
+                            top: 0,
+                            left: 0,
+                            objectFit: isSplitActive ? 'cover' : 'contain',
+                            cursor: 'pointer',
+                            display: videoReady && threeReady && !behindModeActive ? 'block' : 'none',
+                        }}
+                    />
+
+                    {/* 3D Motion Graphics Typography overlay */}
+                    {activeMG && videoReady && !isSceneActive && (
+                        <div
+                            style={{
+                                position: 'absolute',
+                                bottom: '15%',
+                                width: '90%',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                textAlign: 'center',
+                                fontFamily: activeMG.style === 'blueprint' ? '"Courier New", Courier, monospace' : '"Outfit", "Inter", sans-serif',
+                                color: '#ffffff',
+                                zIndex: 100,
+                                pointerEvents: 'none',
+                            }}
+                        >
+                            {activeMG.style === 'blueprint' && (
+                                <div style={{ color: activeMG.accent_color || '#06b6d4', fontSize: '10px', letterSpacing: '4px', marginBottom: '4px', opacity: 0.8, fontWeight: 'bold' }}>
+                                    // SEQUENCE_INITIALIZED //
+                                </div>
+                            )}
+                            <h1 style={{
+                                fontSize: '32px',
+                                fontWeight: 900,
+                                margin: 0,
+                                letterSpacing: '-0.5px',
+                                lineHeight: 1.1,
+                                textShadow: '0 4px 15px rgba(0,0,0,0.8)',
+                                textTransform: 'uppercase',
+                                background: activeMG.style === 'liquid' ? `linear-gradient(45deg, #ffffff, ${activeMG.accent_color || '#ec4899'})` : undefined,
+                                WebkitBackgroundClip: activeMG.style === 'liquid' ? 'text' : undefined,
+                                WebkitTextFillColor: activeMG.style === 'liquid' ? 'transparent' : undefined,
+                            }}>
+                                {activeMG.text}
+                            </h1>
+                            {activeMG.subtext && (
+                                <p style={{
+                                    fontSize: '14px',
+                                    fontWeight: 500,
+                                    margin: '6px 0 0 0',
+                                    opacity: 0.8,
+                                    letterSpacing: '1px',
+                                    textTransform: 'uppercase',
+                                    color: activeMG.style === 'blueprint' ? activeMG.accent_color || '#06b6d4' : '#e2e8f0',
+                                    textShadow: '0 2px 6px rgba(0,0,0,0.7)',
+                                }}>
+                                    {activeMG.subtext}
+                                </p>
+                            )}
+                            {activeMG.style === 'blueprint' && (
+                                <div style={{
+                                    marginTop: '8px',
+                                    fontSize: '8px',
+                                    opacity: 0.6,
+                                    color: '#a1a1aa',
+                                    borderTop: `1px solid ${activeMG.accent_color || '#06b6d4'}`,
+                                    paddingTop: '4px',
+                                    display: 'inline-block',
+                                }}>
+                                    SYSTEM: OK | TEMP: 32C | FPS: 30.0
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     {editingEntity && (
                         <div
@@ -3070,27 +4342,101 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                         </div>
                     )}
 
-                    {/* GSAP Motion Graphics overlay (transparent, on top of video) */}
-                    {graphicsHtml && videoReady && !isSceneActive && (
-                        <div className="absolute inset-0 pointer-events-none z-[100]">
-                            <iframe
-                                ref={gsapIframeRef}
-                                srcDoc={graphicsHtml}
-                                className="w-full h-full"
-                                style={{ border: 'none', background: 'transparent' }}
-                                title="Motion Graphics"
+                    {/* GSAP Motion Graphics overlay via RemotionGraphicPlayer (isolated, transparent, frame-sync) */}
+                    {graphicsEdits.length > 0 && videoReady && !isSceneActive && graphicsEdits.map((edit, idx) => {
+                        const start = edit.start ?? 0;
+                        const duration = edit.duration ?? (edit.end ? (edit.end - start) : 999999);
+                        const end = edit.end ?? (start + duration);
+                        const globalIndex = edits.indexOf(edit);
+                        const isGraphicActive = currentTime >= start && currentTime < end;
+                        const interactive = !isPlaying && isGraphicActive;
+                        return (
+                            <RemotionGraphicPlayer
+                                key={`graphic-remotion-${idx}-${start}-${end}-${edit.design_aspect || (targetRatio > 1 ? 'h' : 'v')}`}
+                                htmlContent={edit.html_content || edit.html || ''}
+                                currentTime={currentTime}
+                                clipStart={start}
+                                clipEnd={end}
+                                isFullBroll={edit.mode === 'full_broll' || edit.mode === 'fullscreen' || edit.action === 'scene_override'}
+                                targetRatio={targetRatio}
+                                designAspect={edit.design_aspect}
+                                offsetX={edit.offset_x ?? 0}
+                                offsetY={edit.offset_y ?? 0}
+                                scaleX={edit.scale_x ?? 1}
+                                scaleY={edit.scale_y ?? 1}
+                                interactive={interactive}
+                                selected={selectedGraphicEditIndex === globalIndex}
+                                onSelect={() => setSelectedGraphicEditIndex(globalIndex)}
+                                onTransformChange={({ offsetX: ox, offsetY: oy, scaleX: sx, scaleY: sy }) => {
+                                    if (globalIndex < 0) return;
+                                    setSelectedGraphicEditIndex(globalIndex);
+                                    const target = editsRef.current[globalIndex];
+                                    if (target) {
+                                        target.offset_x = ox;
+                                        target.offset_y = oy;
+                                        target.scale_x = sx;
+                                        target.scale_y = sy;
+                                    }
+                                    onUpdateEdit?.(globalIndex, {
+                                        offset_x: ox,
+                                        offset_y: oy,
+                                        scale_x: sx,
+                                        scale_y: sy,
+                                    });
+                                }}
                             />
-                        </div>
-                    )}
+                        );
+                    })}
+
+                    {/* ReactBits Motion Component Overlays (BlurText, ShinyText, DecryptedText, TrueFocus, GlitchText, Subtitles) */}
+                    {videoReady && editsRef.current.filter(e => (e.action === 'reactbits_preset' || (e as any).preset || (e as any).component || (e.action === 'add_subtitles' && ['blur', 'shiny', 'decrypted', 'true_focus', 'glitch', 'gradient', 'echo'].includes((e as any).animation_style))) && e.start != null && e.end != null && currentTime >= e.start && currentTime < e.end).map((edit, idx) => (
+                        <ReactBitsPlayer
+                            key={`reactbits-${idx}-${edit.start}`}
+                            preset={(edit as any).preset || (edit as any).component || ((edit as any).animation_style ? (edit as any).animation_style : 'BlurText')}
+                            props={edit}
+                            currentTime={currentTime}
+                            start={edit.start ?? 0}
+                            end={edit.end ?? (edit.start! + 4.0)}
+                        />
+                    ))}
+
+
+
+
+                    {/* Direct Semantic Scene React HTML/DOM Overlay */}
+                    {videoReady && activeSemanticScenes.map((se, sIdx) => {
+                        const sceneTime = currentTime - se.start!;
+                        const isSceneSplit = se.layout === 'split' || (se.scene_data && se.scene_data.layout === 'split');
+                        return (
+                            <div
+                                key={(se as any).id || `semantic-scene-overlay-${se.start}`}
+                                className="absolute left-0 w-full z-[120] overflow-hidden pointer-events-none"
+                                style={{
+                                    fontFamily: vibeConfig.global.fontFamily,
+                                    top: isSceneSplit ? '50%' : 0,
+                                    height: isSceneSplit ? '50%' : '100%',
+                                    maxHeight: '100%',
+                                }}
+                            >
+
+                                <SemanticSceneOverlay
+                                    sceneData={se.scene_data}
+                                    sceneTime={sceneTime}
+                                    sceneDuration={se.end! - se.start!}
+                                />
+                            </div>
+                        );
+                    })}
 
                     {/* Scene Override (full-frame opaque scene replacing video) */}
                     {activeSceneHtml && videoReady && (
-                        <div className="absolute inset-0 z-[200]" onClick={onTogglePlay} style={{ cursor: 'pointer' }}>
+                        <div className="absolute inset-0 z-[200]" onClick={onTogglePlay} style={{ cursor: 'pointer', background: 'transparent', backgroundColor: 'transparent' }}>
                             <iframe
                                 ref={sceneIframeRef}
                                 srcDoc={activeSceneHtml}
                                 className="w-full h-full"
-                                style={{ border: 'none', background: 'transparent' }}
+                                style={{ border: 'none', background: 'transparent', backgroundColor: 'transparent' }}
+                                {...({ allowtransparency: "true" } as any)}
                                 title="Scene Override"
                             />
                             {/* Scene transition video overlay */}
@@ -3103,7 +4449,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                                     playsInline
                                     muted
                                     className="absolute inset-0 w-full h-full object-contain pointer-events-none"
-                                    style={{ mixBlendMode: 'screen', zIndex: 210, opacity: 0, transition: 'opacity 0.2s ease-out' }}
+                                    style={{ mixBlendMode: 'screen', zIndex: 210, opacity: 0, display: 'none', transition: 'opacity 0.2s ease-out' }}
                                 />
                             ))}
                             {/* Scene SFX audio */}
@@ -3131,7 +4477,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                                     playsInline
                                     muted
                                     className="absolute inset-0 w-full h-full object-contain pointer-events-none z-[90]"
-                                    style={{ opacity: 0, mixBlendMode: 'screen' }}
+                                    style={{ opacity: 0, display: 'none', mixBlendMode: 'screen', background: 'transparent', backgroundColor: 'transparent' }}
                                 />
                             );
                         } else if (edit.asset_type === 'audio') {
@@ -3175,6 +4521,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                             }
                         }
 
+                        const isBrollSplit = edit.layout === 'split' || edit.is_split;
                         return (
                             <video
                                 key={`broll-${i}`}
@@ -3183,8 +4530,17 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                                 preload="auto"
                                 playsInline
                                 muted
-                                className="absolute inset-0 w-full h-full object-contain z-[95]"
-                                style={{ opacity: 0, pointerEvents: 'none' }}
+                                className="absolute left-0 w-full z-[95]"
+                                style={{
+                                    opacity: 0,
+                                    display: 'none',
+                                    pointerEvents: 'none',
+                                    top: isBrollSplit ? '50%' : 0,
+                                    height: isBrollSplit ? '50%' : '100%',
+                                    objectFit: isBrollSplit ? 'cover' : 'contain',
+                                    background: 'transparent',
+                                    backgroundColor: 'transparent'
+                                }}
                                 onError={(e) => {
                                     const el = e.currentTarget;
                                     if (el.src.includes('_proxy')) {
@@ -3202,10 +4558,10 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                         style={{ background: 'radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.45) 100%)' }}
                     />
 
-                    {/* Play/Pause overlay — glass button */}
-                    {!isPlaying && videoReady && (
+                    {/* Play/Pause overlay — above graphic hit-layer so play still works */}
+                    {!isPlaying && videoReady && selectedGraphicEditIndex == null && (
                         <div
-                            className="absolute inset-0 flex items-center justify-center pointer-events-none z-[10]"
+                            className="absolute inset-0 flex items-center justify-center pointer-events-none z-[280]"
                         >
                             <button
                                 onClick={onTogglePlay}
@@ -3241,71 +4597,71 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                         {brollCount > 0 && <span className="text-[8px] font-mono px-2 py-0.5 lowercase" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.4)', borderRadius: '6px', backdropFilter: 'blur(8px)' }}>{brollCount} b-roll</span>}
                     </div>
                 )}
+
             </div>
 
             {/* ── Cinematic Scrubber ── */}
-            <div
-                className="h-11 flex items-center gap-3 px-4 shrink-0"
-                style={{ borderTop: '1px solid rgba(255,255,255,0.05)', background: 'rgba(17,19,24,0.9)', backdropFilter: 'blur(8px)' }}
-            >
-                {/* Play/pause button */}
-                <button
-                    onClick={onTogglePlay}
-                    disabled={!videoReady}
-                    className="flex items-center justify-center w-7 h-7 rounded-lg transition-all cursor-pointer disabled:opacity-30"
-                    style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)' }}
-                >
-                    {isPlaying
-                        ? <svg className="w-3 h-3" fill="rgba(255,255,255,0.8)" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-                        : <svg className="w-3 h-3 ml-0.5" fill="rgba(255,255,255,0.8)" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                    }
-                </button>
-
-                <span className="text-[10px] font-mono shrink-0" style={{ color: '#5A6478', minWidth: '36px' }}>{fmtTime(currentTime)}</span>
-
+            {/* ── Player Controls ── */}
+            <div className="absolute bottom-0 left-0 right-0 px-5 pb-4 pt-16 flex flex-col gap-3 z-[250]" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 100%)' }}>
+                
                 {/* Scrubber track */}
                 <div
-                    className="flex-1 h-[3px] rounded-full cursor-pointer relative"
-                    style={{ background: 'rgba(255,255,255,0.06)' }}
+                    className="w-full h-1.5 rounded-full cursor-pointer relative group bg-white/20"
                     onClick={seek}
                 >
-                    {/* EDL keep segments */}
-                    {edl && dur > 0 && edl.v1.map((seg, i) => (
-                        <div
-                            key={i}
-                            className="absolute h-full rounded-full"
-                            style={{
-                                left: `${(seg.start / dur) * 100}%`,
-                                width: `${Math.max(0.5, ((seg.end - seg.start) / dur) * 100)}%`,
-                                background: 'rgba(59,130,246,0.2)',
-                            }}
-                        />
-                    ))}
                     {/* Progress fill */}
                     {dur > 0 && (
                         <div
-                            className="absolute h-full rounded-full"
-                            style={{
-                                left: 0,
-                                width: `${(currentTime / dur) * 100}%`,
-                                background: 'linear-gradient(90deg, #3B82F6, rgba(124,58,237,0.8))',
-                            }}
+                            className="absolute top-0 bottom-0 left-0 rounded-full bg-[#E5E5EA]"
+                            style={{ width: `${(currentTime / dur) * 100}%` }}
                         />
                     )}
                     {/* Playhead pill */}
                     {dur > 0 && (
                         <div
-                            className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full"
+                            className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-white opacity-0 group-hover:opacity-100 transition-all shadow-md"
                             style={{
                                 left: `calc(${(currentTime / dur) * 100}% - 6px)`,
-                                background: '#F5F7FA',
-                                boxShadow: '0 0 8px rgba(59,130,246,0.5)',
                             }}
                         />
                     )}
                 </div>
 
-                <span className="text-[10px] font-mono text-right shrink-0" style={{ color: '#3A4151', minWidth: '36px' }}>{fmtTime(dur)}</span>
+                {/* Bottom Row */}
+                <div className="flex items-center justify-between relative h-8">
+                    {/* Time */}
+                    <div className="text-[12px] font-mono text-neutral-300 tracking-wide w-32 flex-shrink-0 flex items-center">
+                        {fmtTime(currentTime)} / {fmtTime(dur)}
+                    </div>
+
+                    {/* Play/pause button (Center) */}
+                    <div className="absolute left-1/2 -translate-x-1/2 flex items-center justify-center">
+                        <button
+                            onClick={onTogglePlay}
+                            disabled={!videoReady}
+                            className="flex items-center justify-center w-9 h-9 rounded-full bg-white text-black hover:scale-105 transition-all disabled:opacity-30 disabled:hover:scale-100 shadow-sm"
+                        >
+                            {isPlaying
+                                ? <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                                : <svg className="w-4 h-4 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                            }
+                        </button>
+                    </div>
+
+                    {/* Right Actions */}
+                    <div className="flex items-center gap-4 text-neutral-300 w-32 justify-end flex-shrink-0">
+                        <button className="hover:text-white transition-colors">
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M11 5L6 9H2v6h4l5 4V5z"/>
+                            </svg>
+                        </button>
+                        <button className="hover:text-white transition-colors">
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
     );

@@ -37,6 +37,14 @@ class CreateSceneArgs(BaseModel):
     relations: Optional[List[Dict[str, str]]] = Field(default=None, description="Связи между сущностями для рисования стрелок (список объектов с полями from, to, type)")
     style_profile: Optional[Dict[str, Any]] = Field(default=None, description="Профиль стилей: 'font_family' (кириллические шрифты: 'Inter', 'Montserrat', 'Rubik', 'Manrope', 'Unbounded', 'Comfortaa', 'JetBrains Mono', 'Playfair Display'), 'bg_color' (полупрозрачный фон Apple-glass, например 'rgba(20,20,25,0.65)'), 'border_color' ('rgba(255,255,255,0.15)'), 'color_accent' (цвет полосы загрузки/акцентов, например '#0A84FF')")
     concept_prompt: Optional[str] = Field(default=None, description="Краткое текстовое описание концепта или идеи сцены (например: 'почему спать 8 часов важно'). Если указано, движок автоматически сгенерирует элементы, иконки, связи и композицию самостоятельно через Graphics LLM!")
+    layout: Optional[str] = Field(
+        default=None,
+        description="Композиция talking-head: 'overlay' (плашка поверх спикера, лицо видно), 'fullscreen' / 'full_broll' (графический B-roll на весь экран на время мысли), 'split' (лицо сверху / графика снизу). Для тезисов/законов — overlay; для объяснения идеи 2–5с — fullscreen."
+    )
+    mode: Optional[str] = Field(
+        default=None,
+        description="Синоним layout для совместимости: 'overlay' | 'full_broll' | 'fullscreen' | 'split'. Если задан layout — layout приоритетнее при отсутствии mode."
+    )
 
 class KineticTypographyArgs(BaseModel):
     font: str = Field(default="Montserrat-ExtraBold", description="Имя шрифта. Доступные значения: 'Montserrat-ExtraBold' (универсальный жирный), 'Inter_24pt-Bold' (технологичный), 'BebasNeue-Regular' (TikTok/блогерский), 'Rubik-Bold' (скругленный), 'Oswald-Bold' (строгий сжатый), 'Manrope-Bold' (современный геометричный), 'JetBrainsMono-Bold' (моноширинный), 'Comfortaa-Bold' (мягкий округлый)")
@@ -53,9 +61,10 @@ class KineticTypographyArgs(BaseModel):
     font_pairing: Optional[str] = Field(default=None, description="Второй (акцентный) шрифт для попарного сочетания (например: 'Lobster', 'BebasNeue')")
     word_styles: Optional[str] = Field(default=None, description="JSON-строка с пословной стилизацией и компоновкой (например, переносы строк, индивидуальные цвета)")
     inactive_opacity: Optional[float] = Field(default=None, description="Прозрачность неактивных слов во время караоке (от 0.0 до 1.0, например 0.45)")
-    active_scale: Optional[float] = Field(default=None, description="Масштаб увеличения активного слова при караоке-анимации (например 1.25)")
     x: Optional[float] = Field(default=None, description="Горизонтальное положение текста/субтитров на экране в процентах (0-100). Пример: 50 для центра, 20 для левого края, 80 для правого.")
     y: Optional[float] = Field(default=None, description="Вертикальное положение текста/субтитров на экране в процентах (0-100). Пример: 50 для центра, 15 для верха, 85 для низа.")
+    behind_speaker: Optional[bool] = Field(default=False, description="Если True — переносит весь текст/субтитры речи на задний план за спикера с помощью ротоскопинга RVM.")
+
 
 class SelectBgmArgs(BaseModel):
     asset_query: str = Field(description="Запрос для поиска фоновой музыки в библиотеке (например: 'lofi', 'trap', 'acoustic')")
@@ -67,11 +76,43 @@ class AudioDuckingArgs(BaseModel):
 class ZoomArgs(BaseModel):
     start_time: float = Field(description="Начало наезда камеры в секундах")
     end_time: float = Field(description="Конец наезда камеры в секундах")
-    type: str = Field(default="zoom_in", description="Тип зума: 'zoom_in' или 'zoom_out'")
+    type: str = Field(
+        default="zoom_in",
+        description="Тип зума: 'zoom_in' (punch с мягким settle), 'zoom_out', 'zoom_hold' (удержание с мягкими краями). НЕ обрывай зум резко — длительность 1.2–2.5с."
+    )
+    intensity: float = Field(
+        default=1.14,
+        description="Пиковый масштаб 1.08–1.25 (по умолчанию 1.14). Больше 1.25 — слишком агрессивно для talking-head."
+    )
 
 class TransitionArgs(BaseModel):
     start_time: float = Field(description="Таймкод срабатывания перехода")
-    transition_type: str = Field(default="swoosh", description="Тип перехода: 'whoosh', 'glitch', 'film'")
+    transition_type: str = Field(
+        default="whoosh",
+        description="Тип перехода/SFX: 'whoosh' (склейка/появление плашки), 'glitch' (tech), 'film' (мягкий), 'impact' (удар на тезис), 'riser' (подводка к мысли)"
+    )
+
+class ApplyColorGradeArgs(BaseModel):
+    preset: str = Field(
+        default="cinema",
+        description="Пресет цветокора: 'cinema', 'warm', 'cold', 'vibrant', 'teal_orange', 'cyberpunk', 'vintage', 'monochrome'"
+    )
+    start_time: float = Field(default=0.0, description="Начало цветокора в секундах")
+    end_time: Optional[float] = Field(default=None, description="Конец (по умолчанию — весь ролик)")
+    brightness: Optional[float] = Field(default=None, description="Яркость 0–200 (100 = нейтрально)")
+    contrast: Optional[float] = Field(default=None, description="Контраст 0–200")
+    saturation: Optional[float] = Field(default=None, description="Насыщенность 0–200")
+    hue: Optional[float] = Field(default=None, description="Сдвиг оттенка в градусах")
+
+class ApplyTopicTransitionsArgs(BaseModel):
+    transition_type: Optional[str] = Field(
+        default=None,
+        description="Тип перехода для всех точек смены темы: 'whoosh', 'glitch', 'film'. Если не указан — берётся suggested_type каждой точки."
+    )
+    min_gap_sec: float = Field(
+        default=5.0,
+        description="Минимальный интервал между соседними переходами в секундах."
+    )
 
 class ModifyClipArgs(BaseModel):
     clip_id: str = Field(description="Уникальный ID или префикс-индекс изменяемого клипа (например: 'V2-Broll-0', 'M1-Music-2')")
@@ -120,9 +161,29 @@ class GenerateAudioArgs(BaseModel):
     is_bgm: bool = Field(default=False, description="True если это фоновая музыка (на дорожку M1), False если это короткий SFX эффект (на дорожку SFX)")
     volume: float = Field(default=-15.0, description="Громкость аудиодорожки в dB (например, -20.0 для музыки, -8.0 для SFX)")
 
+class RemoveBackgroundArgs(BaseModel):
+    bg_color: str = Field(default="transparent", description="Цвет замены фона: 'transparent' (прозрачный WebM), или HEX-цвет заливки (например: '#0a0a1a' тёмно-чёрный, '#1a1a3e' синий бренд).")
+    bg_video_query: Optional[str] = Field(default=None, description="Если указан — поиск фонового видео для замены фона (например: 'cityscape night neon').")
+
+class SetVideoBackgroundArgs(BaseModel):
+    bg_color: str = Field(default="#0a0a14", description="Цвет фона за спикером в HEX (например: '#0a0a14' тёмный, '#0d1b2a' ночной синий, '#1a0a2e' пурпурный). Фон ПОЛНОСТЬЮ заменяет окружение спикера.")
+    text: Optional[str] = Field(default=None, description="Большой текст на фоне ЗА спикером (например: 'WHY?' или 'ВАЖНО' или 'x10'). Текст будет гигантским и полупрозрачным — как декоративный элемент позади спикера.")
+    text_color: str = Field(default="white", description="Цвет текста на фоне (например: 'white', '#6366F1', '#FACC15').")
+    text_opacity: float = Field(default=0.12, description="Прозрачность декоративного текста на фоне от 0.0 до 1.0. 0.08-0.15 — едва заметный фоновый эффект, 0.3-0.5 — явный текст.")
+    font_size: int = Field(default=220, description="Размер шрифта декоративного фонового текста в пикселях. 180-280 для гигантских фоновых надписей.")
+class AddMotionPresetArgs(BaseModel):
+    preset: str = Field(default="BlurText", description="Название эффекта из библиотеки ReactBits: 'BlurText' (размытие при появлении слов), 'ShinyText' (переливающийся золотой/неоновый блеск), 'DecryptedText' (хакерский эффект матричного шрифта), 'TrueFocus' (плавающая неоновая рамка фокуса).")
+    text: str = Field(description="Текст или заголовок для анимации.")
+    start_time: float = Field(default=0.0, description="Время появления на таймлайне в секундах.")
+    duration: float = Field(default=4.0, description="Длительность показа в секундах.")
+    color: str = Field(default="#FFFFFF", description="Основной цвет текста в hex-формате.")
+    font_size: int = Field(default=72, description="Размер шрифта в пикселях.")
+    speed: Optional[float] = Field(default=None, description="Скорость анимации.")
+
 # ═══════════════════════════════════════════════════════════════════════════
 # TOOL RUNNERS
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 def search_and_add_music(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
     file_id = memory.session.get("project_id")
@@ -284,175 +345,164 @@ def stitch_video_clip(timeline: TimelineState, memory: ProductionMemory, args: D
     return f"Успешно добавлен фрагмент видео '{asset_id}' с {start} по {end}s"
 
 def cut_clip(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
-    start = args["start_time"]
-    end = args["end_time"]
+    dur = float(memory.session.get("duration", 99999.0))
+    start = max(0.0, min(float(args["start_time"]), dur - 0.1))
+    end = max(start + 0.1, min(float(args["end_time"]), dur))
     timeline.add_cut(start, end)
-    event_bus.emit("tool_completed", {"tool": "cut_clip", "message": f"Вырезан фрагмент {start} - {end}s"})
-    return f"Успешно вырезан фрагмент {start} - {end}s"
+    event_bus.emit("tool_completed", {"tool": "cut_clip", "message": f"Вырезан фрагмент {start:.1f} - {end:.1f}s"})
+    return f"Успешно вырезан фрагмент {start:.1f} - {end:.1f}s"
 
 def add_broll(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
-    start = args["start_time"]
-    end = args["end_time"]
+    dur = float(memory.session.get("duration", 99999.0))
+    start = max(0.0, min(float(args["start_time"]), dur - 0.5))
+    end = max(start + 0.5, min(float(args["end_time"]), dur))
     query = args["query"]
-    timeline.add_broll(start, end, query)
-    event_bus.emit("tool_completed", {"tool": "add_broll", "message": f"Вставлен B-roll '{query}' на {start} - {end}s"})
-    return f"Успешно вставлен B-roll по теме '{query}' на {start} - {end}s"
+    layout = args.get("layout", "full")
+    timeline.add_broll(start, end, query, layout=layout)
+    event_bus.emit("tool_completed", {"tool": "add_broll", "message": f"Вставлен B-roll '{query}' на {start:.1f} - {end:.1f}s"})
+    return f"Успешно вставлен B-roll по теме '{query}' на {start:.1f} - {end:.1f}s"
 
 async def create_scene(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
     start = args["start_time"]
     duration = args["duration"]
-    
-    scene_template = args.get("scene_template")
-    mood = args.get("mood", "neutral")
-    entities = args.get("entities")
-    relations = args.get("relations") or []
-    style_profile = args.get("style_profile") or {}
+    layout = args.get("layout") or "overlay"
     concept_prompt = args.get("concept_prompt")
-    
-    # If entities are not provided, auto-design them using graphics_llm
-    if not entities and concept_prompt:
-        from app.agents.base_agent import invoke_graphics_llm
-        import json
-        from app.workflows.json_sanitizer import parse_json_blocks_from_text, safe_json_loads
-        
-        system_designer_prompt = """Ты — элитный агент-графический дизайнер (Graphics Design Specialist) в студии монтажа Synapix AI.
-Твоя задача — превратить текстовый концепт/промпт сцены в профессионально структурированную композицию графических элементов (сцену) с уникальной стилистикой и шрифтовым оформлением.
+    aspect_ratio = memory.session.get("aspect_ratio") or memory.session.get("video_format") or "16:9"
+    for edit in timeline.edits:
+        if edit.get("action") == "change_format":
+            aspect_ratio = edit.get("format", aspect_ratio)
 
-Доступные кириллические шрифты для тонкой настройки:
-- 'Inter' — нейтральный современный гротеск (по умолчанию для body).
-- 'Montserrat' — геометрический выразительный гротеск (отлично для энергичных заголовков).
-- 'Rubik' — мягкий скругленный гротеск.
-- 'Manrope' — сбалансированный читаемый шрифт.
-- 'Unbounded' — технологичный, футуристичный широкий шрифт (идеален для IT, крипты, ярких акцентов).
-- 'Comfortaa' — округлый дружелюбный шрифт (для уютных, лайфстайл тем).
-- 'JetBrains Mono' — моноширинный шрифт (для кодинга, аналитики, таблиц).
-- 'Playfair Display' — классическая антиква с засечками (для моды, драмы, люкс-сегмента).
 
-На основе концепта ты должен:
-1. Выбрать подходящий шаблон (`scene_template`):
-   - 'comparison' — если сравниваются 2 сущности/понятия.
-   - 'vertical_stack' — если есть вертикальный список, пошаговый процесс или перечисление (3-4 пункта).
-   - 'timeline' — горизонтальный поток шагов или эволюция во времени.
-   - 'concept_explainer' — центральный тезис/понятие и отходящие от него ветви/связи.
-2. Выбрать настроение сцены (`mood`): 'analytical', 'energetic', 'dramatic', 'cozy', 'tech'.
-3. Настроить глобальный стиль (`style_profile`):
-   - `font_family`: Один из доступных шрифтов выше.
-   - `bg_color`: Цвет фона сцены (например, "rgba(20, 20, 25, 0.65)").
-   - `border_color`: Цвет границ элементов (например, "rgba(255, 255, 255, 0.15)").
-   - `glow_color`: Цвет свечения (например, "rgba(0, 229, 255, 0.18)").
-   - `arrow_color`: Цвет стрелок (например, "rgba(10, 132, 255, 0.65)").
-4. Сгенерировать список сущностей (`entities`), описывающих этот концепт. Каждая сущность должна иметь:
-   - `id`: уникальный идентификатор (например, 'e1', 'e2', 'e3')
-   - `type`: 'headline' (заголовок всей сцены — обязательно 1 на сцену), 'stat_card' (информационная карточка), 'icon' (отдельная иконка), 'loading_bar' (прогресс-бар).
-   - `text`: лаконичный текст на кириллице. Будь кратким, избегай длинных текстов в карточках!
-   - `icon`: подходящая эмодзи-иконка (например, "💤", "🧠", "🔥", "🚀").
-   - `styles`: Объект стилей для этой сущности (необязательно, для кастомизации):
-     * `font_family`: Конкретный шрифт из списка выше (например, задай 'Unbounded' для заголовка, а 'Inter' для карточек).
-     * `color`: Цвет текста (например, '#FFFFFF', '#FF007F').
-     * `bg_color`: Цвет фона карточки.
-     * `border_color`: Цвет рамки.
-     * `bold`: boolean.
-     * `italic`: boolean.
-   - (Координаты x, y, width, height указывать НЕ нужно, их автоматически рассчитает DesignSkill!)
-5. Задать логические связи (`relations`) между сущностями для рисования стрелок (например, от центральной карточки к боковым).
+    # If no concept_prompt, try to construct one from entities
+    if not concept_prompt and args.get("entities"):
+        ents = args["entities"]
+        headline = next((e for e in ents if e.get("type") == "headline"), None)
+        h_text = headline.get("text", "") if headline else ""
+        other_texts = [e.get("text", "") for e in ents if e.get("type") != "headline"]
+        concept_prompt = f"Заголовок: {h_text}. Сущности: {', '.join(other_texts)}"
 
-Верни результат СТРОГО в формате JSON с ключами:
-- "scene_template": шаблон
-- "mood": настроение
-- "style_profile": объект глобальных стилей (font_family, bg_color, border_color, glow_color, arrow_color)
-- "entities": список сущностей (id, type, text, icon, styles)
-- "relations": список связей (объекты с полями from, to, type)
-"""
-        
-        try:
-            logger.info(f"🎨 Auto-Scene Generator: Running graphics_llm for concept: '{concept_prompt}'")
-            llm_response = await invoke_graphics_llm(system_designer_prompt, f"Разработай визуальную композицию для концепта: '{concept_prompt}'")
-            content = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
-            
-            content_clean = content.strip()
-            if "```json" in content_clean:
-                content_clean = content_clean.split("```json")[1].split("```")[0].strip()
-            elif "```" in content_clean:
-                content_clean = content_clean.split("```")[1].split("```")[0].strip()
-                
-            parsed_blocks = parse_json_blocks_from_text(content)
-            parsed_data = parsed_blocks[0] if parsed_blocks else safe_json_loads(content_clean)
-            
-            scene_template = parsed_data.get("scene_template") or scene_template or "concept_explainer"
-            mood = parsed_data.get("mood") or mood
-            entities = parsed_data.get("entities") or []
-            relations = parsed_data.get("relations") or []
-            style_profile = parsed_data.get("style_profile") or style_profile or {}
-            logger.info(f"🎨 Auto-Scene Generator: Generated {len(entities)} entities, {len(relations)} relations, and style profile.")
-        except Exception as e:
-            logger.exception(f"⚠️ Auto-Scene Generator failed: {e}")
-            return f"Ошибка автоматической генерации сцены: {e}"
+    if not concept_prompt:
+        concept_prompt = "Визуальное оформление и презентация ключевой темы видео"
 
-    if not entities:
-        return "Ошибка: Не предоставлены элементы (entities) и отсутствует концепт (concept_prompt) для автогенерации сцены"
-        
-    if not scene_template:
-        scene_template = "concept_explainer"
-        
-    # 1. Access DesignSkill to generate layout coordinates if entities are missing spatial data
-    from app.services.design_skill import DesignSkill
-    
-    aspect_ratio = memory.session.get("aspect_ratio", "vertical")
-    
-    # Pre-position navbars to keep them top-fixed and exclude them from templates grid
-    non_nav_entities = [e for e in entities if e.get("type") != "navbar"]
-    nav_entities = [e for e in entities if e.get("type") == "navbar"]
-    
-    for nav in nav_entities:
-        if nav.get("x") is None: nav["x"] = 50.0
-        if nav.get("y") is None: nav["y"] = 12.0 if aspect_ratio == "vertical" else 8.0
-        if nav.get("width") is None: nav["width"] = 90.0
-        if nav.get("height") is None: nav["height"] = 7.0
+    # Find visual context for the current frame
+    visual_scenes = memory.session.get("visual_scenes", [])
+    current_scene_info = None
+    if visual_scenes:
+        closest_scene = min(visual_scenes, key=lambda s: abs(s.get("time_sec", 0.0) - start))
+        scene_desc = closest_scene.get("scene", "Говорящая голова")
+        safe_zone = closest_scene.get("safe_zone", "none")
+        current_scene_info = f"В этот момент в кадре: '{scene_desc}'. Рекомендованная безопасная зона для размещения графики: '{safe_zone}'."
+        logger.info(f"📹 VLM Context for create_scene at {start}s: {current_scene_info}")
 
-    # Check if we need to auto-layout non-navbar elements
-    needs_layout = any(e.get("x") is None or e.get("y") is None for e in non_nav_entities)
-    if needs_layout:
-        generated_coords = DesignSkill.generate_layout(scene_template, len(non_nav_entities), aspect_ratio)
-        for idx, entity in enumerate(non_nav_entities):
-            if idx < len(generated_coords):
-                if entity.get("x") is None:
-                    entity["x"] = generated_coords[idx]["x"]
-                if entity.get("y") is None:
-                    entity["y"] = generated_coords[idx]["y"]
-                if entity.get("width") is None:
-                    entity["width"] = generated_coords[idx]["width"]
-                if entity.get("height") is None:
-                    entity["height"] = generated_coords[idx]["height"]
+    # Enrich concept_prompt with transcript context + mood for better graphics (G2 fix)
+    transcript_data = memory.session.get("transcript_data", {})
+    mood = memory.get_style_profile().get("mood", "") if hasattr(memory, "get_style_profile") else ""
+    transcript_snippet = ""
+    if transcript_data:
+        words = transcript_data.get("words", []) or []
+        # Grab words spoken within ±5 seconds of the scene start
+        nearby_words = [
+            w.get("word", w.get("text", "")) for w in words
+            if abs(float(w.get("start", 0)) - start) <= 5.0
+        ]
+        if nearby_words:
+            transcript_snippet = " ".join(nearby_words[:20]).strip()
+    
+    if transcript_snippet:
+        concept_prompt = f"{concept_prompt}. Контекст речи: «{transcript_snippet}»"
+    if mood:
+        concept_prompt = f"{concept_prompt}. Настроение: {mood}"
+    
+    mode = args.get("mode") or args.get("scene_mode")
+    if not mode:
+        if layout in ("fullscreen", "cover", "full", "full_broll"):
+            mode = "full_broll"
+        elif layout == "split":
+            mode = "split"
+        else:
+            mode = "overlay"  # plates on top of talking-head
+    # Normalize agent aliases → graphics_developer vocabulary
+    if mode in ("fullscreen", "cover", "full"):
+        mode = "full_broll"
 
-    scene_data = {
-        "scene_template": scene_template,
-        "mood": mood,
-        "energy": args.get("energy", 0.5),
-        "style_profile": style_profile,
-        "entities": entities,
-        "relations": relations,
-        "duration": duration
-    }
+    # Invoke the Generative Graphics Developer Agent to write clean HTML/GSAP/Three.js code dynamically
+    from app.workflows.graphics_developer import generate_custom_graphics_code
+    from app.workflows.reasoning_manager import ReasoningManager
+
+    mode_label = {
+        "overlay": "плашка поверх спикера",
+        "full_broll": "полноэкранный графический B-roll",
+        "split": "split-композиция (лицо + графика)",
+    }.get(mode, mode)
+    short_concept = (concept_prompt or "сцена")[:90]
+    if len(concept_prompt or "") > 90:
+        short_concept += "…"
+    activity_step = f"GRAPHICS: {short_concept}"
+    end_t = round(start + duration, 2)
+
+    logger.info(
+        f"🎨 Generative Graphics Agent: Creating custom animated code for conceptual prompt: "
+        f"'{concept_prompt}' (Mode: {mode}, Layout: {layout}, AR: {aspect_ratio})"
+    )
+    event_bus.emit("log", {
+        "message": f"🎨 Генерация графики [{mode_label}] «{short_concept}» @ {start:.1f}–{end_t:.1f}s ({aspect_ratio})"
+    })
+    ReasoningManager.emit_activity(
+        activity_step,
+        f"Генерирую графическую сцену — {mode_label}.\n"
+        f"Формат {aspect_ratio}, layout={layout}, интервал {start:.1f}–{end_t:.1f}с.\n"
+        f"Концепт: {short_concept}",
+        status="running",
+        agent="Graphics Developer",
+        progress=0.72,
+    )
+    if current_scene_info:
+        ReasoningManager.emit_activity(
+            "REASONING: Зрительный контекст кадра",
+            current_scene_info,
+            status="done",
+            agent="Cinematic Brain",
+            progress=0.7,
+        )
+
+    graphics_res = await generate_custom_graphics_code(
+        concept_prompt=concept_prompt,
+        layout=layout,
+        aspect_ratio=aspect_ratio,
+        start_time=start,
+        duration=duration,
+        visual_frame_context=current_scene_info,
+        mode=mode,
+        activity_step=activity_step,
+    )
+    html_content = graphics_res.get("html_content", "")
+    explanation = graphics_res.get("explanation", "Анимационная сцена сгенерирована ИИ.")
     
-    # 2. Run Design Critic for automatic overlap resolution, safe area constraints, Cyrillic compliance, and contrast checks
-    aspect_ratio = memory.session.get("aspect_ratio", "vertical")
-    polished_data, fixes = DesignSkill.audit_and_correct(scene_data, aspect_ratio)
-    
-    # Log corrected design changes for debugging transparency
-    if fixes:
-        for fix in fixes:
-            logger.info(f"[DesignCritic Fix] {fix}")
-            
-    # Passing the polished semantic JSON object to the timeline state
-    timeline.add_graphics(start, duration, polished_data, "semantic_scene")
-    
+    # Register the custom dynamic HTML canvas overlay on the timeline (persist mode!)
+    timeline.add_graphics(
+        start, duration, html_content, "hyperframes_html",
+        mode=mode, layout=layout, design_aspect=aspect_ratio,
+    )
+
+    done_details = (
+        f"Готово: {explanation}\n"
+        f"Тип: {mode_label} · {start:.1f}–{end_t:.1f}с · {aspect_ratio}"
+    )
+    event_bus.emit("log", {"message": f"✅ Графика готова: {explanation} ({start:.1f}–{end_t:.1f}s)"})
     event_bus.emit("graphics_generated", {
-        "style": scene_template, 
-        "message": f"Создана семантическая сцена '{scene_template}' на {start}s. Применено дизайн-исправлений: {len(fixes)}"
+        "style": "custom_generative_html",
+        "step": activity_step,
+        "status": "done",
+        "message": done_details,
+        "details": done_details,
+        "agent": "Graphics Developer",
+        "progress": 0.88,
     })
     
-    fixes_desc = f" (автоматически исправлено огрехов дизайна: {len(fixes)})" if fixes else ""
-    return f"Успешно создана семантическая сцена '{scene_template}' на {start}s{fixes_desc}"
+    return (
+        f"Создана графика «{short_concept}» ({mode_label}) на {start:.1f}–{end_t:.1f}с. "
+        f"{explanation}"
+    )
 
 
 def build_kinetic_typography(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
@@ -474,6 +524,10 @@ def build_kinetic_typography(timeline: TimelineState, memory: ProductionMemory, 
     active_scale = args.get("active_scale")
     x = args.get("x")
     y = args.get("y")
+    behind_speaker = args.get("behind_speaker")
+    if position == "behind_speaker":
+        behind_speaker = True
+
     
     merged = timeline.set_subtitles(
         font=font,
@@ -492,8 +546,10 @@ def build_kinetic_typography(timeline: TimelineState, memory: ProductionMemory, 
         inactive_opacity=inactive_opacity,
         active_scale=active_scale,
         x=x,
-        y=y
+        y=y,
+        behind_speaker=behind_speaker
     )
+
     
     f_val = merged.get("font", "Montserrat-ExtraBold")
     fs_val = merged.get("font_size", 80)
@@ -533,20 +589,61 @@ def select_bgm(timeline: TimelineState, memory: ProductionMemory, args: Dict[str
     return f"Успешно добавлен саундтрек '{query}' с уровнем громкости {vol}дБ"
 
 def create_zoom(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
-    start = args["start_time"]
-    end = args["end_time"]
+    dur = float(memory.session.get("duration", 99999.0))
+    start = max(0.0, min(float(args["start_time"]), dur - 0.5))
+    end = max(start + 0.5, min(float(args["end_time"]), dur))
+    # Soft punch needs enough room to settle — pad short zooms
+    if end - start < 1.0:
+        end = min(start + 1.4, dur)
     z_type = args.get("type", "zoom_in")
+    intensity = float(args.get("intensity", 1.14) or 1.14)
+    intensity = max(1.06, min(1.28, intensity))
     
     # Check spacing density gate in production memory
     if memory.check_zoom_density(start):
         logger.warning(f"Anti-Repetition Spacing Gate: zooms are too dense at {start}s. Adjusting delay.")
-        start += 1.0
-        end += 1.0
+        start = min(start + 1.0, dur - 0.5)
+        end = min(end + 1.0, dur)
         
-    timeline.add_zoom(start, end, z_type)
+    timeline.add_zoom(start, end, z_type, intensity=intensity)
     memory.record_zoom(start, z_type)
-    event_bus.emit("tool_completed", {"tool": "create_zoom", "message": f"Применен зум '{z_type}' на {start} - {end}s"})
-    return f"Успешно применен зум '{z_type}' на {start} - {end}s"
+    event_bus.emit("tool_completed", {"tool": "create_zoom", "message": f"Применен зум '{z_type}' ×{intensity:.2f} на {start:.1f} - {end:.1f}s"})
+    return f"Успешно применен зум '{z_type}' (intensity={intensity:.2f}) на {start:.1f} - {end:.1f}s"
+
+def apply_color_grade(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
+    """Add color_correction edit for talking-head grade (preview + export)."""
+    dur = float(memory.session.get("duration", 99999.0))
+    start = max(0.0, float(args.get("start_time", 0.0) or 0.0))
+    end = args.get("end_time")
+    end = float(end) if end is not None else dur
+    end = max(start + 0.1, min(end, dur))
+    preset = (args.get("preset") or "cinema").strip().lower()
+    allowed = {"cinema", "warm", "cold", "vibrant", "teal_orange", "cyberpunk", "vintage", "monochrome"}
+    if preset not in allowed:
+        preset = "cinema"
+
+    edit = {
+        "action": "color_correction",
+        "preset": preset,
+        "start": round(start, 2),
+        "end": round(end, 2),
+    }
+    for key in ("brightness", "contrast", "saturation", "hue"):
+        if args.get(key) is not None:
+            edit[key] = args[key]
+
+    # Replace overlapping color grades
+    timeline.edits = [
+        e for e in timeline.edits
+        if not (
+            e.get("action") == "color_correction"
+            and float(e.get("start", 0)) < end
+            and float(e.get("end", 0)) > start
+        )
+    ]
+    timeline.edits.append(edit)
+    event_bus.emit("tool_completed", {"tool": "apply_color_grade", "message": f"Цветокор '{preset}' на {start:.1f}-{end:.1f}s"})
+    return f"Успешно применён цветокор '{preset}' на {start:.1f}-{end:.1f}s"
 
 def build_transition(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
     file_id = memory.session.get("project_id")
@@ -606,9 +703,77 @@ def build_transition(timeline: TimelineState, memory: ProductionMemory, args: Di
     else:
         return "Ошибка: Не удалось найти или загрузить звуковой эффект для перехода."
         
+    # Add the visual transition marker to timeline edits list
+    visual_edit = {
+        "action": "build_transition",
+        "start": round(start, 2),
+        "end": round(start + 0.8, 2),
+        "transition_type": t_type
+    }
+    timeline.edits.append(visual_edit)
     memory.record_transition(t_type)
     event_bus.emit("tool_completed", {"tool": "build_transition", "message": f"Добавлен переход '{t_type}' на {start}s со звуковым эффектом"})
     return f"Успешно добавлен переход '{t_type}' на {start}s со звуком"
+
+def apply_topic_transitions(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
+    """Detect topic-change moments and place build_transition on each boundary."""
+    import os
+    import json
+
+    file_id = memory.session.get("project_id")
+    if not file_id:
+        return "Ошибка: Не найден ID проекта во временной памяти сессии"
+
+    transcript_path = os.path.join("uploads", f"{file_id}_transcript.json")
+    if not os.path.exists(transcript_path):
+        return "Ошибка: Транскрипт не найден. Сначала дождитесь распознавания речи."
+
+    try:
+        with open(transcript_path, "r", encoding="utf-8") as f:
+            transcript_data = json.load(f)
+    except Exception as e:
+        return f"Ошибка чтения транскрипта: {e}"
+
+    from app.services.topic_transition_service import detect_topic_boundaries
+
+    min_gap = float(args.get("min_gap_sec", 5.0) or 5.0)
+    force_type = args.get("transition_type")
+    boundaries = detect_topic_boundaries(transcript_data, min_gap_sec=min_gap)
+
+    if not boundaries:
+        return "Смены темы не найдены — переходы не добавлены."
+
+    # Avoid stacking duplicates near existing transitions
+    existing_times = []
+    for e in timeline.edits:
+        if e.get("action") == "build_transition":
+            t = e.get("start", e.get("start_time"))
+            if t is not None:
+                existing_times.append(float(t))
+
+    added = 0
+    messages = []
+    for b in boundaries:
+        t = float(b["time"])
+        if any(abs(t - et) < 0.5 for et in existing_times):
+            continue
+        t_type = force_type or b.get("suggested_type") or "whoosh"
+        msg = build_transition(timeline, memory, {
+            "start_time": t,
+            "transition_type": t_type,
+        })
+        if msg.startswith("Успешно"):
+            added += 1
+            existing_times.append(t)
+            messages.append(f"{t}s/{t_type}")
+
+    event_bus.emit("tool_completed", {
+        "tool": "apply_topic_transitions",
+        "message": f"Поставлено переходов на смены темы: {added}"
+    })
+    if added == 0:
+        return "Подходящие точки смены темы уже покрыты переходами или не найдены."
+    return f"Добавлено {added} переходов на смены темы: {', '.join(messages)}"
 
 def modify_clip(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
     import re
@@ -623,6 +788,10 @@ def modify_clip(timeline: TimelineState, memory: ProductionMemory, args: Dict[st
     color = args.get("color")
     style = args.get("style")
     font_size = args.get("font_size")
+    font_pairing = args.get("font_pairing")
+    word_styles = args.get("word_styles")
+    inactive_opacity = args.get("inactive_opacity")
+    active_scale = args.get("active_scale")
     x = args.get("x")
     y = args.get("y")
     
@@ -780,6 +949,64 @@ def modify_clip(timeline: TimelineState, memory: ProductionMemory, args: Dict[st
     event_bus.emit("tool_completed", {"tool": "modify_clip", "message": msg})
     return msg
 
+def remove_background(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
+    """
+    Rotoscoping tool: removes background from the main speaker video using RVM.
+    Emits a rotoscope edit action that video_service processes during export.
+    """
+    bg_color = args.get("bg_color", "transparent")
+    bg_video_query = args.get("bg_video_query")
+
+    edit = {
+        "action": "remove_background",
+        "bg_color": bg_color,
+        "bg_video_query": bg_video_query,
+    }
+    timeline.edits.append(edit)
+
+    if bg_video_query:
+        msg = f"Запущен ротоскопинг: фон спикера будет заменён на стоковое видео по запросу '{bg_video_query}'"
+    elif bg_color == "transparent":
+        msg = "Запущен ротоскопинг: фон спикера будет удалён (прозрачный WebM)"
+    else:
+        msg = f"Запущен ротоскопинг: фон спикера будет заменён цветом {bg_color}"
+
+    event_bus.emit("tool_completed", {"tool": "remove_background", "message": msg})
+    return msg
+
+def set_video_background(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
+    """
+    Places custom text/color background BEHIND the speaker using RVM rotoscoping.
+    Queues a 'set_video_background' edit that video_service processes during export.
+    """
+    bg_color = args.get("bg_color", "#0a0a14")
+    text = args.get("text")
+    text_color = args.get("text_color", "white")
+    text_opacity = args.get("text_opacity", 0.12)
+    font_size = args.get("font_size", 220)
+    gradient_color2 = args.get("gradient_color2")
+
+    edit = {
+        "action": "set_video_background",
+        "bg_color": bg_color,
+        "text": text,
+        "text_color": text_color,
+        "text_opacity": text_opacity,
+        "font_size": font_size,
+        "gradient_color2": gradient_color2,
+    }
+    timeline.edits.append(edit)
+
+    if text:
+        msg = f"Фон за спикером заменён: цвет {bg_color}, текст '{text}' (opacity={text_opacity:.0%})"
+    elif gradient_color2:
+        msg = f"Фон за спикером заменён на градиент {bg_color} → {gradient_color2}"
+    else:
+        msg = f"Фон за спикером заменён на цвет {bg_color}"
+
+    event_bus.emit("tool_completed", {"tool": "set_video_background", "message": msg})
+    return msg
+
 # ═══════════════════════════════════════════════════════════════════════════
 # REGISTRY DEFINITION
 # ═══════════════════════════════════════════════════════════════════════════
@@ -811,9 +1038,17 @@ _LOCAL_RUNNERS = {
         "schema": ZoomArgs,
         "runner": create_zoom
     },
+    "apply_color_grade": {
+        "schema": ApplyColorGradeArgs,
+        "runner": apply_color_grade
+    },
     "build_transition": {
         "schema": TransitionArgs,
         "runner": build_transition
+    },
+    "apply_topic_transitions": {
+        "schema": ApplyTopicTransitionsArgs,
+        "runner": apply_topic_transitions
     },
     "modify_clip": {
         "schema": ModifyClipArgs,
@@ -838,8 +1073,40 @@ _LOCAL_RUNNERS = {
     "generate_audio": {
         "schema": GenerateAudioArgs,
         "runner": generate_audio
+    },
+    "remove_background": {
+        "schema": RemoveBackgroundArgs,
+        "runner": remove_background
+    },
+    "set_video_background": {
+        "schema": SetVideoBackgroundArgs,
+        "runner": set_video_background
     }
 }
+
+def add_motion_preset(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
+
+    preset = args.get("preset", "BlurText")
+    text = args.get("text", "PRESET TEXT")
+    start = float(args.get("start_time", 0.0))
+    duration = float(args.get("duration", 4.0))
+    color = args.get("color", "#FFFFFF")
+    font_size = int(args.get("font_size", 72))
+    speed = args.get("speed")
+
+    edit = {
+        "action": "reactbits_preset",
+        "preset": preset,
+        "text": text,
+        "start": round(start, 2),
+        "end": round(start + duration, 2),
+        "color": color,
+        "font_size": font_size,
+        "speed": speed
+    }
+    timeline.edits.append(edit)
+    event_bus.emit("tool_completed", {"tool": "add_motion_preset", "message": f"Добавлен ReactBits пресет '{preset}': '{text}'"})
+    return f"Успешно наложен кинетический пресет ReactBits '{preset}' на {start}s ({duration}s)"
 
 _TOOL_DESCRIPTIONS = {
     "cut_clip": "Вырезает тишину, паузы или неудачные дубли из видео в указанном временном диапазоне.",
@@ -848,14 +1115,21 @@ _TOOL_DESCRIPTIONS = {
     "build_kinetic_typography": "Настраивает стилистику, шрифт, размер, цвет и анимацию кинетических субтитров.",
     "select_bgm": "Выбирает фоновый саундтрек из каталога и настраивает уровень его громкости.",
     "create_zoom": "Создает наезды или отдаления камеры для расстановки акцентов и удержания внимания.",
+    "apply_color_grade": "Накладывает цветокор (cinema/warm/cold/vibrant…) на весь ролик или отрезок.",
     "build_transition": "Вставляет звуковой и визуальный переход (whoosh, glitch, film) на склейках.",
+    "apply_topic_transitions": "Автоматически находит смены темы в речи спикера по транскрипту и ставит монтажные переходы (whoosh/glitch/film) на эти таймкоды.",
     "modify_clip": "Изменяет параметры (начало, конец, громкость, текст, поисковый запрос) или полностью удаляет (delete=True) конкретный выделенный клип на таймлайне.",
     "change_format": "Обрезает оригинальное видео в нужный формат (9:16 для TikTok, 16:9 для YouTube).",
     "stitch_video_clip": "Склеивает (добавляет) фрагмент из загруженного дополнительного видеоролика в проект.",
     "search_and_add_music": "Ищет в стоковой библиотеке фоновую музыку по текстовому запросу, скачивает её на сервер и накладывает на таймлайн проекта.",
     "search_and_add_sticker": "Ищет в стоковой библиотеке графический стикер или эмодзи, скачивает его на сервер и накладывает поверх видеоряда в указанные координаты.",
-    "generate_audio": "Генерирует фоновую музыку или звуковой эффект (SFX) по текстовому промпту с помощью ИИ-модели Stable Audio 2.5 на Replicate и накладывает на таймлайн."
+    "generate_audio": "Генерирует фоновую музыку или звуковой эффект (SFX) по текстовому промпту с помощью ИИ-модели Stable Audio 2.5 на Replicate и накладывает на таймлайн.",
+    "remove_background": "Ротоскопинг — удаляет фон за спикером через Robust Video Matting (RVM). Позволяет заменить фон на прозрачный, заливочный цвет или стоковое видео.",
+    "set_video_background": "Полная замена фона с текстом ПОЗАДИ спикера.",
+    "add_motion_preset": "Накладывает кинетический пресет анимированного текста из библиотеки ReactBits: 'BlurText' (размытие слов), 'ShinyText' (золотой/неоновый перелив), 'DecryptedText' (хакерский матричный шифр), 'TrueFocus' (неоновая подсветка фокуса на ключевых словах)."
 }
+
+
 
 # Auto-populate TOOLS_REGISTRY for AI Cinematic Director
 for name, runner_meta in _LOCAL_RUNNERS.items():

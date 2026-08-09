@@ -1,6 +1,270 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { getApiUrl } from "@/utils/api";
 
 type KeepSegment = { start: number; end: number; source?: string };
+
+/** Keep HTML graphic clip timing in sync with timeline start/end (incl. GSAP exit cues). */
+function patchGraphicEditTiming(edit: any, start: number, end: number) {
+    const s = Math.round(Math.max(0, start) * 100) / 100;
+    const e = Math.round(Math.max(s + 0.15, end) * 100) / 100;
+    const dur = Math.round((e - s) * 100) / 100;
+    const oldDurRaw =
+        typeof edit.duration === 'number' && edit.duration > 0
+            ? edit.duration
+            : (edit.end != null && edit.start != null ? Number(edit.end) - Number(edit.start) : null);
+    const oldDur = oldDurRaw != null && Number.isFinite(oldDurRaw) ? Math.round(oldDurRaw * 100) / 100 : null;
+
+    let html = edit.html_content || edit.html;
+    if (typeof html === 'string' && html.length > 0) {
+        const sStr = s.toFixed(2);
+        const dStr = dur.toFixed(2);
+
+        // data-start / data-duration (quoted or bare)
+        if (/data-start\s*=/.test(html)) {
+            html = html.replace(/data-start\s*=\s*(['"]?)[\d.]+(\1)/gi, `data-start=$1${sStr}$2`);
+        }
+        if (/data-duration\s*=/.test(html)) {
+            html = html.replace(/data-duration\s*=\s*(['"]?)[\d.]+(\1)/gi, `data-duration=$1${dStr}$2`);
+        } else if (/class\s*=\s*(['"][^'"]*\bclip\b[^'"]*\1)/i.test(html)) {
+            html = html.replace(
+                /(<[^>]*class\s*=\s*['"][^'"]*\bclip\b[^'"]*['"][^>]*)(>)/i,
+                `$1 data-start="${sStr}" data-duration="${dStr}"$2`
+            );
+        }
+
+        // Common GSAP duration constants used by graphics generator
+        html = html.replace(/\b(const|let|var)\s+DURATION\s*=\s*[\d.]+/g, `$1 DURATION = ${dStr}`);
+        html = html.replace(/\bDURATION\s*=\s*[\d.]+/g, `DURATION = ${dStr}`);
+
+        // Shift baked GSAP exit cue positions from old duration → new duration (script-safe only)
+        if (oldDur != null && Math.abs(oldDur - dur) > 0.05) {
+            const cues = [
+                [Math.round(Math.max(0.5, oldDur - 0.5) * 100) / 100, Math.round(Math.max(0.5, dur - 0.5) * 100) / 100],
+                [Math.round(Math.max(0.5, oldDur - 0.6) * 100) / 100, Math.round(Math.max(0.5, dur - 0.6) * 100) / 100],
+            ] as const;
+            const esc = (n: number) => String(n).replace('.', '\\.');
+            for (const [oldExit, newExit] of cues) {
+                if (Math.abs(oldExit - newExit) < 0.01) continue;
+                // tl.to(..., OLD) / tl.fromTo(..., OLD)
+                html = html.replace(
+                    new RegExp(`(,\\s*)${esc(oldExit)}(\\s*\\)\\s*;)`, 'g'),
+                    `$1${newExit}$2`
+                );
+                html = html.replace(
+                    new RegExp(`Math\\.max\\(\\s*0\\.5\\s*,\\s*${esc(oldExit)}\\s*\\)`, 'g'),
+                    `Math.max(0.5, ${newExit})`
+                );
+            }
+        }
+    }
+
+    return {
+        ...edit,
+        start: s,
+        end: e,
+        duration: dur,
+        ...(edit.html_content != null || html != null ? { html_content: html ?? edit.html_content } : {}),
+        ...(edit.html != null && edit.html_content == null ? { html } : {}),
+    };
+}
+
+// Global cache and queue for filmstrip thumbnails to avoid exceeding browser's video decoder limit
+const thumbnailCache = new Map<string, string>();
+const thumbnailQueue: { key: string; videoUrl: string; time: number; callback: (dataUrl: string) => void }[] = [];
+let isProcessingQueue = false;
+let hiddenVideoElement: HTMLVideoElement | null = null;
+let hiddenCanvasElement: HTMLCanvasElement | null = null;
+
+function processNextQueueItem() {
+    if (thumbnailQueue.length === 0) {
+        isProcessingQueue = false;
+        return;
+    }
+    isProcessingQueue = true;
+    const item = thumbnailQueue[0];
+    
+    if (thumbnailCache.has(item.key)) {
+        item.callback(thumbnailCache.get(item.key)!);
+        thumbnailQueue.shift();
+        processNextQueueItem();
+        return;
+    }
+
+    if (!hiddenVideoElement) {
+        hiddenVideoElement = document.createElement('video');
+        hiddenVideoElement.muted = true;
+        hiddenVideoElement.playsInline = true;
+        hiddenVideoElement.preload = 'auto';
+        hiddenVideoElement.crossOrigin = 'anonymous';
+        hiddenVideoElement.style.position = 'fixed';
+        hiddenVideoElement.style.top = '-100px';
+        hiddenVideoElement.style.left = '-100px';
+        hiddenVideoElement.style.width = '10px';
+        hiddenVideoElement.style.height = '10px';
+        hiddenVideoElement.style.opacity = '0';
+        hiddenVideoElement.style.pointerEvents = 'none';
+        document.body.appendChild(hiddenVideoElement);
+    }
+
+    if (!hiddenCanvasElement) {
+        hiddenCanvasElement = document.createElement('canvas');
+        hiddenCanvasElement.width = 160;
+        hiddenCanvasElement.height = 90;
+    }
+
+    const video = hiddenVideoElement;
+    const canvas = hiddenCanvasElement;
+    const ctx = canvas.getContext('2d');
+
+    let isSeeked = false;
+
+    let timeoutId = setTimeout(() => {
+        if (!isSeeked) {
+            // Graceful degradation — show placeholder instead of error
+            isSeeked = true;
+            const transparentGif = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+            thumbnailCache.set(item.key, transparentGif);
+            item.callback(transparentGif);
+            video.removeEventListener('seeked', onSeeked);
+            video.removeEventListener('error', onError);
+            thumbnailQueue.shift();
+            processNextQueueItem();
+        }
+    }, 30000);
+
+    const onSeeked = () => {
+        if (!isSeeked) {
+            isSeeked = true;
+            clearTimeout(timeoutId);
+            try {
+                if (ctx) {
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+                    thumbnailCache.set(item.key, dataUrl);
+                    item.callback(dataUrl);
+                }
+            } catch (err) {
+                console.error('Error drawing frame to canvas:', err);
+                const transparentGif = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+                thumbnailCache.set(item.key, transparentGif);
+                item.callback(transparentGif);
+            }
+            video.removeEventListener('seeked', onSeeked);
+            video.removeEventListener('error', onError);
+            
+            thumbnailQueue.shift();
+            processNextQueueItem();
+        }
+    };
+
+    const onError = (e: any) => {
+        clearTimeout(timeoutId);
+        console.error('Video thumbnail load error:', e);
+        const transparentGif = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+        thumbnailCache.set(item.key, transparentGif);
+        item.callback(transparentGif);
+
+        video.removeEventListener('seeked', onSeeked);
+        video.removeEventListener('error', onError);
+
+        thumbnailQueue.shift();
+        processNextQueueItem();
+    };
+
+    const performSeek = () => {
+        video.addEventListener('seeked', onSeeked);
+        video.addEventListener('error', onError);
+        video.currentTime = item.time;
+    };
+
+    const targetSrc = item.videoUrl;
+    if (video.src !== targetSrc && !video.src.endsWith(targetSrc)) {
+        const onMetadataLoaded = () => {
+            video.removeEventListener('loadedmetadata', onMetadataLoaded);
+            performSeek();
+        };
+        video.addEventListener('loadedmetadata', onMetadataLoaded);
+        video.src = targetSrc;
+        video.load();
+    } else {
+        if (video.readyState >= 1) {
+            performSeek();
+        } else {
+            const onMetadataLoaded = () => {
+                video.removeEventListener('loadedmetadata', onMetadataLoaded);
+                performSeek();
+            };
+            video.addEventListener('loadedmetadata', onMetadataLoaded);
+        }
+    }
+}
+
+const TimelineThumbnail = React.memo(({ videoUrl, time }: { videoUrl: string; time: number }) => {
+    const key = `${videoUrl}#t=${time.toFixed(2)}`;
+    const [src, setSrc] = useState<string>(thumbnailCache.get(key) || '');
+
+    useEffect(() => {
+        if (src) return;
+
+        thumbnailQueue.push({
+            key,
+            videoUrl,
+            time,
+            callback: (dataUrl) => {
+                setSrc(dataUrl);
+            }
+        });
+
+        if (!isProcessingQueue) {
+            processNextQueueItem();
+        }
+
+        return () => {
+            const idx = thumbnailQueue.findIndex(item => item.key === key);
+            if (idx > -1) {
+                thumbnailQueue.splice(idx, 1);
+            }
+        };
+    }, [key, videoUrl, time, src]);
+
+    if (!src) {
+        return (
+            <div className="absolute inset-0 bg-zinc-950 flex items-center justify-center">
+                <div className="w-1.5 h-1.5 rounded-full bg-zinc-700 animate-pulse" />
+            </div>
+        );
+    }
+
+    return (
+        <img 
+            src={src} 
+            alt="" 
+            className="absolute inset-0 w-full h-full object-cover opacity-80 select-none pointer-events-none" 
+        />
+    );
+});
+TimelineThumbnail.displayName = 'TimelineThumbnail';
+
+function getFullUrl(pathOrUrl: string): string {
+    if (!pathOrUrl) return '';
+    if (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://')) return pathOrUrl;
+    const base = getApiUrl();
+    const cleanPath = pathOrUrl.startsWith('/') ? pathOrUrl : `/${pathOrUrl}`;
+    return `${base}${cleanPath}`;
+}
+
+function getV1ClipVideoUrl(clip: KeepSegment, videoSrc: string): string {
+    if (!clip.source || clip.source === 'main') {
+        return videoSrc;
+    }
+    return getFullUrl(clip.source);
+}
+
+function getV2ClipVideoUrl(broll: any, videoSrc: string): string {
+    if (broll.broll_url) return broll.broll_url;
+    if (broll.resolved_path) return getFullUrl(broll.resolved_path);
+    return videoSrc;
+}
 
 export default function VideoTimeline({ 
   duration,
@@ -40,6 +304,46 @@ export default function VideoTimeline({
   selectedSubIndices?: number[];
 }) {
     const [timelineTime, setTimelineTime] = useState(0);
+    
+    // Mapping from absolute video time to snapped project time
+    const absToProj = useCallback((absoluteTime: number) => {
+        if (!multiTrackEdl?.v1 || multiTrackEdl.v1.length === 0) return absoluteTime;
+        let projectTime = 0;
+        const sortedClips = [...multiTrackEdl.v1].sort((a, b) => a.start - b.start);
+        for (const clip of sortedClips) {
+            if (absoluteTime >= clip.end) {
+                projectTime += (clip.end - clip.start);
+            } else if (absoluteTime >= clip.start) {
+                projectTime += (absoluteTime - clip.start);
+                break;
+            } else {
+                break; // inside a gap, snap to the boundary
+            }
+        }
+        return projectTime;
+    }, [multiTrackEdl?.v1]);
+
+    // Mapping from snapped project time to absolute video time
+    const projToAbs = useCallback((projectTime: number) => {
+        if (!multiTrackEdl?.v1 || multiTrackEdl.v1.length === 0) return projectTime;
+        let accum = 0;
+        const sortedClips = [...multiTrackEdl.v1].sort((a, b) => a.start - b.start);
+        for (const clip of sortedClips) {
+            const len = clip.end - clip.start;
+            if (projectTime <= accum + len) {
+                return clip.start + (projectTime - accum);
+            }
+            accum += len;
+        }
+        return sortedClips.length > 0 ? sortedClips[sortedClips.length - 1].end : projectTime;
+    }, [multiTrackEdl?.v1]);
+
+    // Total duration of the project (sum of keep segment lengths)
+    const projectDuration = useMemo(() => {
+        if (!multiTrackEdl?.v1 || multiTrackEdl.v1.length === 0) return duration || 10;
+        return multiTrackEdl.v1.reduce((sum, clip) => sum + (clip.end - clip.start), 0);
+    }, [multiTrackEdl?.v1, duration]);
+
     const [localSelectedClipId, setLocalSelectedClipId] = useState<string | null>(null);
     const selectedClipId = externalSelectedClipId !== undefined ? externalSelectedClipId : localSelectedClipId;
     const setSelectedClipId = (id: string | null) => {
@@ -131,7 +435,7 @@ export default function VideoTimeline({
     };
     
     const [trimState, setTrimState] = useState<{ 
-        track: 'v1' | 'a1' | 't1' | 'v2' | 'm1' | 'sfx' | 'c1',
+        track: 'v1' | 'a1' | 't1' | 'v2' | 'm1' | 'sfx' | 'c1' | 'g1' | 's1',
         clipIndex: number, 
         type: 'left' | 'right', 
         startX: number, 
@@ -152,6 +456,7 @@ export default function VideoTimeline({
     const [previewDrag, setPreviewDrag] = useState<{ start: number, end: number } | null>(null);
 
     const containerRef = useRef<HTMLDivElement>(null);
+    const scrollContainerRef = useRef<HTMLDivElement>(null);
     const [dragOverTrack, setDragOverTrack] = useState<string | null>(null);
 
     const handleDragOver = (e: React.DragEvent, track: string) => {
@@ -177,7 +482,8 @@ export default function VideoTimeline({
             const rect = e.currentTarget.getBoundingClientRect();
             const dropX = e.clientX - rect.left;
             const percent = Math.max(0, Math.min(1, dropX / rect.width));
-            const dropTime = Number((percent * duration).toFixed(2));
+            const projectDropTime = percent * projectDuration;
+            const dropTime = Number(projToAbs(projectDropTime).toFixed(2));
 
             let newEdit: any = null;
             if (track === 'v2' && assetType === 'broll') {
@@ -362,7 +668,7 @@ export default function VideoTimeline({
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [selectedClipId, multiTrackEdl, activeEdits, onEdlChange, onActiveEditsChange, trimState, dragState, setActiveTool]);
 
-    if (!duration || duration <= 0) return <div className="p-6 text-zinc-650 font-mono text-[11px] lowercase">loading timeline...</div>;
+    
 
     // Process Color Clips list supporting dragging preview
     const colorClips: {start: number, end: number, id: string, label: string, rawIndex: number}[] = [];
@@ -387,22 +693,26 @@ export default function VideoTimeline({
         });
     });
 
-    // Process Graphics Clips list supporting dragging preview
+    // Process Graphics Clips list supporting dragging + trim preview
     const graphicClips: {start: number, end: number, id: string, label: string, rawIndex: number}[] = [];
     activeEdits.forEach((e, idx) => {
-        const content = e.html_content || e.html;
         const isGraphic = e.action === "canvas_overlay" || e.action === "hyperframes_html" ||
                           e.action === 'add_hyperframes_graphics' || e.action === 'add_motion_graphic' ||
                           e.action === 'add_dynamic_graphic' || e.action === 'add_text_overlay';
         if (!isGraphic) return;
+        // Skip edits without any visual payload (empty placeholders)
+        if (!(e.html_content || e.html || e.action === 'add_text_overlay' || e.action === 'add_motion_graphic')) return;
         
         let start = e.start != null ? e.start : 0;
-        let end = e.end != null ? e.end : start + 3;
+        let end = e.end != null ? e.end : start + (e.duration != null ? e.duration : 3);
         
         const gIdx = graphicClips.length;
         if (dragState?.track === 'g1' && dragState.clipIndex === gIdx && previewDrag) {
             start = previewDrag.start;
             end = previewDrag.end;
+        } else if (trimState?.track === 'g1' && trimState.clipIndex === gIdx && previewTrim) {
+            if (trimState.type === 'left') start = previewTrim.time;
+            else end = previewTrim.time;
         }
 
         let label = "graphics";
@@ -423,18 +733,21 @@ export default function VideoTimeline({
         });
     });
 
-    // Process Scene Clips list supporting dragging preview
+    // Process Scene Clips list supporting dragging + trim preview
     const sceneClips: {start: number, end: number, id: string, label: string, rawIndex: number}[] = [];
     activeEdits.forEach((e, idx) => {
         if (e.action !== 'semantic_scene' && e.action !== 'scene_override') return;
         
         let start = e.start != null ? e.start : 0;
-        let end = e.end != null ? e.end : start + 3;
+        let end = e.end != null ? e.end : start + (e.duration != null ? e.duration : 3);
         
         const sIdx = sceneClips.length;
         if (dragState?.track === 's1' && dragState.clipIndex === sIdx && previewDrag) {
             start = previewDrag.start;
             end = previewDrag.end;
+        } else if (trimState?.track === 's1' && trimState.clipIndex === sIdx && previewTrim) {
+            if (trimState.type === 'left') start = previewTrim.time;
+            else end = previewTrim.time;
         }
         
         sceneClips.push({
@@ -457,11 +770,12 @@ export default function VideoTimeline({
         if (!duration || !videoRef?.current || !containerRef.current) return;
         const rect = containerRef.current.getBoundingClientRect();
         const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-        const newTime = percent * duration;
+        const projectTime = percent * projectDuration;
+        const absoluteTime = projToAbs(projectTime);
         
-        videoRef.current.currentTime = newTime;
-        if (audioRef?.current) audioRef.current.currentTime = newTime;
-        setTimelineTime(newTime);
+        videoRef.current.currentTime = absoluteTime;
+        if (audioRef?.current) audioRef.current.currentTime = absoluteTime;
+        setTimelineTime(absoluteTime);
     };
 
     useEffect(() => {
@@ -475,6 +789,28 @@ export default function VideoTimeline({
             window.removeEventListener('pointerup', onPointerUp);
         };
     }, [isScrubbing, duration, videoRef]);
+
+    useEffect(() => {
+        const container = scrollContainerRef.current;
+        if (!container) return;
+
+        const handleWheel = (e: WheelEvent) => {
+            if (e.altKey) {
+                e.preventDefault();
+                const zoomStep = 25;
+                if (e.deltaY > 0) {
+                    setZoom(prev => Math.max(100, prev - zoomStep));
+                } else if (e.deltaY < 0) {
+                    setZoom(prev => Math.min(1000, prev + zoomStep));
+                }
+            }
+        };
+
+        container.addEventListener('wheel', handleWheel, { passive: false });
+        return () => {
+            container.removeEventListener('wheel', handleWheel);
+        };
+    }, []);
 
     // Generic clip click / razor splitting
     const handleClipClick = (
@@ -554,74 +890,172 @@ export default function VideoTimeline({
         }
     };
 
+    const trimActiveRef = useRef(false);
+
     // Trim handler
-    const handleTrimStart = (e: React.PointerEvent, track: 'v1'|'a1'|'t1'|'v2'|'m1'|'sfx'|'c1', clipIndex: number, type: 'left' | 'right', initialTime: number) => {
+    const handleTrimStart = (e: React.PointerEvent, track: 'v1'|'a1'|'t1'|'v2'|'m1'|'sfx'|'c1'|'g1'|'s1', clipIndex: number, type: 'left' | 'right', initialTime: number) => {
         if (activeTool !== 'pointer') return;
         e.stopPropagation();
-        e.currentTarget.setPointerCapture(e.pointerId);
+        e.preventDefault();
+        try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+        trimActiveRef.current = true;
         setTrimState({ track, clipIndex, type, startX: e.clientX, initialTime, pointerId: e.pointerId });
         setPreviewTrim({ time: initialTime });
     };
 
-    const handleTrimMove = (e: React.PointerEvent) => {
+    const handleTrimMove = (e: React.PointerEvent | PointerEvent) => {
         if (!trimState || e.pointerId !== trimState.pointerId || !containerRef.current) return;
         const trackWidth = containerRef.current.getBoundingClientRect().width || 1;
-        const deltaSec = ((e.clientX - trimState.startX) / trackWidth) * duration;
-        let newTime = trimState.initialTime + deltaSec;
-        newTime = Math.max(0, Math.min(newTime, duration));
+        const deltaSec = ((e.clientX - trimState.startX) / trackWidth) * projectDuration;
+        const projectTime = absToProj(trimState.initialTime) + deltaSec;
+        let newTime = projToAbs(projectTime);
+
+        // Enforce boundary bounds for snapped tracks (v1 & a1) to prevent overlaps
+        const track = trimState.track;
+        const idx = trimState.clipIndex;
+        let minBound = 0;
+        let maxBound = duration;
+        const MIN_CLIP = 0.15;
+
+        if (track === 'v1' || track === 'a1') {
+            const list = multiTrackEdl[track as 'v1' | 'a1'];
+            const clip = list[idx];
+            if (clip) {
+                if (trimState.type === 'left') {
+                    maxBound = clip.end - 0.1;
+                    if (idx > 0) {
+                        minBound = list[idx - 1].end + 0.01;
+                    }
+                } else {
+                    minBound = clip.start + 0.1;
+                    if (idx < list.length - 1) {
+                        maxBound = list[idx + 1].start - 0.01;
+                    }
+                }
+            }
+        } else if (track === 'g1') {
+            const clip = graphicClips[idx];
+            if (clip) {
+                // Use committed times (not live preview) as the opposite edge
+                const raw = activeEdits[clip.rawIndex];
+                const rawStart = raw?.start != null ? raw.start : clip.start;
+                const rawEnd = raw?.end != null ? raw.end : (rawStart + (raw?.duration ?? 3));
+                if (trimState.type === 'left') {
+                    minBound = 0;
+                    maxBound = rawEnd - MIN_CLIP;
+                } else {
+                    minBound = rawStart + MIN_CLIP;
+                    maxBound = duration;
+                }
+            }
+        } else if (track === 's1') {
+            const clip = sceneClips[idx];
+            if (clip) {
+                const raw = activeEdits[clip.rawIndex];
+                const rawStart = raw?.start != null ? raw.start : clip.start;
+                const rawEnd = raw?.end != null ? raw.end : (rawStart + (raw?.duration ?? 3));
+                if (trimState.type === 'left') {
+                    minBound = 0;
+                    maxBound = rawEnd - MIN_CLIP;
+                } else {
+                    minBound = rawStart + MIN_CLIP;
+                    maxBound = duration;
+                }
+            }
+        }
+
+        newTime = Math.max(minBound, Math.min(newTime, maxBound));
         setPreviewTrim({ time: newTime });
     };
 
-    const handleTrimEnd = (e: React.PointerEvent) => {
-        if (!trimState || !previewTrim) return;
-        e.currentTarget.releasePointerCapture(e.pointerId);
+    const handleTrimEnd = (e?: React.PointerEvent | PointerEvent) => {
+        if (!trimActiveRef.current || !trimState || !previewTrim) return;
+        trimActiveRef.current = false;
+        try {
+            const target = e?.currentTarget as Element | undefined;
+            if (target && 'releasePointerCapture' in target && e) {
+                target.releasePointerCapture(e.pointerId);
+            }
+        } catch { /* already released */ }
 
-        if (trimState.track === 'v2') {
+        const trim = trimState;
+        const preview = previewTrim;
+        // Clear preview immediately so a second pointerup cannot double-apply
+        setTrimState(null);
+        setPreviewTrim(null);
+
+        if (trim.track === 'v2') {
             if (onActiveEditsChange) {
                 const brolls = activeEdits.filter(ae => ae.action === 'add_broll');
                 const others = activeEdits.filter(ae => ae.action !== 'add_broll');
                 const updated = brolls.map((b, i) => {
-                    if (i !== trimState.clipIndex) return b;
-                    return trimState.type === 'left'
-                        ? { ...b, start: previewTrim.time }
-                        : { ...b, end: previewTrim.time };
+                    if (i !== trim.clipIndex) return b;
+                    return trim.type === 'left'
+                        ? { ...b, start: preview.time }
+                        : { ...b, end: preview.time };
                 });
                 onActiveEditsChange([...others, ...updated]);
             }
-        } else if (trimState.track === 'm1' || trimState.track === 'sfx') {
+        } else if (trim.track === 'm1' || trim.track === 'sfx') {
             if (onActiveEditsChange) {
                 const updated = activeEdits.map((asset, i) => {
-                    if (i !== trimState.clipIndex) return asset;
-                    return trimState.type === 'left'
-                        ? { ...asset, start: previewTrim.time }
-                        : { ...asset, end: previewTrim.time };
+                    if (i !== trim.clipIndex) return asset;
+                    return trim.type === 'left'
+                        ? { ...asset, start: preview.time }
+                        : { ...asset, end: preview.time };
                 });
                 onActiveEditsChange(updated);
             }
-        } else if (trimState.track === 'c1') {
+        } else if (trim.track === 'c1') {
             if (onActiveEditsChange) {
-                const targetClip = colorClips[trimState.clipIndex];
+                const targetClip = colorClips[trim.clipIndex];
                 if (targetClip) {
                     const updated = activeEdits.map((ae, i) => {
                         if (i !== targetClip.rawIndex) return ae;
-                        return trimState.type === 'left'
-                            ? { ...ae, start: previewTrim.time }
-                            : { ...ae, end: previewTrim.time };
+                        return trim.type === 'left'
+                            ? { ...ae, start: preview.time }
+                            : { ...ae, end: preview.time };
                     });
                     onActiveEditsChange(updated);
                 }
             }
-        } else if (trimState.track === 't1') {
+        } else if (trim.track === 'g1') {
             if (onActiveEditsChange) {
-                const idx = trimState.clipIndex;
+                const targetClip = graphicClips[trim.clipIndex];
+                if (targetClip) {
+                    const updated = activeEdits.map((ae, i) => {
+                        if (i !== targetClip.rawIndex) return ae;
+                        const newStart = trim.type === 'left' ? preview.time : (ae.start ?? 0);
+                        const newEnd = trim.type === 'right' ? preview.time : (ae.end ?? ((ae.start ?? 0) + (ae.duration ?? 3)));
+                        return patchGraphicEditTiming(ae, newStart, newEnd);
+                    });
+                    onActiveEditsChange(updated);
+                }
+            }
+        } else if (trim.track === 's1') {
+            if (onActiveEditsChange) {
+                const targetClip = sceneClips[trim.clipIndex];
+                if (targetClip) {
+                    const updated = activeEdits.map((ae, i) => {
+                        if (i !== targetClip.rawIndex) return ae;
+                        const newStart = trim.type === 'left' ? preview.time : (ae.start ?? 0);
+                        const newEnd = trim.type === 'right' ? preview.time : (ae.end ?? ((ae.start ?? 0) + (ae.duration ?? 3)));
+                        return patchGraphicEditTiming(ae, newStart, newEnd);
+                    });
+                    onActiveEditsChange(updated);
+                }
+            }
+        } else if (trim.track === 't1') {
+            if (onActiveEditsChange) {
+                const idx = trim.clipIndex;
                 const chunk = subtitleChunks[idx];
                 if (chunk) {
                     const others = activeEdits.filter(ae => !(ae.action === 'subtitle_override' && ae.chunk_index === idx));
                     const overrideForChunk = activeEdits.find(ae => ae.action === 'subtitle_override' && ae.chunk_index === idx);
                     const spokenText = chunk.words.map((w: any) => w.word).join(' ');
                     const text = overrideForChunk?.text || spokenText || '';
-                    const newStart = trimState.type === 'left' ? previewTrim.time : (overrideForChunk?.start != null ? overrideForChunk.start : chunk.start);
-                    const newEnd = trimState.type === 'right' ? previewTrim.time : (overrideForChunk?.end != null ? overrideForChunk.end : chunk.end);
+                    const newStart = trim.type === 'left' ? preview.time : (overrideForChunk?.start != null ? overrideForChunk.start : chunk.start);
+                    const newEnd = trim.type === 'right' ? preview.time : (overrideForChunk?.end != null ? overrideForChunk.end : chunk.end);
                     onActiveEditsChange([...others, {
                         ...overrideForChunk,
                         action: 'subtitle_override',
@@ -633,18 +1067,35 @@ export default function VideoTimeline({
                 }
             }
         } else {
-            const edlKey = trimState.track as 'v1' | 'a1';
+            const edlKey = trim.track as 'v1' | 'a1';
             const newEdl = { ...multiTrackEdl, [edlKey]: multiTrackEdl[edlKey].map((clip, i) => {
-                if (i !== trimState.clipIndex) return clip;
-                return trimState.type === 'left'
-                    ? { ...clip, start: previewTrim.time }
-                    : { ...clip, end: previewTrim.time };
+                if (i !== trim.clipIndex) return clip;
+                return trim.type === 'left'
+                    ? { ...clip, start: preview.time }
+                    : { ...clip, end: preview.time };
             })};
             onEdlChange(newEdl);
         }
-        setTrimState(null);
-        setPreviewTrim(null);
     };
+
+    // Keep trim working even if pointer leaves the tiny edge handle
+    const trimMoveRef = useRef(handleTrimMove);
+    const trimEndRef = useRef(handleTrimEnd);
+    trimMoveRef.current = handleTrimMove;
+    trimEndRef.current = handleTrimEnd;
+    useEffect(() => {
+        if (!trimState) return;
+        const onMove = (e: PointerEvent) => trimMoveRef.current(e);
+        const onUp = (e: PointerEvent) => trimEndRef.current(e);
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+        window.addEventListener('pointercancel', onUp);
+        return () => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+            window.removeEventListener('pointercancel', onUp);
+        };
+    }, [trimState]);
 
     // Horizontal Clip Dragging Handlers
     const handleDragStart = (e: React.PointerEvent, track: 'v1'|'a1'|'t1'|'v2'|'m1'|'sfx'|'g1'|'s1'|'c1', clipIndex: number, initialStart: number, initialEnd: number) => {
@@ -661,10 +1112,11 @@ export default function VideoTimeline({
     const handleDragMove = (e: React.PointerEvent) => {
         if (!dragState || e.pointerId !== dragState.pointerId || !containerRef.current) return;
         const trackWidth = containerRef.current.getBoundingClientRect().width || 1;
-        const deltaSec = ((e.clientX - dragState.startX) / trackWidth) * duration;
+        const deltaSec = ((e.clientX - dragState.startX) / trackWidth) * projectDuration;
         
         const clipDur = dragState.initialEnd - dragState.initialStart;
-        let newStart = dragState.initialStart + deltaSec;
+        const newProjStart = absToProj(dragState.initialStart) + deltaSec;
+        let newStart = projToAbs(newProjStart);
         newStart = Math.max(0, Math.min(newStart, duration - clipDur));
         setPreviewDrag({ start: newStart, end: newStart + clipDur });
     };
@@ -697,7 +1149,7 @@ export default function VideoTimeline({
                 if (targetClip) {
                     const updated = activeEdits.map((ae, i) => {
                         if (i === targetClip.rawIndex) {
-                            return { ...ae, start: previewDrag.start, end: previewDrag.end };
+                            return patchGraphicEditTiming(ae, previewDrag.start, previewDrag.end);
                         }
                         return ae;
                     });
@@ -723,7 +1175,7 @@ export default function VideoTimeline({
                 if (targetClip) {
                     const updated = activeEdits.map((ae, i) => {
                         if (i === targetClip.rawIndex) {
-                            return { ...ae, start: previewDrag.start, end: previewDrag.end };
+                            return patchGraphicEditTiming(ae, previewDrag.start, previewDrag.end);
                         }
                         return ae;
                     });
@@ -850,30 +1302,22 @@ export default function VideoTimeline({
         return `${m}:${s}`;
     };
 
-    const isS1Visible = activeEdits.some(e => e.action === 'scene_override' || e.action === 'semantic_scene') || draggingAssetType === 'graphics';
-    const isC1Visible = activeEdits.some(e => e.action === 'color_correction') || draggingAssetType === 'color';
-    const isG1Visible = activeEdits.some(e => e.action === 'canvas_overlay' || e.action === 'hyperframes_html' || e.action === 'add_hyperframes_graphics' || e.action === 'add_motion_graphic' || e.action === 'add_dynamic_graphic' || e.action === 'add_text_overlay') || draggingAssetType === 'graphics';
-    const isT1Visible = activeEdits.some(e => e.action === 'add_subtitles' || e.action === 'subtitle_override' || e.action === 'add_text_overlay');
-    const isV2Visible = activeEdits.some(e => e.action === 'add_broll') || draggingAssetType === 'broll' || draggingAssetType === 'stitch';
-    const isSFXVisible = activeEdits.some(e => 
-        e.action === 'add_asset' && 
-        (e.asset_query?.toLowerCase().includes('sfx') || 
-         e.asset_query?.toLowerCase().includes('click') || 
-         e.asset_query?.toLowerCase().includes('whoosh') ||
-         e.asset_query?.toLowerCase().includes('impact'))
-    ) || draggingAssetType === 'sfx';
-    const isM1Visible = activeEdits.some(e => 
-        e.action === 'add_asset' && 
-        !(e.asset_query?.toLowerCase().includes('sfx') || 
-          e.asset_query?.toLowerCase().includes('click') || 
-          e.asset_query?.toLowerCase().includes('whoosh') ||
-          e.asset_query?.toLowerCase().includes('impact'))
-    ) || draggingAssetType === 'music';
+    const isS1Visible = true;
+    const isC1Visible = true;
+    const isG1Visible = true;
+    const isT1Visible = true;
+    const isV2Visible = true;
+    const isSFXVisible = true;
+    const isM1Visible = true;
 
-    const rulerTicks = Array.from({length: 11}, (_, i) => (duration / 10) * i);
+    const rulerTicks = Array.from({length: 11}, (_, i) => (projectDuration / 10) * i);
+
+    if (!duration || duration <= 0) {
+        return <div className="p-6 text-zinc-650 font-mono text-[11px] lowercase">loading timeline...</div>;
+    }
 
     return (
-        <div className={`flex flex-col h-full bg-card overflow-hidden rounded-2xl select-none font-mono transition-all duration-300 shadow-sm border border-black/5 dark:border-white/10 bg-white/40 dark:bg-neutral-900/40 backdrop-blur-xl ${
+        <div className={`flex flex-col h-full bg-card overflow-hidden rounded-md select-none font-mono transition-all duration-300 shadow-sm border border-black/5 dark:border-white/10 bg-white/40 dark:bg-neutral-900/40 backdrop-blur-xl ${
             isFocusSelectionActive 
                 ? 'border-blue-500/40 shadow-[0_0_20px_rgba(59,130,246,0.15)] ring-1 ring-blue-500/25' 
                 : ''
@@ -927,30 +1371,42 @@ export default function VideoTimeline({
                 {activeEdits.some(e => e.action === 'add_subtitles') && (
                     <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
                         <div className="w-[1px] h-4 bg-zinc-850 mx-1" />
-                        <span className="text-[11px] text-zinc-500 lowercase">animation:</span>
+                        <span className="text-[11px] text-zinc-500 lowercase">анимация:</span>
                         {isMobile ? (
                             <select
                                 value={animStyle}
                                 onChange={(e) => setAndSaveAnimStyle(e.target.value)}
                                 className="bg-zinc-950 border border-zinc-900 text-zinc-300 text-[11px] px-1 py-0.5 rounded focus:outline-none cursor-pointer"
                             >
-                                <option value="fade">fade</option>
-                                <option value="pop">pop</option>
-                                <option value="slide_up">slide</option>
-                                <option value="bounce">bounce</option>
-                                <option value="glow">glow</option>
-                                <option value="typewriter">type</option>
-                                <option value="karaoke">kara</option>
+                                <option value="fade">плавно</option>
+                                <option value="pop">хлопок</option>
+                                <option value="blur">⚡ размытие (BlurText)</option>
+                                <option value="shiny">🌟 блеск (ShinyText)</option>
+                                <option value="decrypted">💻 шифр (DecryptedText)</option>
+                                <option value="true_focus">🎯 фокус (TrueFocus)</option>
+                                <option value="glitch">👾 глитч (GlitchText)</option>
+                                <option value="gradient">🌈 градиент (GradientText)</option>
+                                <option value="echo">🔮 эхо (EchoText)</option>
+                                <option value="slide_up">вылет</option>
+                                <option value="bounce">прыжок</option>
+                                <option value="glow">свечение</option>
+                                <option value="typewriter">печать</option>
+                                <option value="karaoke">караоке</option>
                             </select>
                         ) : (
                             ([
-                                { key: 'fade',       label: 'fade' },
-                                { key: 'pop',        label: 'pop' },
-                                { key: 'slide_up',   label: 'slide' },
-                                { key: 'bounce',     label: 'bounce' },
-                                { key: 'glow',       label: 'glow' },
-                                { key: 'typewriter', label: 'type' },
-                                { key: 'karaoke',    label: 'kara' },
+                                { key: 'fade',       label: 'плавно' },
+                                { key: 'pop',        label: 'хлопок' },
+                                { key: 'blur',       label: '⚡ blur' },
+                                { key: 'shiny',      label: '🌟 shiny' },
+                                { key: 'decrypted',  label: '💻 cipher' },
+                                { key: 'true_focus', label: '🎯 focus' },
+                                { key: 'glitch',     label: '👾 glitch' },
+                                { key: 'gradient',   label: '🌈 gradient' },
+                                { key: 'echo',       label: '🔮 echo' },
+                                { key: 'slide_up',   label: 'вылет' },
+                                { key: 'bounce',     label: 'прыжок' },
+                                { key: 'karaoke',    label: 'караоке' },
                             ] as const).map(({ key, label }) => (
                                 <button
                                     key={key}
@@ -965,6 +1421,7 @@ export default function VideoTimeline({
                                 </button>
                             ))
                         )}
+
                     </div>
                 )}
             </div>
@@ -1119,7 +1576,9 @@ export default function VideoTimeline({
                         const idx = parseInt(parts[parts.length - 1], 10);
                         const targetClip = sceneClips[idx];
                         if (targetClip && onActiveEditsChange) {
-                            const updated = activeEdits.map((ae, i) => i === targetClip.rawIndex ? { ...ae, start: newStart, end: newEnd } : ae);
+                            const updated = activeEdits.map((ae, i) =>
+                                i === targetClip.rawIndex ? patchGraphicEditTiming(ae, newStart, newEnd) : ae
+                            );
                             onActiveEditsChange(updated);
                         }
                     }
@@ -1136,7 +1595,9 @@ export default function VideoTimeline({
                         const idx = parseInt(parts[parts.length - 1], 10);
                         const targetClip = graphicClips[idx];
                         if (targetClip && onActiveEditsChange) {
-                            const updated = activeEdits.map((ae, i) => i === targetClip.rawIndex ? { ...ae, start: newStart, end: newEnd } : ae);
+                            const updated = activeEdits.map((ae, i) =>
+                                i === targetClip.rawIndex ? patchGraphicEditTiming(ae, newStart, newEnd) : ae
+                            );
                             onActiveEditsChange(updated);
                         }
                     }
@@ -1272,7 +1733,10 @@ export default function VideoTimeline({
                     }
                     else if (selectedClipId.startsWith('T1-Sub-')) {
                         const idx = parseInt(selectedClipId.replace('T1-Sub-', ''), 10);
-                        const newEdl = { ...multiTrackEdl };
+                        const newEdl = {
+                            v1: [...multiTrackEdl.v1],
+                            a1: [...multiTrackEdl.a1]
+                        };
                         const clip = newEdl.v1[idx];
                         newEdl.v1.splice(idx, 1, 
                             {start: clip.start, end: splitTime - 0.01},
@@ -1311,7 +1775,10 @@ export default function VideoTimeline({
                     }
                     else if (selectedClipId.startsWith('V1-Video-')) {
                         const idx = parseInt(selectedClipId.replace('V1-Video-', ''), 10);
-                        const newEdl = { ...multiTrackEdl };
+                        const newEdl = {
+                            v1: [...multiTrackEdl.v1],
+                            a1: [...multiTrackEdl.a1]
+                        };
                         const clip = newEdl.v1[idx];
                         newEdl.v1.splice(idx, 1, 
                             {start: clip.start, end: splitTime - 0.01},
@@ -1322,7 +1789,10 @@ export default function VideoTimeline({
                     }
                     else if (selectedClipId.startsWith('A1-Audio-')) {
                         const idx = parseInt(selectedClipId.replace('A1-Audio-', ''), 10);
-                        const newEdl = { ...multiTrackEdl };
+                        const newEdl = {
+                            v1: [...multiTrackEdl.v1],
+                            a1: [...multiTrackEdl.a1]
+                        };
                         const clip = newEdl.a1[idx];
                         newEdl.a1.splice(idx, 1, 
                             {start: clip.start, end: splitTime - 0.01},
@@ -1424,22 +1894,22 @@ export default function VideoTimeline({
                                 <button
                                     onClick={handleManualSplit}
                                     className="h-5 px-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 hover:border-amber-500/40 text-amber-400 rounded text-[10px] font-semibold transition-all cursor-pointer flex items-center justify-center gap-0.5 active:scale-95 shadow-sm"
-                                    title="Split clip"
+                                    title="Разрезать клип"
                                 >
-                                    <span>split</span>
+                                    <span>Разрезать</span>
                                 </button>
                             )}
                             <button
                                 onClick={handleManualDelete}
                                 className="h-5 px-1.5 bg-red-950/20 hover:bg-red-900/40 border border-red-900/30 hover:border-red-500/50 text-red-400 rounded text-[10px] font-semibold transition-all cursor-pointer flex items-center justify-center gap-0.5 active:scale-95 shadow-sm"
-                                title="Delete clip"
+                                title="Удалить клип"
                             >
-                                <span>delete</span>
+                                <span>Удалить</span>
                             </button>
                             <button
                                 onClick={() => setSelectedClipId(null)}
                                 className="h-5 w-5 bg-zinc-900 hover:bg-zinc-800 border border-white/5 text-zinc-400 hover:text-white rounded flex items-center justify-center text-[10px] font-bold cursor-pointer transition-all active:scale-90"
-                                title="Close"
+                                title="Закрыть"
                             >
                                 ✕
                             </button>
@@ -1449,223 +1919,139 @@ export default function VideoTimeline({
             })()}
 
             {/* Tracks Container */}
-            <div className={`flex flex-1 relative overflow-y-auto overflow-x-auto bg-background scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent transition-all duration-300 ${
-                isFocusSelectionActive ? 'cursor-crosshair' : ''
-            }`}>
-                <div className="w-16 md:w-24 bg-[#0a0a0c]/90 border-r border-white/5 flex flex-col z-20 flex-shrink-0 sticky left-0 font-mono text-[17px] text-zinc-500 backdrop-blur-md">
-                    <div className="h-6 shrink-0 bg-[#08080a] sticky top-0 z-30 border-b border-white/5 flex items-center justify-center">
-                        <button
-                            onClick={onTogglePlay}
-                            className="flex items-center justify-center w-5 h-5 rounded hover:bg-white/10 transition-colors text-white cursor-pointer"
-                            title="Play / Pause"
-                        >
-                            {isPlaying
-                                ? <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-                                : <svg className="w-2.5 h-2.5 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                            }
+            <div 
+                ref={scrollContainerRef}
+                className={`flex flex-1 relative overflow-y-auto overflow-x-auto bg-background scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent transition-all duration-300 ${
+                    isFocusSelectionActive ? 'cursor-crosshair' : ''
+                }`}
+            >
+                <div className="w-24 md:w-36 bg-[#161618] border-r border-white/5 flex flex-col z-[45] flex-shrink-0 sticky left-0 font-sans text-zinc-500 self-start">
+                    <div className="h-10 shrink-0 bg-[#161618] sticky top-0 z-[50] border-b border-white/5 flex items-center gap-1.5 px-3">
+                        <button className="w-7 h-7 rounded-md bg-[#222224]/80 hover:bg-[#2c2c2e] border border-white/5 flex items-center justify-center text-zinc-400 hover:text-white transition-colors cursor-pointer shadow-sm">
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.2">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                            </svg>
+                        </button>
+                        <button onClick={() => setZoom(prev => Math.max(100, prev - 50))} className="w-7 h-7 rounded-md bg-[#222224]/80 hover:bg-[#2c2c2e] border border-white/5 flex items-center justify-center text-zinc-400 hover:text-white transition-colors cursor-pointer shadow-sm" title="Zoom Out">
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.2">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM13 10H7" />
+                            </svg>
+                        </button>
+                        <button onClick={() => setZoom(prev => Math.min(1000, prev + 50))} className="w-7 h-7 rounded-md bg-[#222224]/80 hover:bg-[#2c2c2e] border border-white/5 flex items-center justify-center text-zinc-400 hover:text-white transition-colors cursor-pointer shadow-sm" title="Zoom In">
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.2">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v6m3-3H7" />
+                            </svg>
                         </button>
                     </div>
                     
                     {/* S1 Track Header */}
                     {isS1Visible && (
-                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 md:px-1.5 uppercase hover:bg-white/5 select-none group/track transition-all">
-                            <div className="flex items-center gap-1 min-w-0">
-                                <span className="px-1 py-0.5 bg-purple-500/15 text-purple-400 border border-purple-500/20 rounded font-bold text-[9px] md:text-[7px] font-mono shrink-0">S1</span>
-                                <span className="hidden md:inline text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">scenes</span>
-                            </div>
-                            <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
-                                <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-250 cursor-pointer transition-colors" title="Toggle visibility">
-                                    <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                                </button>
-                                <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-250 cursor-pointer transition-colors" title="Mute track">
-                                    <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" /></svg>
-                                </button>
-                                <button 
-                                    onClick={(ev) => { ev.stopPropagation(); handleAddClip('s1'); }}
-                                    className="w-3.5 h-3.5 bg-zinc-900 hover:bg-zinc-800 active:scale-95 border border-white/10 text-neutral-355 hover:text-white flex items-center justify-center cursor-pointer rounded transition-all font-bold text-[8px]"
-                                    title="Add Scene Override"
-                                >
-                                    +
-                                </button>
+                        <div className="h-12 border-b border-white/5 bg-transparent flex flex-row items-center px-3 hover:bg-white/5 select-none group/track transition-all">
+                            <div className="flex items-center gap-2 min-w-0">
+                                <svg className="w-3 h-3 text-[#A855F7]" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M12 2l3.5 6.5L22 12l-6.5 3.5L12 22l-3.5-6.5L2 12l6.5-3.5z" />
+                                </svg>
+                                <span className="hidden md:inline text-[11px] text-[#A0A0A5] group-hover:text-white transition-colors font-medium tracking-wide truncate capitalize">Сцены</span>
                             </div>
                         </div>
                     )}
 
                     {/* G1 Track Header */}
                     {isG1Visible && (
-                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 md:px-1.5 uppercase hover:bg-white/5 select-none group/track transition-all">
-                            <div className="flex items-center gap-1 min-w-0">
-                                <span className="px-1 py-0.5 bg-fuchsia-500/15 text-fuchsia-400 border border-fuchsia-500/20 rounded font-bold text-[9px] md:text-[7px] font-mono shrink-0">G1</span>
-                                <span className="hidden md:inline text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">graphics</span>
-                            </div>
-                            <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
-                                <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-250 cursor-pointer transition-colors" title="Toggle visibility">
-                                    <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                                </button>
-                                <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-250 cursor-pointer transition-colors" title="Mute track">
-                                    <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" /></svg>
-                                </button>
-                                <button 
-                                    onClick={(ev) => { ev.stopPropagation(); handleAddClip('g1'); }}
-                                    className="w-3.5 h-3.5 bg-zinc-900 hover:bg-zinc-800 active:scale-95 border border-white/10 text-neutral-355 hover:text-white flex items-center justify-center cursor-pointer rounded transition-all font-bold text-[8px]"
-                                    title="Add Motion Graphic"
-                                >
-                                    +
-                                </button>
+                        <div className="h-12 border-b border-white/5 bg-transparent flex flex-row items-center px-3 hover:bg-white/5 select-none group/track transition-all">
+                            <div className="flex items-center gap-2 min-w-0">
+                                <svg className="w-3 h-3 text-[#A855F7]" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M12 2l3.5 6.5L22 12l-6.5 3.5L12 22l-3.5-6.5L2 12l6.5-3.5z" />
+                                </svg>
+                                <span className="hidden md:inline text-[11px] text-[#A0A0A5] group-hover:text-white transition-colors font-medium tracking-wide truncate capitalize">Графика</span>
                             </div>
                         </div>
                     )}
 
                     {/* T1 Track Header */}
                     {isT1Visible && (
-                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 md:px-1.5 uppercase hover:bg-white/5 select-none group/track transition-all">
-                            <div className="flex items-center gap-1 min-w-0">
-                                <span className="px-1 py-0.5 bg-blue-500/15 text-blue-400 border border-blue-500/20 rounded font-bold text-[9px] md:text-[7px] font-mono shrink-0">T1</span>
-                                <span className="hidden md:inline text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">text</span>
-                            </div>
-                            <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
-                                <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-255 cursor-pointer transition-colors" title="Toggle visibility">
-                                    <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                                </button>
-                                <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-255 cursor-pointer transition-colors" title="Mute track">
-                                    <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" /></svg>
-                                </button>
-                                <button 
-                                    onClick={(ev) => { ev.stopPropagation(); handleAddClip('t1'); }}
-                                    className="w-3.5 h-3.5 bg-zinc-900 hover:bg-zinc-800 active:scale-95 border border-white/10 text-neutral-355 hover:text-white flex items-center justify-center cursor-pointer rounded transition-all font-bold text-[8px]"
-                                    title="Add Custom Subtitle/Text"
-                                >
-                                    +
-                                </button>
+                        <div className="h-12 border-b border-white/5 bg-transparent flex flex-row items-center px-3 hover:bg-white/5 select-none group/track transition-all">
+                            <div className="flex items-center gap-2 min-w-0">
+                                <svg className="w-3.5 h-3.5 text-[#3B82F6]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect x="3" y="4" width="18" height="16" rx="2" />
+                                    <path d="M7 8h10M7 12h8" />
+                                </svg>
+                                <span className="hidden md:inline text-[11px] text-[#A0A0A5] group-hover:text-white transition-colors font-medium tracking-wide truncate capitalize">Субтитры</span>
                             </div>
                         </div>
                     )}
 
                     {/* V2 Track Header */}
                     {isV2Visible && (
-                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 md:px-1.5 uppercase hover:bg-white/5 select-none group/track transition-all">
-                            <div className="flex items-center gap-1 min-w-0">
-                                <span className="px-1 py-0.5 bg-cyan-500/15 text-cyan-400 border border-cyan-500/20 rounded font-bold text-[9px] md:text-[7px] font-mono shrink-0">V2</span>
-                                <span className="hidden md:inline text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">b-roll</span>
-                            </div>
-                            <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
-                                <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-250 cursor-pointer transition-colors" title="Toggle visibility">
-                                    <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                                </button>
-                                <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-250 cursor-pointer transition-colors" title="Mute track">
-                                    <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" /></svg>
-                                </button>
-                                <button 
-                                    onClick={(ev) => { ev.stopPropagation(); handleAddClip('v2'); }}
-                                    className="w-3.5 h-3.5 bg-zinc-900 hover:bg-zinc-800 active:scale-95 border border-white/10 text-neutral-355 hover:text-white flex items-center justify-center cursor-pointer rounded transition-all font-bold text-[8px]"
-                                    title="Add Stock B-Roll Video"
-                                >
-                                    +
-                                </button>
+                        <div className="h-20 border-b border-white/5 bg-transparent flex flex-row items-center px-3 hover:bg-white/5 select-none group/track transition-all">
+                            <div className="flex items-center gap-2 min-w-0">
+                                <svg className="w-3.5 h-3.5 text-[#E5E5EA]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M23 7l-7 5 7 5V7z" />
+                                    <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                                </svg>
+                                <span className="hidden md:inline text-[11px] text-[#A0A0A5] group-hover:text-white transition-colors font-medium tracking-wide truncate capitalize">B-roll</span>
                             </div>
                         </div>
                     )}
 
                     {/* C1 Track Header */}
                     {isC1Visible && (
-                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 md:px-1.5 uppercase hover:bg-white/5 select-none group/track transition-all">
-                            <div className="flex items-center gap-1 min-w-0">
-                                <span className="px-1 py-0.5 bg-amber-500/15 text-amber-500 border border-amber-500/20 rounded font-bold text-[9px] md:text-[7px] font-mono shrink-0">C1</span>
-                                <span className="hidden md:inline text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">цветокор</span>
-                            </div>
-                            <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
-                                <button 
-                                    onClick={(ev) => { ev.stopPropagation(); handleAddClip('c1'); }}
-                                    className="w-3.5 h-3.5 bg-zinc-900 hover:bg-zinc-800 active:scale-95 border border-white/10 text-neutral-355 hover:text-white flex items-center justify-center cursor-pointer rounded transition-all font-bold text-[8px]"
-                                    title="Добавить цветокоррекцию"
-                                >
-                                    +
-                                </button>
+                        <div className="h-12 border-b border-white/5 bg-transparent flex flex-row items-center px-3 hover:bg-white/5 select-none group/track transition-all">
+                            <div className="flex items-center gap-2 min-w-0">
+                                <svg className="w-3 h-3 text-[#A855F7]" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M12 2l3.5 6.5L22 12l-6.5 3.5L12 22l-3.5-6.5L2 12l6.5-3.5z" />
+                                </svg>
+                                <span className="hidden md:inline text-[11px] text-[#A0A0A5] group-hover:text-white transition-colors font-medium tracking-wide truncate capitalize">Цветокор</span>
                             </div>
                         </div>
                     )}
 
                     {/* V1 Track Header */}
-                    <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 md:px-1.5 uppercase hover:bg-white/5 select-none group/track transition-all">
-                        <div className="flex items-center gap-1 min-w-0">
-                            <span className="px-1 py-0.5 bg-neutral-500/15 text-neutral-400 border border-neutral-500/20 rounded font-bold text-[9px] md:text-[7px] font-mono shrink-0">V1</span>
-                            <span className="hidden md:inline text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">video</span>
-                        </div>
-                        <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
-                            <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-250 cursor-pointer transition-colors" title="Toggle visibility">
-                                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                            </button>
-                            <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-250 cursor-pointer transition-colors" title="Mute track">
-                                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" /></svg>
-                            </button>
+                    <div className="h-20 border-b border-white/5 bg-transparent flex flex-row items-center px-3 hover:bg-white/5 select-none group/track transition-all">
+                        <div className="flex items-center gap-2 min-w-0">
+                            <svg className="w-3.5 h-3.5 text-[#E5E5EA]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M23 7l-7 5 7 5V7z" />
+                                <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                            </svg>
+                            <span className="hidden md:inline text-[11px] text-[#A0A0A5] group-hover:text-white transition-colors font-medium tracking-wide truncate capitalize">Видео</span>
                         </div>
                     </div>
 
                     {/* Premiere Pro style separator */}
-                    <div className="h-1 bg-neutral-900/50 border-y border-white/5 shrink-0" />
+                    <div className="h-1 bg-[#161618] border-y border-white/5 shrink-0" />
 
                     {/* A1 Track Header */}
-                    <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 md:px-1.5 uppercase hover:bg-white/5 select-none group/track transition-all">
-                        <div className="flex items-center gap-1 min-w-0">
-                            <span className="px-1 py-0.5 bg-teal-500/15 text-teal-400 border border-teal-500/20 rounded font-bold text-[9px] md:text-[7px] font-mono shrink-0">A1</span>
-                            <span className="hidden md:inline text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">audio</span>
-                        </div>
-                        <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
-                            <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-250 cursor-pointer transition-colors" title="Toggle visibility">
-                                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                            </button>
-                            <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-250 cursor-pointer transition-colors" title="Mute track">
-                                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" /></svg>
-                            </button>
+                    <div className="h-14 border-b border-white/5 bg-transparent flex flex-row items-center px-3 hover:bg-white/5 select-none group/track transition-all">
+                        <div className="flex items-center gap-2 min-w-0">
+                            <svg className="w-3.5 h-3.5 text-[#10B981]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M12 4v16M17 8v8M7 10v4M22 11v2M2 11v2" />
+                            </svg>
+                            <span className="hidden md:inline text-[11px] text-[#A0A0A5] group-hover:text-white transition-colors font-medium tracking-wide truncate capitalize">Аудио</span>
                         </div>
                     </div>
 
                     {/* SFX Track Header */}
                     {isSFXVisible && (
-                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 md:px-1.5 uppercase hover:bg-white/5 select-none group/track transition-all">
-                            <div className="flex items-center gap-1 min-w-0">
-                                <span className="px-1 py-0.5 bg-amber-500/15 text-amber-400 border border-amber-500/20 rounded font-bold text-[9px] md:text-[7px] font-mono shrink-0">SFX</span>
-                                <span className="hidden md:inline text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">sfx</span>
-                            </div>
-                            <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
-                                <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-255 cursor-pointer transition-colors" title="Toggle visibility">
-                                    <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                                </button>
-                                <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-255 cursor-pointer transition-colors" title="Mute track">
-                                    <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" /></svg>
-                                </button>
-                                <button 
-                                    onClick={(ev) => { ev.stopPropagation(); handleAddClip('sfx'); }}
-                                    className="w-3.5 h-3.5 bg-zinc-900 hover:bg-zinc-800 active:scale-95 border border-white/10 text-neutral-355 hover:text-white flex items-center justify-center cursor-pointer rounded transition-all font-bold text-[8px]"
-                                    title="Add Sound Effect"
-                                >
-                                    +
-                                </button>
+                        <div className="h-14 border-b border-white/5 bg-transparent flex flex-row items-center px-3 hover:bg-white/5 select-none group/track transition-all">
+                            <div className="flex items-center gap-2 min-w-0">
+                                <svg className="w-3.5 h-3.5 text-[#10B981]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M12 4v16M17 8v8M7 10v4M22 11v2M2 11v2" />
+                                </svg>
+                                <span className="hidden md:inline text-[11px] text-[#A0A0A5] group-hover:text-white transition-colors font-medium tracking-wide truncate capitalize">SFX</span>
                             </div>
                         </div>
                     )}
 
                     {/* M1 Track Header */}
                     {isM1Visible && (
-                        <div className="h-10 border-b border-white/5 bg-transparent flex flex-row items-center justify-between px-1 md:px-1.5 uppercase hover:bg-white/5 select-none group/track transition-all">
-                            <div className="flex items-center gap-1 min-w-0">
-                                <span className="px-1 py-0.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 rounded font-bold text-[9px] md:text-[7px] font-mono shrink-0">M1</span>
-                                <span className="hidden md:inline text-[7.5px] text-neutral-450 font-bold tracking-tighter truncate uppercase">music</span>
-                            </div>
-                            <div className="hidden md:flex items-center gap-0.5 opacity-0 group-hover/track:opacity-100 transition-opacity shrink-0">
-                                <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-250 cursor-pointer transition-colors" title="Toggle visibility">
-                                    <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                                </button>
-                                <button className="w-4 h-4 rounded hover:bg-white/10 flex items-center justify-center text-neutral-400 hover:text-neutral-250 cursor-pointer transition-colors" title="Mute track">
-                                    <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" /></svg>
-                                </button>
-                                <button 
-                                    onClick={(ev) => { ev.stopPropagation(); handleAddClip('m1'); }}
-                                    className="w-3.5 h-3.5 bg-zinc-900 hover:bg-zinc-800 active:scale-95 border border-white/10 text-neutral-350 hover:text-white flex items-center justify-center cursor-pointer rounded transition-all font-bold text-[8px]"
-                                    title="Add Background Music"
-                                >
-                                    +
-                                </button>
+                        <div className="h-14 border-b border-white/5 bg-transparent flex flex-row items-center px-3 hover:bg-white/5 select-none group/track transition-all">
+                            <div className="flex items-center gap-2 min-w-0">
+                                <svg className="w-3.5 h-3.5 text-[#F59E0B]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M9 18V5l12-2v13" />
+                                    <circle cx="6" cy="18" r="3" />
+                                    <circle cx="18" cy="16" r="3" />
+                                </svg>
+                                <span className="hidden md:inline text-[11px] text-[#A0A0A5] group-hover:text-white transition-colors font-medium tracking-wide truncate capitalize">Музыка</span>
                             </div>
                         </div>
                     )}
@@ -1682,14 +2068,14 @@ export default function VideoTimeline({
                 >
                     {/* Time Ruler / Scrub area */}
                     <div 
-                        className="h-6 bg-card border-b border-border flex items-center relative cursor-ew-resize z-20 sticky top-0"
+                        className="h-10 bg-card border-b border-border flex items-center relative cursor-ew-resize z-20 sticky top-0"
                         onPointerDown={handleScrubStart}
                     >
                         {rulerTicks.map((t, i) => (
                             <div 
                                 key={i} 
                                 className="absolute flex flex-col items-start"
-                                style={{ left: `${(t / duration) * 100}%` }}
+                                style={{ left: `${(t / projectDuration) * 100}%` }}
                             >
                                 <div className="h-1.5 w-[1px] bg-zinc-700" />
                                 <span className="text-[11px] font-mono text-zinc-650 ml-1 mt-0.5">{formatTime(t)}</span>
@@ -1703,7 +2089,7 @@ export default function VideoTimeline({
                                 onDragOver={(e) => handleDragOver(e, 's1')}
                                 onDragLeave={handleDragLeave}
                                 onDrop={(e) => handleDrop(e, 's1')}
-                                className={`h-10 border-b border-purple-950/10 bg-purple-950/5 relative flex items-center px-1 transition-all ${
+                                className={`h-12 border-b border-white/5 relative flex items-center px-1 transition-all ${
                                     dragOverTrack === 's1' 
                                         ? 'bg-purple-900/20 border-purple-500/40 border border-dashed shadow-[inset_0_0_8px_rgba(168,85,247,0.15)] animate-pulse' 
                                         : ''
@@ -1712,24 +2098,34 @@ export default function VideoTimeline({
                                 {sceneClips.map((clip, i) => {
                                     const clipId = `S1-Scene-${clip.id}-${i}`;
                                     const isSelected = selectedClipId === clipId;
+                                    const raw = activeEdits[clip.rawIndex];
+                                    const rawStart = raw?.start != null ? raw.start : 0;
+                                    const rawEnd = raw?.end != null ? raw.end : rawStart + (raw?.duration ?? 3);
                                     const clipStart = clip.start;
                                     const clipEnd = clip.end;
 
                                     return (
                                         <div
                                             key={clipId}
-                                            onClick={(e) => handleClipClick(e, clipId, clip, i, 's1')}
-                                            onPointerDown={(e) => handleDragStart(e, 's1', i, clip.start, clip.end)}
+                                            onClick={(e) => handleClipClick(e, clipId, { start: rawStart, end: rawEnd }, i, 's1')}
+                                            onPointerDown={(e) => handleDragStart(e, 's1', i, rawStart, rawEnd)}
                                             onPointerMove={handleDragMove}
                                             onPointerUp={handleDragEnd}
-                                            className={`touch-none absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all ${
+                                            title="click to select | drag to move | trim edges to change duration"
+                                            className={`touch-none absolute h-[calc(100%-2px)] rounded-md overflow-hidden flex items-center cursor-grab active:cursor-grabbing transition-all px-3 gap-1.5 shadow-sm ${
                                                 isSelected 
-                                                    ? 'bg-purple-900 border-purple-300 text-white z-10 font-bold shadow-[0_0_12px_rgba(168,85,247,0.3)]' 
-                                                    : 'bg-purple-950/30 border-purple-900/50 hover:border-purple-600 text-purple-200'
+                                                    ? 'bg-[#3f2953] border border-purple-400 text-white z-10 font-bold shadow-[0_0_12px_rgba(168,85,247,0.4)]' 
+                                                    : 'bg-[#2a1e35] border border-purple-500/20 hover:border-purple-500/50 text-white'
                                             }`}
-                                            style={{ left: `${(clipStart / duration) * 100}%`, width: `${((clipEnd - clipStart) / duration) * 100}%` }}
+                                            style={{ left: `${(absToProj(clipStart) / projectDuration) * 100}%`, width: `${((absToProj(clipEnd) - absToProj(clipStart)) / projectDuration) * 100}%` }}
                                         >
-                                            <span className="text-[9px] absolute left-2 font-mono truncate right-2 font-medium">🎬 Scene: {clip.label} template</span>
+                                            <span className="text-[10px] truncate pointer-events-none opacity-90 pl-1">{clip.label}</span>
+                                            {activeTool === 'pointer' && (
+                                                <>
+                                                    <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 's1', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 's1', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                </>
+                                            )}
                                         </div>
                                     );
                                 })}
@@ -1743,7 +2139,7 @@ export default function VideoTimeline({
                                 // Reuse drag end callback
                                 onDragLeave={handleDragLeave}
                                 onDrop={(e) => handleDrop(e, 'g1')}
-                                className={`h-10 border-b border-fuchsia-950/10 bg-fuchsia-950/5 relative flex items-center px-1 transition-all ${
+                                className={`h-12 border-b border-white/5 relative flex items-center px-1 transition-all ${
                                     dragOverTrack === 'g1' 
                                         ? 'bg-fuchsia-900/20 border-fuchsia-500/40 border border-dashed shadow-[inset_0_0_8px_rgba(217,70,239,0.15)]' 
                                         : ''
@@ -1752,26 +2148,38 @@ export default function VideoTimeline({
                                 {graphicClips.map((clip, i) => {
                                     const clipId = `G1-Graphic-${clip.id}-${i}`;
                                     const isSelected = selectedClipId === clipId;
+                                    const raw = activeEdits[clip.rawIndex];
+                                    const rawStart = raw?.start != null ? raw.start : 0;
+                                    const rawEnd = raw?.end != null ? raw.end : rawStart + (raw?.duration ?? 3);
                                     const clipStart = clip.start;
                                     const clipEnd = clip.end;
-
                                     const isDraggingThis = dragState?.track === 'g1' && dragState.clipIndex === i;
+                                    const isTrimmingThis = trimState?.track === 'g1' && trimState.clipIndex === i;
 
                                     return (
                                         <div
                                             key={clipId}
-                                            onClick={(e) => handleClipClick(e, clipId, clip, i, 'g1')}
-                                            onPointerDown={(e) => handleDragStart(e, 'g1', i, clip.start, clip.end)}
+                                            onClick={(e) => handleClipClick(e, clipId, { start: rawStart, end: rawEnd }, i, 'g1')}
+                                            onPointerDown={(e) => handleDragStart(e, 'g1', i, rawStart, rawEnd)}
                                             onPointerMove={handleDragMove}
                                             onPointerUp={handleDragEnd}
-                                            className={`touch-none absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/g1 ${
+                                            title="click to select | drag to move | trim edges to change duration"
+                                            className={`touch-none absolute h-[calc(100%-2px)] rounded-md overflow-hidden flex items-center px-3 gap-1.5 shadow-sm ${
+                                                isDraggingThis || isTrimmingThis ? 'cursor-grabbing z-20' : 'cursor-grab'
+                                            } ${
                                                 isSelected 
-                                                    ? 'bg-fuchsia-900 border-fuchsia-300 text-white z-10 font-bold shadow-[0_0_12px_rgba(217,70,239,0.3)]' 
-                                                    : 'bg-fuchsia-950/30 border-fuchsia-900/50 hover:border-fuchsia-600 text-fuchsia-200'
+                                                    ? 'bg-[#3f2953] border border-fuchsia-400 text-white z-10 font-bold shadow-[0_0_12px_rgba(217,70,239,0.4)]' 
+                                                    : 'bg-[#2a1e35] border border-fuchsia-500/20 hover:border-fuchsia-500/50 text-white'
                                             }`}
-                                            style={{ left: `${(clipStart / duration) * 100}%`, width: `${((clipEnd - clipStart) / duration) * 100}%` }}
+                                            style={{ left: `${(absToProj(clipStart) / projectDuration) * 100}%`, width: `${Math.max(0.3, ((absToProj(clipEnd) - absToProj(clipStart)) / projectDuration) * 100)}%` }}
                                         >
-                                            <span className="text-[9px] absolute left-2 font-mono pointer-events-none truncate right-2 font-medium">✨ Graphic: {clip.label.toLowerCase()}</span>
+                                            <span className="text-[10px] truncate pointer-events-none opacity-90 pl-1">{clip.label}</span>
+                                            {activeTool === 'pointer' && (
+                                                <>
+                                                    <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/15 z-20" onPointerDown={(e) => handleTrimStart(e, 'g1', i, 'left', rawStart)} />
+                                                    <div className="touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/15 z-20" onPointerDown={(e) => handleTrimStart(e, 'g1', i, 'right', rawEnd)} />
+                                                </>
+                                            )}
                                         </div>
                                     );
                                 })}
@@ -1784,7 +2192,7 @@ export default function VideoTimeline({
                                 onDragOver={(e) => handleDragOver(e, 't1')}
                                 onDragLeave={handleDragLeave}
                                 onDrop={(e) => handleDrop(e, 't1')}
-                                className={`h-10 border-b border-blue-950/10 bg-blue-950/5 relative flex items-center px-1 transition-all ${
+                                className={`h-12 border-b border-white/5 relative flex items-center px-1 transition-all ${
                                     dragOverTrack === 't1' 
                                         ? 'bg-blue-900/20 border-blue-500/40 border border-dashed shadow-[inset_0_0_8px_rgba(59,130,246,0.15)]' 
                                         : ''
@@ -1823,12 +2231,12 @@ export default function VideoTimeline({
                                             onPointerDown={(e) => handleDragStart(e, 't1', i, rawStart, rawEnd)}
                                             onPointerMove={handleDragMove}
                                             onPointerUp={handleDragEnd}
-                                            className={`touch-none absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/t1 ${
+                                            className={`touch-none absolute h-[calc(100%-2px)] rounded-md overflow-hidden flex items-center justify-center cursor-pointer transition-all shadow-sm ${
                                                 isSelected 
-                                                    ? 'bg-blue-900 border-blue-300 text-white z-10 font-bold shadow-[0_0_12px_rgba(59,130,246,0.3)]' 
-                                                    : 'bg-blue-950/30 border-blue-900/50 hover:border-blue-600 text-blue-200'
+                                                    ? 'bg-[#273d59] border border-blue-400 text-white z-10 font-bold shadow-[0_0_12px_rgba(59,130,246,0.4)]' 
+                                                    : 'bg-[#1c2c42] border border-blue-500/20 hover:border-blue-500/50 text-white'
                                             }`}
-                                            style={{ left: `${(clipStart / duration) * 100}%`, width: `${((clipEnd - clipStart) / duration) * 100}%` }}
+                                            style={{ left: `${(absToProj(clipStart) / projectDuration) * 100}%`, width: `${((absToProj(clipEnd) - absToProj(clipStart)) / projectDuration) * 100}%` }}
                                         >
                                             {isEditing ? (
                                                 <input
@@ -1857,11 +2265,7 @@ export default function VideoTimeline({
                                                     }}
                                                     className="absolute inset-0 w-full h-full bg-black text-foreground text-[11px] font-mono px-1.5 outline-none border border-white rounded-none z-30"
                                                 />
-                                            ) : (
-                                                <span className="absolute text-[9px] font-mono ml-1.5 pointer-events-none truncate right-3 left-3 font-medium">
-                                                    💬 {label}
-                                                </span>
-                                            )}
+                                            ) : null}
                                             {activeTool === 'pointer' && !isEditing && (
                                                 <>
                                                     <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 't1', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
@@ -1880,7 +2284,7 @@ export default function VideoTimeline({
                                 onDragOver={(e) => handleDragOver(e, 'v2')}
                                 onDragLeave={handleDragLeave}
                                 onDrop={(e) => handleDrop(e, 'v2')}
-                                className={`h-10 border-b border-cyan-950/10 bg-cyan-950/5 relative flex items-center px-1 transition-all ${
+                                className={`h-20 border-b border-white/5 relative flex items-center px-1 transition-all ${
                                     dragOverTrack === 'v2' 
                                         ? 'bg-cyan-900/20 border-cyan-500/40 border border-dashed shadow-[inset_0_0_8px_rgba(6,182,212,0.15)]' 
                                         : ''
@@ -1905,14 +2309,31 @@ export default function VideoTimeline({
                                             onPointerMove={handleDragMove}
                                             onPointerUp={handleDragEnd}
                                             title="click to select | delete to remove | drag to move | trim edges"
-                                            className={`touch-none absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/v2 ${
+                                            className={`touch-none absolute h-[calc(100%-2px)] rounded-md overflow-hidden flex items-center cursor-pointer transition-all border shadow-md ${
                                                 isSelected 
-                                                    ? 'bg-cyan-900 border-cyan-300 text-white z-10 font-bold shadow-[0_0_12px_rgba(6,182,212,0.3)]' 
-                                                    : 'bg-cyan-950/30 border-cyan-900/50 hover:border-cyan-600 text-cyan-200'
+                                                    ? 'bg-transparent text-white z-10 font-bold shadow-[0_0_12px_rgba(255,255,255,0.25)] border-white/30' 
+                                                    : 'bg-transparent border-white/10 hover:border-white/20 text-zinc-300'
                                             }`}
-                                            style={{ left: `${(clipStart / duration) * 100}%`, width: `${((clipEnd - clipStart) / duration) * 100}%` }}
+                                            style={{ left: `${(absToProj(clipStart) / projectDuration) * 100}%`, width: `${((absToProj(clipEnd) - absToProj(clipStart)) / projectDuration) * 100}%` }}
                                         >
-                                            <span className="text-[9px] absolute left-2 font-mono pointer-events-none truncate right-2 font-medium">📹 B-Roll: "{query.toLowerCase()}"</span>
+                                            {/* Visual Filmstrip Thumbnails for B-Roll */}
+                                            <div className="absolute inset-0 flex overflow-hidden pointer-events-none opacity-45 hover:opacity-65 transition-opacity">
+                                                {Array.from({ length: Math.max(1, Math.floor((clipEnd - clipStart) * 1.5)) }).map((_, fIdx) => {
+                                                    const count = Math.max(1, Math.floor((clipEnd - clipStart) * 1.5));
+                                                    const step = (clipEnd - clipStart) / count;
+                                                    const frameTime = clipStart + fIdx * step;
+                                                    const brollUrl = getV2ClipVideoUrl(broll, videoRef?.current?.src || '');
+                                                    return (
+                                                        <div 
+                                                            key={fIdx} 
+                                                            className="h-full border-r border-zinc-800/30 flex-1 min-w-[40px] bg-gradient-to-br from-zinc-800 to-zinc-950 flex items-center justify-center relative overflow-hidden"
+                                                        >
+                                                            <TimelineThumbnail videoUrl={brollUrl} time={frameTime} />
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                            
                                             {activeTool === 'pointer' && (
                                                 <>
                                                     <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'v2', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
@@ -1931,7 +2352,7 @@ export default function VideoTimeline({
                                 onDragOver={(e) => handleDragOver(e, 'c1')}
                                 onDragLeave={handleDragLeave}
                                 onDrop={(e) => handleDrop(e, 'c1')}
-                                className={`h-10 border-b border-amber-950/10 bg-amber-950/5 relative flex items-center px-1 transition-all ${
+                                className={`h-12 border-b border-white/5 relative flex items-center px-1 transition-all ${
                                     dragOverTrack === 'c1' 
                                         ? 'bg-amber-900/20 border-amber-500/40 border border-dashed shadow-[inset_0_0_8px_rgba(245,158,11,0.15)]' 
                                         : ''
@@ -1955,14 +2376,14 @@ export default function VideoTimeline({
                                             onPointerMove={handleDragMove}
                                             onPointerUp={handleDragEnd}
                                             title="click to select | delete to remove | drag to move | trim edges"
-                                            className={`touch-none absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/c1 ${
+                                            className={`touch-none absolute h-[calc(100%-2px)] rounded-md overflow-hidden flex items-center cursor-pointer transition-all px-3 gap-1.5 shadow-sm ${
                                                 isSelected 
-                                                    ? 'bg-amber-900 border-amber-300 text-white z-10 font-bold shadow-[0_0_12px_rgba(245,158,11,0.3)]' 
-                                                    : 'bg-amber-950/30 border-amber-900/50 hover:border-amber-600 text-amber-200'
+                                                    ? 'bg-[#3f2953] border border-purple-400 text-white z-10 font-bold shadow-[0_0_12px_rgba(168,85,247,0.4)]' 
+                                                    : 'bg-[#2a1e35] border border-purple-500/20 hover:border-purple-500/50 text-white'
                                             }`}
-                                            style={{ left: `${(clipStart / duration) * 100}%`, width: `${((clipEnd - clipStart) / duration) * 100}%` }}
+                                            style={{ left: `${(absToProj(clipStart) / projectDuration) * 100}%`, width: `${((absToProj(clipEnd) - absToProj(clipStart)) / projectDuration) * 100}%` }}
                                         >
-                                            <span className="text-[9px] absolute left-2 font-mono pointer-events-none truncate right-2 font-medium">🎨 Цветокор: "{clip.label.toLowerCase()}"</span>
+                                            
                                             {activeTool === 'pointer' && (
                                                 <>
                                                     <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'c1', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
@@ -1980,7 +2401,7 @@ export default function VideoTimeline({
                             onDragOver={(e) => handleDragOver(e, 'v1')}
                             onDragLeave={handleDragLeave}
                             onDrop={(e) => handleDrop(e, 'v1')}
-                            className={`h-10 border-b border-zinc-800/10 bg-zinc-950/5 relative flex items-center px-1 transition-all ${
+                            className={`h-20 border-b border-white/5 relative flex items-center px-1 transition-all ${
                                 dragOverTrack === 'v1' 
                                     ? 'bg-zinc-900/20 border-zinc-500/40 border border-dashed shadow-[inset_0_0_8px_rgba(255,255,255,0.05)]' 
                                     : ''
@@ -1994,6 +2415,13 @@ export default function VideoTimeline({
                                 const clipStart = isDraggingThis && previewDrag ? previewDrag.start : (trimState?.clipIndex === i && trimState.track === 'v1' && trimState.type === 'left' && previewTrim ? previewTrim.time : clip.start);
                                 const clipEnd = isDraggingThis && previewDrag ? previewDrag.end : (trimState?.clipIndex === i && trimState.track === 'v1' && trimState.type === 'right' && previewTrim ? previewTrim.time : clip.end);
 
+                                let accumLeft = 0;
+                                for (let k = 0; k < i; k++) {
+                                    const prevClip = multiTrackEdl.v1[k];
+                                    accumLeft += (prevClip.end - prevClip.start);
+                                }
+                                const clipWidth = clipEnd - clipStart;
+
                                 return (
                                     <div 
                                         key={clipId} 
@@ -2001,42 +2429,42 @@ export default function VideoTimeline({
                                         onPointerDown={(e) => handleDragStart(e, 'v1', i, clip.start, clip.end)}
                                         onPointerMove={handleDragMove}
                                         onPointerUp={handleDragEnd}
-                                        className={`touch-none absolute h-[32px] rounded-md border overflow-hidden flex items-center group/clip ${activeTool === 'pointer' ? 'cursor-pointer' : 'cursor-crosshair'} ${
+                                        className={`touch-none absolute h-[calc(100%-2px)] rounded-md overflow-hidden flex items-center group/clip ${activeTool === 'pointer' ? 'cursor-pointer' : 'cursor-crosshair'} ${
                                             isSelected 
-                                                ? 'bg-zinc-800 border-zinc-400 text-white z-10 font-bold shadow-[0_0_12px_rgba(255,255,255,0.1)]' 
-                                                : 'bg-zinc-900 border-zinc-800 hover:border-zinc-600 text-zinc-300'
+                                                ? 'bg-transparent text-white z-10 font-bold shadow-[0_0_12px_rgba(255,255,255,0.25)] border-white/30 border' 
+                                                : 'bg-transparent border-white/10 border hover:border-white/20 text-zinc-300'
                                         }`} 
-                                        style={{ left: `${(clipStart / duration) * 100}%`, width: `${((clipEnd - clipStart) / duration) * 100}%` }}
+                                        style={{ left: `${(accumLeft / projectDuration) * 100}%`, width: `${(clipWidth / projectDuration) * 100}%` }}
                                     >
                                         {/* Visual Filmstrip Thumbnails */}
-                                        <div className="absolute inset-0 flex overflow-hidden pointer-events-none opacity-25 hover:opacity-35 transition-opacity">
-                                            {Array.from({ length: Math.max(1, Math.floor((clipEnd - clipStart) * 1.5)) }).map((_, fIdx) => (
-                                                <div 
-                                                    key={fIdx} 
-                                                    className="h-full border-r border-zinc-800/30 flex-1 min-w-[40px] bg-gradient-to-br from-zinc-800 to-zinc-950 flex items-center justify-center relative overflow-hidden"
-                                                >
-                                                    <svg className="w-3 h-3 text-zinc-650" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                                                    </svg>
-                                                    {/* Sprocket holes */}
-                                                    <div className="absolute top-0.5 left-0 right-0 flex justify-between px-1">
-                                                        <div className="w-1 h-0.5 bg-black/40 rounded-sm"></div>
-                                                        <div className="w-1 h-0.5 bg-black/40 rounded-sm"></div>
-                                                        <div className="w-1 h-0.5 bg-black/40 rounded-sm"></div>
+                                        <div className="absolute inset-0 flex overflow-hidden pointer-events-none opacity-45 hover:opacity-65 transition-opacity">
+                                            {Array.from({ length: Math.max(1, Math.floor((clipEnd - clipStart) * 1.5)) }).map((_, fIdx) => {
+                                                const count = Math.max(1, Math.floor((clipEnd - clipStart) * 1.5));
+                                                const step = (clipEnd - clipStart) / count;
+                                                const frameTime = clipStart + fIdx * step;
+                                                const videoUrl = getV1ClipVideoUrl(clip, videoRef?.current?.src || '');
+                                                return (
+                                                    <div 
+                                                        key={fIdx} 
+                                                        className="h-full border-r border-zinc-800/30 flex-1 min-w-[40px] bg-gradient-to-br from-zinc-800 to-zinc-950 flex items-center justify-center relative overflow-hidden"
+                                                    >
+                                                        <TimelineThumbnail videoUrl={videoUrl} time={frameTime} />
+                                                        {/* Sprocket holes */}
+                                                        <div className="absolute top-0.5 left-0 right-0 flex justify-between px-1 z-10">
+                                                            <div className="w-1 h-0.5 bg-black/40 rounded-sm"></div>
+                                                            <div className="w-1 h-0.5 bg-black/40 rounded-sm"></div>
+                                                            <div className="w-1 h-0.5 bg-black/40 rounded-sm"></div>
+                                                        </div>
+                                                        <div className="absolute bottom-0.5 left-0 right-0 flex justify-between px-1 z-10">
+                                                            <div className="w-1 h-0.5 bg-black/40 rounded-sm"></div>
+                                                            <div className="w-1 h-0.5 bg-black/40 rounded-sm"></div>
+                                                            <div className="w-1 h-0.5 bg-black/40 rounded-sm"></div>
+                                                        </div>
                                                     </div>
-                                                    <div className="absolute bottom-0.5 left-0 right-0 flex justify-between px-1">
-                                                        <div className="w-1 h-0.5 bg-black/40 rounded-sm"></div>
-                                                        <div className="w-1 h-0.5 bg-black/40 rounded-sm"></div>
-                                                        <div className="w-1 h-0.5 bg-black/40 rounded-sm"></div>
-                                                    </div>
-                                                </div>
-                                            ))}
+                                                );
+                                            })}
                                         </div>
-                                        <span className="text-[9px] text-zinc-300 absolute left-2 font-mono pointer-events-none tracking-tight font-medium z-10 drop-shadow">
-                                            {clip.source && clip.source !== "main" 
-                                                ? `🎞️ Clip: ${clip.source}` 
-                                                : "🎞️ Video: track v1 (auto-cuts)"}
-                                        </span>
+
                                         {activeTool === 'pointer' && (
                                             <>
                                                 <div className={`touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'v1', i, 'left', clip.start)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
@@ -2056,7 +2484,7 @@ export default function VideoTimeline({
                             onDragOver={(e) => handleDragOver(e, 'a1')}
                             onDragLeave={handleDragLeave}
                             onDrop={(e) => handleDrop(e, 'a1')}
-                            className={`h-10 border-b border-teal-950/10 bg-teal-950/5 relative flex items-center px-1 transition-all ${
+                            className={`h-14 border-b border-white/5 relative flex items-center px-1 transition-all ${
                                 dragOverTrack === 'a1' 
                                     ? 'bg-teal-900/20 border-teal-500/40 border border-dashed shadow-[inset_0_0_8px_rgba(20,184,166,0.15)]' 
                                     : ''
@@ -2082,18 +2510,14 @@ export default function VideoTimeline({
                                         onPointerDown={(e) => handleDragStart(e, 'a1', i, clip.start, clip.end)}
                                         onPointerMove={handleDragMove}
                                         onPointerUp={handleDragEnd}
-                                        className={`touch-none absolute h-[32px] rounded-md border overflow-hidden flex items-center group/clip ${activeTool === 'pointer' ? 'cursor-pointer' : 'cursor-crosshair'} ${
+                                        className={`touch-none absolute h-[calc(100%-2px)] rounded-md overflow-hidden flex items-center group/clip ${activeTool === 'pointer' ? 'cursor-pointer' : 'cursor-crosshair'} ${
                                             isSelected 
-                                                ? 'bg-zinc-800 border-zinc-400 text-white z-10 font-bold shadow-[0_0_12px_rgba(255,255,255,0.1)]' 
-                                                : 'bg-zinc-900 border-zinc-800 hover:border-zinc-600 text-zinc-300'
+                                                ? 'bg-[#1d422c] border border-emerald-400 text-white z-10 font-bold shadow-[0_0_12px_rgba(34,197,94,0.4)]' 
+                                                : 'bg-[#122b1c] border border-emerald-500/20 hover:border-emerald-500/40 text-white'
                                         }`} 
-                                        style={{ left: `${(clipStart / duration) * 100}%`, width: `${((clipEnd - clipStart) / duration) * 100}%` }}
+                                        style={{ left: `${(absToProj(clipStart) / projectDuration) * 100}%`, width: `${((absToProj(clipEnd) - absToProj(clipStart)) / projectDuration) * 100}%` }}
                                     >
-                                        <div className="absolute left-3 text-[9px] text-zinc-300 font-mono tracking-tight pointer-events-none font-medium z-10 drop-shadow">
-                                            {clip.source && clip.source !== "main" 
-                                                ? `🔊 Audio: ${clip.source}` 
-                                                : "🎙️ Voice: track a1"}
-                                        </div>
+
                                         <div className="w-full h-full flex items-center justify-between px-0.5 opacity-60 pointer-events-none">
                                             {clipPeaks.map((peak, idx) => (
                                                 <div 
@@ -2125,7 +2549,7 @@ export default function VideoTimeline({
                                 onDragOver={(e) => handleDragOver(e, 'sfx')}
                                 onDragLeave={handleDragLeave}
                                 onDrop={(e) => handleDrop(e, 'sfx')}
-                                className={`h-10 border-b border-amber-950/10 bg-amber-950/5 relative flex items-center px-1 transition-all ${
+                                className={`h-14 border-b border-white/5 relative flex items-center px-1 transition-all ${
                                     dragOverTrack === 'sfx' 
                                         ? 'bg-amber-900/20 border-amber-500/40 border border-dashed shadow-[inset_0_0_8px_rgba(245,158,11,0.15)]' 
                                         : ''
@@ -2156,14 +2580,14 @@ export default function VideoTimeline({
                                             onPointerDown={(e) => handleDragStart(e, 'sfx', i, rawStart, rawEnd)}
                                             onPointerMove={handleDragMove}
                                             onPointerUp={handleDragEnd}
-                                            className={`touch-none absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/sfx ${
+                                            className={`touch-none absolute h-[calc(100%-2px)] rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/sfx px-3 shadow-sm ${
                                                 isSelected 
-                                                    ? 'bg-amber-900 border-amber-300 text-white z-10 font-bold shadow-[0_0_12px_rgba(245,158,11,0.3)]' 
-                                                    : 'bg-amber-950/30 border-amber-805/50 hover:border-amber-600 text-amber-200'
+                                                    ? 'bg-[#4e3d22] border border-yellow-400 text-white z-10 font-bold shadow-[0_0_12px_rgba(245,158,11,0.4)]' 
+                                                    : 'bg-[#382c18] border border-yellow-500/20 hover:border-yellow-500/40 text-white'
                                             }`}
-                                            style={{ left: `${(clipStart / duration) * 100}%`, width: `${((clipEnd - clipStart) / duration) * 100}%` }}
+                                            style={{ left: `${(absToProj(clipStart) / projectDuration) * 100}%`, width: `${((absToProj(clipEnd) - absToProj(clipStart)) / projectDuration) * 100}%` }}
                                         >
-                                            <span className="text-[9px] absolute left-2 font-mono pointer-events-none truncate right-2 font-medium">🔊 SFX: "{query.toLowerCase()}"</span>
+                                            
                                             {activeTool === 'pointer' && (
                                                 <>
                                                     <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'sfx', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
@@ -2182,7 +2606,7 @@ export default function VideoTimeline({
                                 onDragOver={(e) => handleDragOver(e, 'm1')}
                                 onDragLeave={handleDragLeave}
                                 onDrop={(e) => handleDrop(e, 'm1')}
-                                className={`h-10 border-b border-emerald-950/10 bg-emerald-950/5 relative flex items-center px-1 transition-all ${
+                                className={`h-14 border-b border-white/5 relative flex items-center px-1 transition-all ${
                                     dragOverTrack === 'm1' 
                                         ? 'bg-emerald-900/20 border-emerald-500/40 border border-dashed shadow-[inset_0_0_8px_rgba(16,185,129,0.15)]' 
                                         : ''
@@ -2213,15 +2637,15 @@ export default function VideoTimeline({
                                             onPointerDown={(e) => handleDragStart(e, 'm1', i, rawStart, rawEnd)}
                                             onPointerMove={handleDragMove}
                                             onPointerUp={handleDragEnd}
-                                            className={`touch-none absolute h-[32px] border rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/bgm ${
+                                            className={`touch-none absolute h-[calc(100%-2px)] rounded-md overflow-hidden flex items-center cursor-pointer transition-all group/bgm px-3 shadow-sm ${
                                                 isSelected 
-                                                    ? 'bg-emerald-900 border-emerald-300 text-white z-10 font-bold shadow-[0_0_12px_rgba(16,185,129,0.3)]' 
-                                                    : 'bg-emerald-950/30 border-emerald-900/50 hover:border-emerald-600 text-emerald-200'
+                                                    ? 'bg-[#4e3d22] border border-yellow-400 text-white z-10 font-bold shadow-[0_0_12px_rgba(245,158,11,0.4)]' 
+                                                    : 'bg-[#382c18] border border-yellow-500/20 hover:border-yellow-500/40 text-white'
                                             }`}
-                                            style={{ left: `${(clipStart / duration) * 100}%`, width: `${((clipEnd - clipStart) / duration) * 100}%` }}
+                                            style={{ left: `${(absToProj(clipStart) / projectDuration) * 100}%`, width: `${((absToProj(clipEnd) - absToProj(clipStart)) / projectDuration) * 100}%` }}
                                         >
-                                            <span className="text-[9px] absolute left-2 font-mono pointer-events-none truncate right-16 font-medium">🎵 Music: "{query.toLowerCase()}"</span>
-                                            <span className="text-[9px] font-mono text-white bg-zinc-900 px-1 py-0.2 rounded-none border border-border absolute right-1 pointer-events-none">{asset.volume || -22} dB</span>
+                                            
+                                            
                                             {activeTool === 'pointer' && (
                                                 <>
                                                     <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'm1', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
@@ -2237,19 +2661,15 @@ export default function VideoTimeline({
 
                     {/* Playhead Indicator */}
                     <div 
-                        className="absolute top-0 bottom-0 w-[1px] bg-blue-500 z-50 pointer-events-none" 
-                        style={{ left: `${(timelineTime / duration) * 100}%` }}
+                        className="absolute top-0 bottom-0 w-[1px] bg-amber-500 z-50 pointer-events-none" 
+                        style={{ left: `${(absToProj(timelineTime) / projectDuration) * 100}%` }}
                     >
                         {/* Playhead Handle */}
                         <div 
-                            className="absolute -top-[16px] -left-2.5 w-5 h-4 bg-blue-500 rounded-t-sm shadow-md flex items-center justify-center pointer-events-auto cursor-ew-resize hover:bg-blue-400 transition-colors"
+                            className="absolute -top-1 -left-2.5 w-5 h-5 pointer-events-auto cursor-ew-resize flex items-center justify-center"
                             onPointerDown={handleScrubStart}
                         >
-                            <div className="w-0 h-0 border-l-[10px] border-r-[10px] border-t-[8px] border-l-transparent border-r-transparent border-t-blue-500 absolute -bottom-[7px]" />
-                            <div className="flex gap-[2px] z-10 relative -top-0.5">
-                                <div className="w-[1.5px] h-2 bg-blue-200/80 rounded-full"></div>
-                                <div className="w-[1.5px] h-2 bg-blue-200/80 rounded-full"></div>
-                            </div>
+                            <div className="w-0 h-0 border-l-[8px] border-r-[8px] border-t-[10px] border-l-transparent border-r-transparent border-t-amber-500" />
                         </div>
                     </div>
 
@@ -2257,7 +2677,7 @@ export default function VideoTimeline({
             </div>
 
             {/* Floating Zoom Control */}
-            <div className="absolute bottom-2 right-4 bg-zinc-950/80 border border-white/10 rounded-lg px-2 py-1 flex items-center gap-1.5 z-[100] shadow-lg backdrop-blur-md">
+            <div className="absolute bottom-2 right-4 bg-zinc-950/80 border border-white/10 rounded-md px-2 py-1 flex items-center gap-1.5 z-[100] shadow-lg backdrop-blur-md">
                 <span className="text-[11px] text-zinc-400 font-mono" title="Zoom Out">🔍-</span>
                 <input 
                     type="range" 

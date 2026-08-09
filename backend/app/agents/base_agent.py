@@ -23,6 +23,7 @@ if openrouter_key:
         base_url="https://openrouter.ai/api/v1",
         temperature=0.3,
         max_tokens=6000,
+        request_timeout=45,
         default_headers={
             "HTTP-Referer": "https://vibedit.ai",
             "X-Title": "VibeEdit AI Studio"
@@ -37,7 +38,7 @@ else:
     )
 
 # ─── Dedicated Graphics LLM Instance (Graphics / Layout Specialist) ─────────
-graphics_model_name = os.getenv("GRAPHICS_MODEL", "google/gemini-2.5-flash-lite" if openrouter_key else "llama-3.1-8b-instant")
+graphics_model_name = os.getenv("GRAPHICS_MODEL", "google/gemini-2.5-flash" if openrouter_key else "llama-3.1-8b-instant")
 
 if openrouter_key:
     graphics_llm = ChatOpenAI(
@@ -46,11 +47,13 @@ if openrouter_key:
         base_url="https://openrouter.ai/api/v1",
         temperature=0.4,  # Increased to 0.4 for more creative and diverse visual layout compositions
         max_tokens=6000,
+        request_timeout=45,
         default_headers={
             "HTTP-Referer": "https://vibedit.ai",
             "X-Title": "VibeEdit AI Studio"
         }
     )
+
 else:
     graphics_llm = ChatGroq(
         model=graphics_model_name,
@@ -86,6 +89,44 @@ SAFE_ZONE_BOTTOM = (1410, 1920) # y: 1410-1920 px
 FACE_ZONE = (450, 1410)         # y: 450-1410 px — never overlap
 
 
+def record_raw_tokens(tokens: int):
+    """Record raw token usage to the active user's key."""
+    if tokens <= 0:
+        return
+    try:
+        import json, os
+        from app.api.admin import current_access_key_var
+        
+        store_path = os.path.join("uploads", "admin_store.json")
+        if not os.path.exists(store_path):
+            return
+
+        active_key_id = current_access_key_var.get()
+        if not active_key_id:
+            return
+
+        with open(store_path, "r", encoding="utf-8") as f:
+            store = json.load(f)
+
+        for key in store.get("keys", []):
+            if key.get("id") == active_key_id:
+                key["tokens_used"] = key.get("tokens_used", 0) + tokens
+                break
+
+        with open(store_path, "w", encoding="utf-8") as f:
+            json.dump(store, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"Token tracking error: {e}")
+
+def _record_token_usage(prompt: str, completion: str, response_metadata: dict = None):
+    """Estimate and record LLM token usage."""
+    if response_metadata and "token_usage" in response_metadata:
+        usage = response_metadata["token_usage"]
+        tokens = usage.get("total_tokens") or usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)
+    else:
+        tokens = (len(prompt) + len(completion)) // 4
+    record_raw_tokens(tokens)
+
 
 async def invoke_llm(system_prompt: str, user_message: str):
     """Invoke the shared LLM with a system + user message pair.
@@ -94,6 +135,7 @@ async def invoke_llm(system_prompt: str, user_message: str):
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_message),
     ])
+    _record_token_usage(system_prompt + user_message, response.content, getattr(response, 'response_metadata', {}))
     return response
 
 
@@ -104,4 +146,5 @@ async def invoke_graphics_llm(system_prompt: str, user_message: str):
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_message),
     ])
+    _record_token_usage(system_prompt + user_message, response.content, getattr(response, 'response_metadata', {}))
     return response

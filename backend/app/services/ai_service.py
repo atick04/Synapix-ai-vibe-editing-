@@ -24,7 +24,7 @@ async def transcribe_audio(audio_path: str):
                 transcript = await client.audio.transcriptions.create(
                     model="whisper-large-v3",
                     file=audio_file,
-                    prompt="Ум, эээ, ааа, ммм, ну, короче, значит, типа, вот, как бы.",
+                    prompt="Дословная расшифровка со всеми заиканиями, повторами и неречевыми звуками. Обозначай фоновые голоса и звуки: [пауза], [вздох], [шум], [смех], [за кадром], [шепот], [кашель], эээ, ааа, ну, типа, как бы.",
                     response_format="verbose_json",
                     timestamp_granularities=["word", "segment"]
                 )
@@ -34,11 +34,23 @@ async def transcribe_audio(audio_path: str):
                 transcript = await client.audio.transcriptions.create(
                     model="whisper-large-v3",
                     file=audio_file,
-                    prompt="Ум, эээ, ааа, ммм, ну, короче, значит, типа, вот, как бы.",
+                    prompt="Дословная расшифровка со всеми заиканиями, повторами и неречевыми звуками. Обозначай фоновые голоса и звуки: [пауза], [вздох], [шум], [смех], [за кадром], [шепот], [кашель], эээ, ааа, ну, типа, как бы.",
                     response_format="verbose_json"
                 )
         print("Transcription complete!")
-        return transcript.model_dump()
+        result = transcript.model_dump()
+        
+        # Estimate Whisper token usage
+        # Base cost of 1500 tokens, plus 10 tokens per transcribed word (approx. audio length)
+        try:
+            words_count = len(result.get("text", "").split())
+            estimated_tokens = 1500 + (words_count * 10)
+            from app.agents.base_agent import record_raw_tokens
+            record_raw_tokens(estimated_tokens)
+        except Exception as e:
+            print(f"Failed to record Whisper tokens: {e}")
+
+        return result
     except Exception as e:
         print(f"OpenAI Transcription error: {str(e)}")
         return None

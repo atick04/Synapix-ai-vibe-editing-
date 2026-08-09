@@ -182,7 +182,9 @@ FALLBACK_SFX_MAP = {
     "transition": "https://remotion.media/whoosh.wav",
     "glitch": "https://remotion.media/whoosh.wav",
     "click": "https://remotion.media/whoosh.wav",
-    "impact": "https://remotion.media/whoosh.wav"
+    "impact": "https://remotion.media/whoosh.wav",
+    "riser": "https://remotion.media/whoosh.wav",
+    "film": "https://remotion.media/whoosh.wav",
 }
 
 def search_freesound_sfx(query: str) -> List[Dict[str, Any]]:

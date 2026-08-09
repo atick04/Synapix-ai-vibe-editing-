@@ -88,8 +88,19 @@ class DesignSkill:
         }
 
     @staticmethod
-    def validate_font(font_name: str) -> str:
-        """Validates if font is cyrillic, returning it or fallback Inter."""
+    def validate_font(font_name: str, brand_id: Optional[str] = None) -> str:
+        """Validates if font is cyrillic or uploaded by B2B brand, returning it or fallback Inter."""
+        import os
+        # 1. Check brand-specific fonts first if brand_id is specified
+        if brand_id:
+            brand_fonts_dir = os.path.join("uploads", "brands", brand_id, "fonts")
+            if os.path.exists(brand_fonts_dir):
+                for f in os.listdir(brand_fonts_dir):
+                    name_without_ext = os.path.splitext(f)[0]
+                    if font_name.lower() in name_without_ext.lower() or name_without_ext.lower() in font_name.lower():
+                        return name_without_ext
+
+        # 2. Check system default cyrillic fonts
         for name, css in CYRILLIC_FONTS.items():
             if font_name.lower() in name.lower() or name.lower() in font_name.lower():
                 return css
@@ -156,48 +167,82 @@ class DesignSkill:
         y_min, y_max = safe_area["y"]
         y_center = (y_min + y_max) / 2.0
         
-        if template == "comparison" or entities_count == 2:
+        if entities_count <= 1:
+            coords.append({"x": 50.0, "y": y_center, "width": 85.0, "height": 10.0})
+            return coords
+
+        # We assume the first entity (index 0) is the headline title
+        headline_h = 8.0
+        headline_y = y_min + headline_h / 2.0
+        coords.append({"x": 50.0, "y": headline_y, "width": 90.0, "height": headline_h})
+
+        # Remaining safe area for actual content cards
+        content_y_min = y_min + headline_h + 4.0
+        content_y_max = y_max
+        content_height = content_y_max - content_y_min
+        content_y_center = content_y_min + content_height / 2.0
+        cards_count = entities_count - 1
+
+        if template in ("comparison_table", "feature_grid", "progress_steps", "user_review", "bar_chart"):
+            if cards_count == 1:
+                h_val = 32.0 if template == "bar_chart" else (20.0 if template == "progress_steps" else (24.0 if template == "user_review" else 36.0))
+                w_val = 84.0 if template == "feature_grid" else 80.0
+                coords.append({"x": 50.0, "y": content_y_center, "width": w_val, "height": h_val})
+            else:
+                h_val = min(36.0, content_height / (cards_count * 1.2))
+                gap = (content_height - (h_val * cards_count)) / (cards_count + 1)
+                for i in range(cards_count):
+                    coords.append({
+                        "x": 50.0,
+                        "y": content_y_min + gap + i * (h_val + gap) + h_val / 2.0,
+                        "width": 80.0,
+                        "height": h_val
+                    })
+
+        elif template == "comparison" or cards_count == 2:
             # Side-by-side columns
-            coords.append({"x": 26.0, "y": y_center, "width": 36.0, "height": 16.0})
-            coords.append({"x": 74.0, "y": y_center, "width": 36.0, "height": 16.0})
+            coords.append({"x": 26.0, "y": content_y_center, "width": 38.0, "height": 22.0})
+            coords.append({"x": 74.0, "y": content_y_center, "width": 38.0, "height": 22.0})
             
         elif template == "vertical_stack" or template == "list" or template == "cause_effect":
             # Stack elements vertically
-            card_h = min(12.0, (y_max - y_min) / (entities_count * 1.5))
-            gap = (y_max - y_min - (card_h * entities_count)) / (entities_count + 1)
-            for i in range(entities_count):
+            card_h = min(12.0, content_height / (cards_count * 1.5))
+            gap = (content_height - (card_h * cards_count)) / (cards_count + 1)
+            for i in range(cards_count):
                 coords.append({
                     "x": 50.0,
-                    "y": y_min + gap + i * (card_h + gap) + card_h / 2.0,
+                    "y": content_y_min + gap + i * (card_h + gap) + card_h / 2.0,
                     "width": 80.0,
                     "height": card_h
                 })
                 
         elif template == "concept_explainer" or template == "mindmap":
-            # Central parent, rest are children side-by-side or around
-            coords.append({"x": 50.0, "y": y_center - 12.0, "width": 45.0, "height": 12.0}) # Center parent
+            # Central parent card, children aligned bottom
+            center_card_y = content_y_min + content_height * 0.28
+            coords.append({"x": 50.0, "y": center_card_y, "width": 46.0, "height": 12.0})
             
-            children_count = entities_count - 1
+            children_count = cards_count - 1
             if children_count > 0:
                 span_w = (x_max - x_min)
                 step_x = span_w / (children_count + 1)
-                child_w = min(28.0, step_x * 0.8)
+                child_w = min(28.0, step_x * 0.85)
+                child_y = content_y_min + content_height * 0.72
                 for i in range(children_count):
                     coords.append({
                         "x": x_min + step_x * (i + 1),
-                        "y": y_center + 14.0,
+                        "y": child_y,
                         "width": child_w,
                         "height": 12.0
                     })
         else:
-            # Default horizontal timeline flow
+            # Default horizontal flow
             span_w = (x_max - x_min)
-            step_x = span_w / (entities_count + 1)
-            card_w = min(26.0, step_x * 0.8)
-            for i in range(entities_count):
+            step_x = span_w / (cards_count + 1)
+            card_w = min(26.0, step_x * 0.85)
+            for i in range(cards_count):
                 coords.append({
                     "x": x_min + step_x * (i + 1),
-                    "y": y_center,
+                    "y": content_y_center,
                     "width": card_w,
                     "height": 14.0
                 })
@@ -270,6 +315,7 @@ class DesignSkill:
         Cyrillic font compliance, and contrast issues. Returns polished scene data and logs of fixes.
         """
         corrected = json_clone(scene_data)
+        brand_id = corrected.get("brand_id")
         style_profile = corrected.get("style_profile", {})
         entities = corrected.get("entities") or []
         relations = corrected.get("relations") or []
@@ -284,7 +330,7 @@ class DesignSkill:
         
         base_font = style_profile.get("font_family")
         if base_font:
-            validated_base = cls.validate_font(base_font)
+            validated_base = cls.validate_font(base_font, brand_id)
             style_profile["font_family"] = validated_base
             if validated_base != base_font:
                 fixes_log.append(f"Typography: Заменен некириллический шрифт '{base_font}' на '{validated_base}'")
@@ -297,7 +343,7 @@ class DesignSkill:
             ent_styles = entity.get("styles", {})
             ent_font = ent_styles.get("font_family")
             if ent_font:
-                validated_ent = cls.validate_font(ent_font)
+                validated_ent = cls.validate_font(ent_font, brand_id)
                 ent_styles["font_family"] = validated_ent
                 if validated_ent != ent_font:
                     fixes_log.append(f"Typography: Заменен шрифт сущности '{ent_font}' на '{validated_ent}'")
@@ -351,6 +397,21 @@ class DesignSkill:
             elif e_type == "tab_bar":
                 if entity.get("width") is None: entity["width"] = 80.0
                 if entity.get("height") is None: entity["height"] = 7.5
+            elif e_type == "comparison_table":
+                if entity.get("width") is None: entity["width"] = 82.0
+                if entity.get("height") is None: entity["height"] = 48.0
+            elif e_type == "feature_grid":
+                if entity.get("width") is None: entity["width"] = 84.0
+                if entity.get("height") is None: entity["height"] = 48.0
+            elif e_type == "progress_steps":
+                if entity.get("width") is None: entity["width"] = 84.0
+                if entity.get("height") is None: entity["height"] = 24.0
+            elif e_type == "user_review":
+                if entity.get("width") is None: entity["width"] = 82.0
+                if entity.get("height") is None: entity["height"] = 28.0
+            elif e_type == "bar_chart":
+                if entity.get("width") is None: entity["width"] = 80.0
+                if entity.get("height") is None: entity["height"] = 36.0
 
             x = entity.get("x", 50.0)
             y = entity.get("y", 50.0)

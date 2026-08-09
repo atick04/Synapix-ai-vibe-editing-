@@ -103,6 +103,25 @@ class ReasoningManager:
         })
 
     @classmethod
+    def emit_activity(
+        cls,
+        step: str,
+        details: str,
+        *,
+        status: str = "running",
+        agent: str = "Cinematic Brain",
+        progress: float = 0.7,
+    ):
+        """Emit a distinct activity line (unique `step` key) for the chat feed."""
+        event_bus.emit("reasoning_update", {
+            "step": step,
+            "status": status,
+            "progress": progress,
+            "agent": agent,
+            "details": details,
+        })
+
+    @classmethod
     def complete_finalization(cls, score: int, issues: List[str], suggested_fixes: List[Dict[str, Any]] = None):
         approved_icon = "✓" if score >= 75 else "⚠️"
         summary = f"Аудит удержания внимания завершен ({approved_icon} Оценка: {score}/100).\n\n"

@@ -9,6 +9,7 @@ class VideoEditingState(TypedDict, total=False):
     transcript_text: str
     visual_context: str
     auto_cuts: List[Dict[str, Any]]
+    topic_boundaries: List[Dict[str, Any]]
     template_id: Optional[str]
     template_config: Optional[Dict[str, Any]]
     active_edits: Optional[List[Dict[str, Any]]]

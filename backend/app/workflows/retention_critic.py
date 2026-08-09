@@ -149,7 +149,7 @@ class RetentionCritic:
                         z_end = round(min(z_start + 2.5, t - 0.5), 2)
                         fixes.append({
                             "issue": "Boring talking head zone",
-                            "recommendation": "add_zoom",
+                            "recommendation": "create_zoom",
                             "start": z_start,
                             "end": z_end
                         })
@@ -162,7 +162,7 @@ class RetentionCritic:
                 z_end = round(min(z_start + 2.5, duration - 0.5), 2)
                 fixes.append({
                     "issue": "Boring talking head zone at ending",
-                    "recommendation": "add_zoom",
+                    "recommendation": "create_zoom",
                     "start": z_start,
                     "end": z_end
                 })

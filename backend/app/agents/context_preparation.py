@@ -37,6 +37,7 @@ async def prepare_context_node(state: VideoEditingState) -> VideoEditingState:
     transcript_text = state.get("transcript_text") or "Транскрипт пока не готов."
     visual_context_text = state.get("visual_context") or "Визуальный анализ кадров недоступен."
     auto_cuts = []
+    topic_boundaries = []
 
     # Template config
     template_id = state.get("template_id")
@@ -78,156 +79,41 @@ async def prepare_context_node(state: VideoEditingState) -> VideoEditingState:
 
                     from difflib import SequenceMatcher
 
-                    # Expanded Russian and English single-word fillers
-                    SINGLE_FILLERS = {
-                        "эээ", "ээ", "э-э", "ммм", "мм", "м-м", "ааа", "аа", "а-а", "эм", "э-эм", 
-                        "ну", "типа", "короче", "просто", "собственно", "вообще", "вот", "конкретно", 
-                        "значит", "слушай", "знаешь", "слышь", "наверное", "понимаешь", "практически", 
-                        "фактически", "также", "это", "like", "uh", "um", "ah", "okay", "so"
-                    }
-
-                    # Multi-word filler phrases
-                    MULTI_WORD_FILLERS = {
-                        "как бы", "в общем", "в общем-то", "так сказать", "это самое", 
-                        "в принципе", "понимаешь ли", "как сказать", "you know", "kind of"
-                    }
-
-                    words_to_cut = set()
-
-                    # Step 1: Detect single and multi-word filler words
-                    for i in range(len(words)):
-                        w_current = words[i]
-                        text_curr = w_current.get('word', '').strip()
-                        clean_curr = re.sub(r'[^\w\s-]', '', text_curr).lower()
-
-                        # Check single fillers
-                        if clean_curr in SINGLE_FILLERS:
-                            words_to_cut.add(i)
-
-                        # Check multi-word fillers
-                        if i < len(words) - 1:
-                            w_next = words[i+1]
-                            text_next = w_next.get('word', '').strip()
-                            clean_next = re.sub(r'[^\w\s-]', '', text_next).lower()
-
-                            combined_phrase = f"{clean_curr} {clean_next}"
-                            if combined_phrase in MULTI_WORD_FILLERS:
-                                words_to_cut.add(i)
-                                words_to_cut.add(i+1)
-
-                    # Step 2: Build segments/phrases to detect duplicate sentences/takes
-                    segments = []
-                    current_segment = []
-                    for i, w in enumerate(words):
-                        if i in words_to_cut:
-                            continue
-                        text = w.get('word', '').strip()
-                        start = w.get('start', 0.0)
-                        end = w.get('end', 0.0)
-
-                        if current_segment:
-                            prev_w = words[current_segment[-1]]
-                            prev_end = prev_w.get('end', 0.0)
-                            prev_text = prev_w.get('word', '').strip()
-
-                            pause = start - prev_end
-                            ends_sentence = prev_text.endswith(('.', '?', '!'))
-
-                            # Split segment on significant pauses (> 1.0s) or sentence boundaries
-                            if pause > 1.0 or ends_sentence:
-                                seg_text = " ".join(words[idx].get('word', '').strip() for idx in current_segment)
-                                segments.append({
-                                    "indices": current_segment,
-                                    "text": seg_text,
-                                    "start": words[current_segment[0]].get('start', 0.0),
-                                    "end": words[current_segment[-1]].get('end', 0.0)
-                                })
-                                current_segment = []
-
-                        current_segment.append(i)
-
-                    if current_segment:
-                        seg_text = " ".join(words[idx].get('word', '').strip() for idx in current_segment)
-                        segments.append({
-                            "indices": current_segment,
-                            "text": seg_text,
-                            "start": words[current_segment[0]].get('start', 0.0),
-                            "end": words[current_segment[-1]].get('end', 0.0)
+                    # Step 1: Detect auto-cuts using the advanced unified suggest_smart_cuts service
+                    from app.services.smart_cut_service import suggest_smart_cuts
+                    raw_cuts = suggest_smart_cuts(data)
+                    for c in raw_cuts:
+                        auto_cuts.append({
+                            "action": "cut_out",
+                            "start": round(c["start"], 2),
+                            "end": round(c["end"], 2),
+                            "reason": c.get("text", c.get("reason", "Авто-обрезка"))
                         })
 
-                    # Step 3: Compare segments for duplicate takes/stuttering and mark for deletion (keep last take)
-                    def get_similarity(s1, s2):
-                        c1 = re.sub(r'[^\w\s]', '', s1).lower().strip()
-                        c2 = re.sub(r'[^\w\s]', '', s2).lower().strip()
-                        if len(c1.split()) < 2 or len(c2.split()) < 2:
-                            return 0.0
-                        return SequenceMatcher(None, c1, c2).ratio()
+                    # Step 1b: Detect topic-change moments for transitions
+                    try:
+                        from app.services.topic_transition_service import detect_topic_boundaries
+                        topic_boundaries = detect_topic_boundaries(data)
+                        if topic_boundaries:
+                            print(
+                                f"[PrepareContext] Detected {len(topic_boundaries)} topic-change "
+                                f"transition points"
+                            )
+                    except Exception as topic_err:
+                        print(f"[PrepareContext] Topic boundary detection failed: {topic_err}")
 
-                    for k in range(len(segments)):
-                        # Compare k with k+1 and k+2
-                        for offset in (1, 2):
-                            if k + offset < len(segments):
-                                sim = get_similarity(segments[k]["text"], segments[k+offset]["text"])
-                                if sim >= 0.78:
-                                    # Mark all indices of segments[k] (the earlier duplicate take) for deletion!
-                                    for idx in segments[k]["indices"]:
-                                        words_to_cut.add(idx)
-                                    break
-
-                    # Step 4: Group contiguous cut indices into compact, professional cut_out patches
-                    cut_indices = sorted(list(words_to_cut))
-                    groups = []
-                    if cut_indices:
-                        current_group = [cut_indices[0]]
-                        for idx in cut_indices[1:]:
-                            if idx == current_group[-1] + 1:
-                                current_group.append(idx)
-                            else:
-                                groups.append(current_group)
-                                current_group = [idx]
-                        groups.append(current_group)
-
-                    for grp in groups:
-                        start_idx = grp[0]
-                        end_idx = grp[-1]
-
-                        start_w = words[start_idx].get('start', 0.0)
-                        end_w = words[end_idx].get('end', 0.0)
-
-                        prev_end = words[start_idx-1].get('end', 0.0) if start_idx > 0 else 0.0
-                        next_start = words[end_idx+1].get('start', end_w + 0.5) if end_idx < len(words) - 1 else end_w + 0.5
-
-                        safe_start = max(start_w - 0.05, prev_end + 0.01)
-                        safe_end = min(end_w + 0.05, next_start - 0.01)
-
-                        if safe_end > safe_start:
-                            auto_cuts.append({
-                                "action": "cut_out",
-                                "start": round(safe_start, 2),
-                                "end": round(safe_end, 2),
-                                "reason": f"Слово-паразит / Повторение дубля: '{words[start_idx].get('word','')}'"
-                            })
-
-                    # Step 5: Trim overlong pauses (> 0.8s) between remaining non-cut words
-                    remaining_indices = [idx for idx in range(len(words)) if idx not in words_to_cut]
-                    for idx_ptr in range(len(remaining_indices) - 1):
-                        i = remaining_indices[idx_ptr]
-                        j = remaining_indices[idx_ptr + 1]
-
-                        end_w = words[i].get('end', 0.0)
-                        start_next = words[j].get('start', 0.0)
-
-                        pause_duration = start_next - end_w
-                        if pause_duration > 0.8:
-                            safe_cut_start = end_w + 0.15
-                            safe_cut_end = start_next - 0.15
-                            if safe_cut_end > safe_cut_start:
-                                auto_cuts.append({
-                                    "action": "cut_out",
-                                    "start": round(safe_cut_start, 2),
-                                    "end": round(safe_cut_end, 2),
-                                    "reason": "Затянутая пауза"
-                                })
+                    # Step 2: Determine which word indices are remaining (not cut out)
+                    remaining_indices = []
+                    for idx, w in enumerate(words):
+                        w_start = float(w.get("start", 0.0))
+                        w_end = float(w.get("end", 0.0))
+                        is_cut = False
+                        for cut in auto_cuts:
+                            if cut["start"] <= w_start + 0.01 and w_end - 0.01 <= cut["end"]:
+                                is_cut = True
+                                break
+                        if not is_cut:
+                            remaining_indices.append(idx)
 
                     # Reconstruct readable clean transcript context mapping
                     context_lines = []
@@ -245,6 +131,7 @@ async def prepare_context_node(state: VideoEditingState) -> VideoEditingState:
         try:
             with open(visual_path, "r", encoding="utf-8") as f:
                 scenes = json.load(f)
+            session["visual_scenes"] = scenes
             visual_context_text = format_visual_context(scenes)
         except Exception:
             pass
@@ -300,7 +187,8 @@ async def prepare_context_node(state: VideoEditingState) -> VideoEditingState:
         }]
 
     ReasoningManager.complete_analysis(
-        f"Анализ завершен. Загружен транскрипт и обнаружено {len(auto_cuts)} пауз для удаления. "
+        f"Анализ завершен. Загружен транскрипт, обнаружено {len(auto_cuts)} пауз для удаления "
+        f"и {len(topic_boundaries)} смен темы для переходов. "
         f"Параметры видео: {aspect_ratio} ({width}x{height})."
     )
 
@@ -308,6 +196,7 @@ async def prepare_context_node(state: VideoEditingState) -> VideoEditingState:
         "transcript_text": transcript_text,
         "visual_context": visual_context_text,
         "auto_cuts": auto_cuts,
+        "topic_boundaries": topic_boundaries,
         "template_config": template_config,
         "production_session": session,
         "shared_memory": shared_memory,
@@ -315,5 +204,6 @@ async def prepare_context_node(state: VideoEditingState) -> VideoEditingState:
         "aspect_ratio": aspect_ratio,
         "width": width,
         "height": height,
-        "media_library": media_library
+        "media_library": media_library,
+        "tools_run_in_session": 0
     }

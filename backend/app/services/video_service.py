@@ -3,6 +3,7 @@ import os
 import json
 import subprocess
 import argparse
+from typing import Optional, List, Dict, Any
 from app.services.pexels_service import download_broll
 
 def format_ass_time(seconds: float) -> str:
@@ -69,9 +70,10 @@ def opacity_to_ass_alpha(opacity: float) -> str:
     alpha = min(255, max(0, alpha))
     return f"{alpha:02X}"
 
-def generate_ass(transcript, filepath, position="center", font="Impact", font_size=110, use_outline=True, font_color="White", cuts=None, animation_style="fade", template_id=None, subtitle_edit=None):
+def generate_ass(transcript, filepath, position="center", font="Impact", font_size=110, use_outline=True, font_color="White", cuts=None, animation_style="fade", template_id=None, subtitle_edit=None, brand_id=None):
     """Generate ASS subtitle file, adjusting timing for cut_out edits and injecting animation tags."""
     from app.services.template_service import get_template
+    from app.services.design_skill import DesignSkill
     cuts = sorted(cuts or [], key=lambda c: c.get('start', 0))
     
     def remap_time(t):
@@ -95,6 +97,9 @@ def generate_ass(transcript, filepath, position="center", font="Impact", font_si
 
     # Premium Margin and Positioning defaults
     base_font = font or "Inter"
+    base_font = DesignSkill.validate_font(base_font, brand_id)
+    if "," in base_font:
+        base_font = base_font.split(",")[0].strip()
     font_pairing = None
     font_size_val = font_size or 72
     text_main_color = "#FFFFFF"
@@ -320,12 +325,13 @@ def extract_audio(video_path: str, output_audio_path: str) -> str:
 
 
 def apply_zoom(input_path: str, output_path: str, zoom_type: str,
-               start: float, end: float, original_duration: float) -> bool:
+               start: float, end: float, original_duration: float,
+               intensity: float = 1.14) -> bool:
     """
-    Apply zoom-in or zoom-out to a specific segment using FFmpeg subprocess.
-    Splits video into before/segment/after, applies scale+crop to the segment, then concats.
-    zoom_in: scale to 150%, center-crop to original size.
-    zoom_out: scale to 70%, pad with black borders.
+    Smooth zoom via FFmpeg zoompan (ease in → settle), avoiding hard cut at segment end.
+    zoom_in / punch: scale rises then returns to 1.0 before the edit ends.
+    zoom_hold: soft ramp in, hold peak, soft ramp out.
+    zoom_out: ease from peak back to 1.0.
     """
     try:
         before_out = output_path.replace('.mp4', '_z_before.mp4')
@@ -333,12 +339,50 @@ def apply_zoom(input_path: str, output_path: str, zoom_type: str,
         after_out = output_path.replace('.mp4', '_z_after.mp4')
         list_file = output_path.replace('.mp4', '_z_list.txt')
 
-        if zoom_type == "zoom_in":
-            vf = "scale=iw*1.5:ih*1.5,crop=iw/1.5:ih/1.5"
+        peak = max(1.05, min(1.35, float(intensity or 1.14)))
+        dur = max(0.2, float(end) - float(start))
+        # Probe fps for zoompan d=frames
+        fps = 30.0
+        try:
+            pr = subprocess.run(
+                ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+                 '-show_entries', 'stream=r_frame_rate', '-of', 'csv=p=0', input_path],
+                capture_output=True, text=True, timeout=15,
+            )
+            if pr.returncode == 0 and pr.stdout.strip():
+                a, b = pr.stdout.strip().split('/')
+                fps = float(a) / float(b or 1)
+        except Exception:
+            pass
+        frames = max(2, int(round(dur * fps)))
+
+        # Expression: normalized progress p = on/(n-1); punch envelope then scale
+        # z = 1 + (peak-1)*env ; env rises 0..0.55 then falls
+        peak_s = f"{peak:.4f}"
+        if zoom_type in ("zoom_hold", "hold"):
+            # Soft edges 18% each side
+            z_expr = (
+                f"if(lt(on/{frames},0.18),"
+                f"1+({peak_s}-1)*(on/{frames})/0.18,"
+                f"if(gt(on/{frames},0.82),"
+                f"1+({peak_s}-1)*(1-(on/{frames}-0.82)/0.18),"
+                f"{peak_s}))"
+            )
         elif zoom_type == "zoom_out":
-            vf = "scale=iw*0.7:ih*0.7,pad=iw/0.7:ih/0.7:(ow-iw)/2:(oh-ih)/2:black"
+            z_expr = f"{peak_s}-({peak_s}-1)*on/{max(frames - 1, 1)}"
         else:
-            return False
+            # zoom_in punch: ease-ish triangle via piecewise linear (ffmpeg expr has no cubic)
+            z_expr = (
+                f"if(lt(on/{frames},0.55),"
+                f"1+({peak_s}-1)*(on/{frames})/0.55,"
+                f"1+({peak_s}-1)*(1-(on/{frames}-0.55)/0.45))"
+            )
+
+        # zoompan needs explicit size; read from probe defaults 1080x1920 fallback applied by caller dims later
+        vf = (
+            f"zoompan=z='{z_expr}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+            f"d=1:s=iw:ih:fps={fps:.3f},scale=trunc(iw/2)*2:trunc(ih/2)*2"
+        )
 
         segments = []
 
@@ -353,8 +397,9 @@ def apply_zoom(input_path: str, output_path: str, zoom_type: str,
             'ffmpeg', '-i', input_path,
             '-ss', str(start), '-to', str(end),
             '-vf', vf,
-            '-c:v', 'libx264', '-c:a', 'aac',
-            seg_out, '-y', '-loglevel', 'quiet'
+            '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
+            '-c:a', 'aac',
+            seg_out, '-y', '-loglevel', 'error'
         ], check=True)
         segments.append(seg_out)
 
@@ -378,7 +423,7 @@ def apply_zoom(input_path: str, output_path: str, zoom_type: str,
             if os.path.exists(tmp):
                 os.remove(tmp)
 
-        print(f"[Zoom] ✅ {zoom_type} applied from {start}s to {end}s")
+        print(f"[Zoom] ✅ smooth {zoom_type} applied from {start}s to {end}s (peak={peak})")
         return True
     except Exception as e:
         print(f"[Zoom] Error: {e}")
@@ -477,7 +522,36 @@ LUT_PRESETS = {
     "warm": {"brightness": 1.05, "contrast": 1.0, "saturation": 1.1, "hue": 15}
 }
 
-def apply_color_corrections(stream, edits):
+def resolve_lut_path(lut_name: str, brand_id: Optional[str] = None) -> Optional[str]:
+    import os
+    if not lut_name:
+        return None
+    # If absolute or already points to uploads
+    if os.path.isabs(lut_name) and os.path.exists(lut_name):
+        return lut_name
+    if lut_name.startswith("uploads/") and os.path.exists(lut_name):
+        return lut_name
+    
+    names_to_try = [lut_name]
+    if not lut_name.endswith(".cube"):
+        names_to_try.append(lut_name + ".cube")
+        
+    # Try brand-specific path
+    if brand_id:
+        for n in names_to_try:
+            brand_path = os.path.join("uploads", "brands", brand_id, "luts", n)
+            if os.path.exists(brand_path):
+                return brand_path
+            
+    # Try default brand path as fallback
+    for n in names_to_try:
+        default_path = os.path.join("uploads", "brands", "default", "luts", n)
+        if os.path.exists(default_path):
+            return default_path
+        
+    return None
+
+def apply_color_corrections(stream, edits, brand_id=None):
     cc_edits = [e for e in edits if e.get("action") == "color_correction"]
     for cc in cc_edits:
         cc_start = float(cc.get("start", 0))
@@ -486,6 +560,13 @@ def apply_color_corrections(stream, edits):
             continue
             
         preset_key = cc.get("preset") or cc.get("lut") or "cinema"
+        if preset_key.endswith(".cube") or "luts/" in preset_key:
+            lut_path = resolve_lut_path(preset_key, brand_id)
+            if lut_path:
+                safe_path = lut_path.replace("\\", "/").replace(":", "\\:")
+                stream = stream.filter('lut3d', file=safe_path, enable=f"between(t,{cc_start},{cc_end})")
+            continue
+            
         base = LUT_PRESETS.get(preset_key, {"brightness": 1.0, "contrast": 1.0, "saturation": 1.0, "hue": 0})
         
         user_b = cc.get("brightness") if cc.get("brightness") is not None else 100
@@ -508,8 +589,34 @@ def apply_color_corrections(stream, edits):
         
     return stream
 
-def render_video(input_path: str, output_path: str, transcript_data: dict, edits: list, edl: dict = None, font: str = "Arial", font_size: int = 100, use_outline: bool = True, font_color: str = "White", template_id: str = None):
+def render_video(input_path: str, output_path: str, transcript_data: dict, edits: list, edl: dict = None, font: str = "Arial", font_size: int = 100, use_outline: bool = True, font_color: str = "White", template_id: str = None, brand_id: str = None):
     """Advanced Rendering Pipeline using FFmpeg Concat, ASS overlays, Zoom, Speed, Text and EDL"""
+    # Map all B-roll edits to 3D Remotion + Three.js motion graphics
+    mapped_edits = []
+    for e in edits:
+        if e.get("action") == "add_broll":
+            q = e.get("query", "technology")
+            style = "cinematic"
+            import re
+            if re.search(r"tech|data|code|blueprint|logic|graph", q, re.IGNORECASE):
+                style = "blueprint"
+            elif re.search(r"fluid|flow|energy|liquid|particles", q, re.IGNORECASE):
+                style = "liquid"
+            
+            mapped_edits.append({
+                "action": "add_motion_graphic",
+                "start": e.get("start"),
+                "end": e.get("end"),
+                "style": style,
+                "text": q.upper(),
+                "subtext": "A-ROLL VISUALIZATION",
+                "accent_color": e.get("accent_color") or "#a78bfa",
+                "position": "center"  # Center overlay style
+            })
+        else:
+            mapped_edits.append(e)
+    edits = mapped_edits
+
     ass_path = output_path.replace(".mp4", ".ass")
 
     subtitle_edit = next((e for e in edits if e.get("action") == "add_subtitles"), None)
@@ -532,8 +639,8 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
     text_overlays = [e for e in edits if e.get("action") == "add_text_overlay"]
 
     # Generate ASS AFTER parsing cuts so timing can be remapped
-    print(f"[ASS] animation_style={animation_style}, position={position}, template_id={template_id}")
-    generate_ass(transcript_data, ass_path, position=position, font=font, font_size=font_size, use_outline=use_outline, font_color=font_color, cuts=cuts, animation_style=animation_style, template_id=template_id, subtitle_edit=subtitle_edit)
+    print(f"[ASS] animation_style={animation_style}, position={position}, template_id={template_id}, brand_id={brand_id}")
+    generate_ass(transcript_data, ass_path, position=position, font=font, font_size=font_size, use_outline=use_outline, font_color=font_color, cuts=cuts, animation_style=animation_style, template_id=template_id, subtitle_edit=subtitle_edit, brand_id=brand_id)
     safe_ass = ass_path.replace("\\", "/")
 
     print(f"[Render] Step 0: Probing video metadata for {input_path}")
@@ -594,9 +701,91 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
             z_start = float(ze.get('start', 0))
             z_end = float(ze.get('end', z_start + 2.0))
             print(f"[Zoom] Applying {zoom_type} from {z_start}s to {z_end}s")
-            ok = apply_zoom(working_path, zoom_tmp, zoom_type, z_start, z_end, duration)
+            ok = apply_zoom(
+                working_path, zoom_tmp, zoom_type, z_start, z_end, duration,
+                intensity=float(ze.get('intensity', 1.14) or 1.14),
+            )
             if ok:
                 working_path = zoom_tmp
+
+    # --- Step 1a: Rotoscoping / Background Removal (RVM) ---
+    roto_edit = next((e for e in edits if e.get("action") == "remove_background"), None)
+    if roto_edit:
+        print(f"[Rotoscope] 🎭 Applying RVM background removal (bg_color={roto_edit.get('bg_color', 'transparent')})")
+        try:
+            from app.services.rotoscope_service import remove_background_rvm, composite_on_background
+            from app.services.pexels_service import download_broll as dl_broll_roto
+
+            bg_color = roto_edit.get("bg_color", "transparent")
+            bg_video_query = roto_edit.get("bg_video_query")
+            roto_out_ext = "webm" if bg_color == "transparent" else "mp4"
+            roto_out = output_path.replace(".mp4", f"_rvm.{roto_out_ext}")
+
+            roto_result = remove_background_rvm(
+                input_video_path=working_path,
+                output_path=roto_out,
+                bg_color=bg_color,
+            )
+            if roto_result and os.path.exists(roto_result):
+                if bg_video_query:
+                    # Composite speaker on background stock video
+                    bg_video_path = dl_broll_roto(bg_video_query)
+                    if bg_video_path and os.path.exists(bg_video_path):
+                        composite_out = output_path.replace(".mp4", "_rvm_composite.mp4")
+                        final_composite = composite_on_background(roto_result, bg_video_path, composite_out)
+                        if final_composite and os.path.exists(final_composite):
+                            import shutil as _roto_shutil
+                            _roto_shutil.copy2(final_composite, working_path)
+                            print(f"[Rotoscope] ✅ Speaker composited on background video: {bg_video_query}")
+                        else:
+                            print(f"[Rotoscope] ⚠️ Composite failed, using plain roto output")
+                            import shutil as _roto_shutil
+                            _roto_shutil.copy2(roto_result, working_path)
+                    else:
+                        print(f"[Rotoscope] ⚠️ Background video not found for query '{bg_video_query}', using roto output")
+                        import shutil as _roto_shutil
+                        _roto_shutil.copy2(roto_result, working_path)
+                else:
+                    # Solid color or transparent — replace working_path
+                    import shutil as _roto_shutil
+                    _roto_shutil.copy2(roto_result, working_path)
+                    print(f"[Rotoscope] ✅ Background removed, output: {roto_result}")
+            else:
+                print(f"[Rotoscope] RVM returned no output — skipping rotoscoping step")
+        except Exception as _roto_ex:
+            print(f"[Rotoscope] Rotoscoping failed (non-critical): {_roto_ex}")
+
+    # --- Step 1b: Text Behind Speaker (RVM + Generated Background) ---
+    text_bg_edit = next((e for e in edits if e.get("action") == "set_video_background"), None)
+    if text_bg_edit:
+        _bg_color    = text_bg_edit.get("bg_color", "#0a0a14")
+        _text        = text_bg_edit.get("text")
+        _text_color  = text_bg_edit.get("text_color", "white")
+        _text_opacity= float(text_bg_edit.get("text_opacity", 0.12))
+        _font_size   = int(text_bg_edit.get("font_size", 220))
+        _grad2       = text_bg_edit.get("gradient_color2")
+        print(f"[TextBehind] Applying text-behind-speaker: bg={_bg_color}, text={repr(_text)}")
+        try:
+            from app.services.rotoscope_service import apply_text_behind_speaker
+            _textbg_out = output_path.replace(".mp4", "_textbehind.mp4")
+            _result = apply_text_behind_speaker(
+                input_video_path=working_path,
+                output_path=_textbg_out,
+                text=_text,
+                bg_color=_bg_color,
+                text_color=_text_color,
+                text_opacity=_text_opacity,
+                font_size=_font_size,
+                gradient_color2=_grad2,
+            )
+            if _result and os.path.exists(_result):
+                import shutil as _tbg_shutil
+                _tbg_shutil.copy2(_result, working_path)
+                print(f"[TextBehind] Done — speaker now has custom background with text behind")
+            else:
+                print(f"[TextBehind] Failed — keeping original video")
+        except Exception as _tbg_ex:
+            print(f"[TextBehind] Error (non-critical): {_tbg_ex}")
 
     # --- Step 1c: Color correction (subprocess-based, before graphic overlays) ---
     cc_edits = [e for e in edits if e.get("action") == "color_correction"]
@@ -611,6 +800,13 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 continue
                 
             preset_key = cc.get("preset") or cc.get("lut") or "cinema"
+            if preset_key.endswith(".cube") or "luts/" in preset_key:
+                lut_path = resolve_lut_path(preset_key, brand_id)
+                if lut_path:
+                    safe_path = lut_path.replace("\\", "/").replace(":", "\\:")
+                    filters.append(f"lut3d=file='{safe_path}':enable='between(t,{cc_start},{cc_end})'")
+                continue
+
             base = LUT_PRESETS.get(preset_key, {"brightness": 1.0, "contrast": 1.0, "saturation": 1.0, "hue": 0})
             
             user_b = cc.get("brightness") if cc.get("brightness") is not None else 100
@@ -689,16 +885,23 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
         # A bit complex, but usually V1 is not totally empty
         pass
     else:
-        for (start, end) in v1_keeps:
+        for idx, (start, end) in enumerate(v1_keeps):
             # force consistent display dimensions to avoid concat 'parameters do not match'
             # (iPhone videos have rotation metadata that causes inconsistent segment sizes)
             v = (
                 stream.video
                 .trim(start=start, end=end)
                 .setpts('PTS-STARTPTS')
-                .filter('scale', width, height)
-                .filter('setsar', '1')
             )
+            # Automatic Scale Punch-In (zoom 10%) on odd segments to cover jump-cuts
+            if idx % 2 == 1:
+                zoom_w = (int(1.1 * width) // 2) * 2
+                zoom_h = (int(1.1 * height) // 2) * 2
+                v = v.filter('scale', zoom_w, zoom_h).filter('crop', width, height)
+            else:
+                v = v.filter('scale', width, height)
+                
+            v = v.filter('setsar', '1')
             streams_v.append(v)
             
     if not a1_keeps:
@@ -715,7 +918,13 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
     if streams_v:
         v_out = ffmpeg.concat(*streams_v, v=1, a=0) if len(streams_v) > 1 else streams_v[0]
     if streams_a:
-        a_out = ffmpeg.concat(*streams_a, v=0, a=1) if len(streams_a) > 1 else streams_a[0]
+        if len(streams_a) > 1:
+            current_a = streams_a[0]
+            for next_a in streams_a[1:]:
+                current_a = ffmpeg.filter([current_a, next_a], 'acrossfade', d=0.08, c1='tri', c2='tri')
+            a_out = current_a
+        else:
+            a_out = streams_a[0]
 
     if not v_out or not a_out:
         print("[RenderEngine] Error: V1 or A1 is completely empty. Not supported in this simplified compositing format currently.")
@@ -849,6 +1058,11 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
             props_file = os.path.join(remotion_dir, "props", "_render_props.json")
             os.makedirs(os.path.dirname(props_file), exist_ok=True)
             import json as _json
+            
+            # Find the active vibe config on the timeline
+            vibe_edit = next((e for e in edits if e.get("action") == "set_vibe_config"), None)
+            vibe_config = vibe_edit.get("vibe_config") if vibe_edit else None
+
             with open(props_file, "w", encoding="utf-8") as _f:
                 _json.dump({
                     "styleType": style,
@@ -856,6 +1070,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                     "subtext": subtext.upper(),
                     "accentColor": accent,
                     "transparent": True,   # Overlay mode: only the card, no background
+                    "vibeConfig": vibe_config,
                 }, _f, ensure_ascii=False)
 
             overlay_path = os.path.abspath(working_path.replace(".mp4", f"_remotion_{int(start)}.webm"))
@@ -869,7 +1084,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
             # NOTE: yuva420p requires --image-format png for transparent frames
             # NOTE: --background-color=00000000 tells Remotion to use a transparent background
             render_cmd = (
-                f'npx remotion render src/index.ts {composition}'
+                f'npx remotion render src/index.tsx {composition}'
                 f' "{overlay_path}"'
                 f' "--props={props_file}"'
                 f' --frames 0-{duration_frames - 1}'
@@ -904,7 +1119,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
             # overlay format=auto uses it as transparency mask
             filter_complex = (
                 f"[0:v]trim=0:{start},setpts=PTS-STARTPTS[before];"
-                f"[0:v]trim={start}:{end},setpts=PTS-STARTPTS[during];"
+                f"[0:v]trim={start}:{end},setpts=PTS-STARTPTS,boxblur=15:3,eq=brightness=-0.35:contrast=1.0[during];"
                 f"[0:v]trim={end},setpts=PTS-STARTPTS[after];"
                 f"[1:v]scale=1920:1080,format=yuva420p[webm];"
                 f"[during][webm]overlay=0:0:format=auto[during_out];"
@@ -968,7 +1183,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
 
             print(f"[DynamicCanvas] Rendering {len(elements)} elements at t={start}s")
             render_cmd = (
-                f'npx remotion render src/index.ts DynamicCanvas'
+                f'npx remotion render src/index.tsx DynamicCanvas'
                 f' "{overlay_path}"'
                 f' "--props={props_file}"'
                 f' --frames 0-{duration_frames - 1}'
@@ -1026,12 +1241,13 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 os.remove(overlay_path)
 
 
-    # --- Step 4.4: Hyperframes HTML Canvas & Semantic Scenes ---
-    hyperframes_edits = [e for e in edits if e.get("action") in ("hyperframes_html", "canvas_overlay")]
+    # --- Step 4.4: Remotion HTML Canvas & Semantic Scenes ---
+    GRAPHIC_HTML_ACTIONS = ("hyperframes_html", "canvas_overlay", "add_hyperframes_graphics", "add_motion_graphic", "add_dynamic_graphic")
+    hyperframes_edits = [e for e in edits if e.get("action") in GRAPHIC_HTML_ACTIONS and (e.get("html_content") or e.get("html"))]
     semantic_edits = [e for e in edits if e.get("action") == "semantic_scene" and e.get("scene_data")]
     
     if hyperframes_edits or semantic_edits:
-        print(f"[Hyperframes] Found {len(hyperframes_edits)} html injections and {len(semantic_edits)} semantic scenes. Compositing...")
+        print(f"[Remotion] Found {len(hyperframes_edits)} html injections and {len(semantic_edits)} semantic scenes. Compositing...")
         hyperframes_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'hyperframes_studio'))
         os.makedirs(hyperframes_dir, exist_ok=True)
         
@@ -1067,7 +1283,21 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
         if max_end <= 0.1:
             max_end = float(duration)
                 
-        combined_html = "\n".join([e.get("html_content", "") for e in hyperframes_edits])
+        def _wrap_html_transform(edit_item: dict) -> str:
+            raw = edit_item.get("html_content") or edit_item.get("html") or ""
+            ox = float(edit_item.get("offset_x") or 0.0)
+            oy = float(edit_item.get("offset_y") or 0.0)
+            sx = float(edit_item.get("scale_x") or 1.0)
+            sy = float(edit_item.get("scale_y") or 1.0)
+            if abs(ox) < 0.05 and abs(oy) < 0.05 and abs(sx - 1.0) < 0.01 and abs(sy - 1.0) < 0.01:
+                return raw
+            return (
+                f'<div style="position:absolute;inset:0;transform-origin:center center;'
+                f'transform:translate({ox}%,{oy}%) scale({sx},{sy});'
+                f'pointer-events:none;">{raw}</div>'
+            )
+
+        combined_html = "\n".join([_wrap_html_transform(e) for e in hyperframes_edits])
         
         # Construct semantic scene canvas elements and script code
         semantic_canvas_html = ""
@@ -1075,11 +1305,14 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
         draw_calls = ""
         
         for idx, se in enumerate(semantic_edits):
-            semantic_canvas_html += f'<canvas id="semantic-canvas-{idx}" width="1080" height="1920" style="position: absolute; top: 0; left: 0; width: 1080px; height: 1920px; pointer-events: none;"></canvas>\n'
-            
             scene_data_json = json.dumps(se.get("scene_data"), ensure_ascii=False)
             start = se.get("start", 0.0)
             end = se.get("end", 5.0)
+            
+            is_split = se.get("layout") == "split" or (se.get("scene_data") and se.get("scene_data", {}).get("layout") == "split")
+            canvas_y = 960 if is_split else 0
+            canvas_h = 960 if is_split else 1920
+            semantic_canvas_html += f'<canvas id="semantic-canvas-{idx}" width="1080" height="{canvas_h}" style="position: absolute; top: {canvas_y}px; left: 0; width: 1080px; height: {canvas_h}px; pointer-events: none;"></canvas>\n'
             
             semantic_scripts += f"""
             const sceneData_{idx} = {scene_data_json};
@@ -1087,14 +1320,27 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
             const sceneEnd_{idx} = {end};
             """
             
-            draw_calls += f"drawSemanticScene('semantic-canvas-{idx}', sceneData_{idx}, sceneStart_{idx}, sceneEnd_{idx}, t);\n"
+            is_split_js = "true" if is_split else "false"
+            draw_calls += f"""
+            if (t >= sceneStart_{idx} && t < sceneEnd_{idx}) {{
+                drawSemanticScene('semantic-canvas-{idx}', sceneData_{idx}, sceneStart_{idx}, sceneEnd_{idx}, t);
+                if ({is_split_js}) anySplit = true;
+            }} else {{
+                const canvas_{idx} = document.getElementById('semantic-canvas-{idx}');
+                if (canvas_{idx}) {{
+                    const ctx_{idx} = canvas_{idx}.getContext('2d');
+                    if (ctx_{idx}) ctx_{idx}.clearRect(0, 0, canvas_{idx}.width, canvas_{idx}.height);
+                }}
+            }}
+            """
 
-        # Scale the 1080x1920 design to the actual video resolution
-        scale_factor = width / 1080.0
+        # Design canvas must match video aspect (AI authors for 1920x1080 or 1080x1920)
+        design_w, design_h = (1920, 1080) if width >= height else (1080, 1920)
+        scale_factor = min(width / float(design_w), height / float(design_h))
         
         if combined_html:
-            combined_html = re.sub(r'data-width=[\'"]1080[\'"]', f'data-width="{width}"', combined_html)
-            combined_html = re.sub(r'data-height=[\'"]1920[\'"]', f'data-height="{height}"', combined_html)
+            combined_html = re.sub(r'data-width=[\'"]\d+[\'"]', f'data-width="{width}"', combined_html)
+            combined_html = re.sub(r'data-height=[\'"]\d+[\'"]', f'data-height="{height}"', combined_html)
             
         html_doc = f"""<!doctype html>
 <html lang="en">
@@ -1111,8 +1357,8 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
       html, body {{ width: {width}px; height: {height}px; overflow: hidden; background: transparent !important; }}
       .clip {{ position: absolute; }}
       #root {{ 
-          width: 1080px !important; 
-          height: 1920px !important; 
+          width: {design_w}px !important; 
+          height: {design_h}px !important; 
           transform-origin: top left !important; 
           transform: scale({scale_factor}) !important; 
       }}
@@ -1390,44 +1636,230 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
             f.write(html_doc)
         
         base_name, _ = os.path.splitext(working_path)
-        # Bypassing Puppeteer/Chrome browser rendering completely to reduce CPU/RAM load.
-        # Direct Pillow and FFmpeg rendering is kept as the single optimized graphics pipeline.
-        browser_render_success = False
+        # We render semantic scenes using Remotion for dynamic 3D WebGL scenes, 
+        # camera animations, and high-fidelity staggered overlays!
+        if semantic_edits:
+            print("[SemanticRenderer] Activating dynamic Remotion WebGL & HTML scene compilation pipeline...")
             
-        # If browser rendering failed or skipped, execute the high-fidelity Pillow + FFmpeg fallback!
-        if not browser_render_success and semantic_edits:
-            print("[SemanticRenderer] Headless render failed. Activating high-fidelity Pillow & FFmpeg fallback overlay...")
-            from app.services.semantic_renderer import render_semantic_scene_to_image
+            # Find the active vibe config on the timeline
+            vibe_edit = next((e for e in edits if e.get("action") == "set_vibe_config"), None)
+            vibe_config = vibe_edit.get("vibe_config") if vibe_edit else None
+            
+            # Remotion dir
+            remotion_dir = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "..", "..", "remotion")
+            )
             
             for idx, se in enumerate(semantic_edits):
                 start = float(se.get("start", 0.0))
                 end = float(se.get("end", start + 5.0))
                 scene_data = se.get("scene_data", {})
                 
-                # Render transparent PNG frame
-                png_path = os.path.join(hyperframes_dir, f"semantic_fallback_{idx}.png")
-                render_semantic_scene_to_image(scene_data, png_path, width=width, height=height)
+                duration_sec = end - start
+                duration_frames = min(149, max(30, int(duration_sec * 30)))  # Cap at 149 (composition is 150 frames)
                 
-                if os.path.exists(png_path):
-                    temp_out = base_name + f"_fallback_blend_{idx}.mp4"
-                    fallback_cmd = [
-                        "ffmpeg", "-i", working_path,
-                        "-i", png_path,
-                        "-filter_complex", f"[0:v][1:v]overlay=0:0:format=auto:enable='between(t,{start},{end})'[outv]",
-                        "-map", "[outv]", "-map", "0:a",
-                        "-c:v", "libx264", "-c:a", "copy", "-preset", "fast",
-                        temp_out, "-y", "-loglevel", "error"
-                    ]
-                    fallback_res = subprocess.run(fallback_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
-                    if fallback_res.returncode == 0 and os.path.exists(temp_out):
-                        os.replace(temp_out, working_path)
-                        print(f"[SemanticRenderer] ✅ Pillow overlay successfully applied for scene {idx} ({start}s-{end}s)")
-                    else:
-                        print(f"[SemanticRenderer] FFmpeg fallback overlay failed: {fallback_res.stderr.decode()}")
+                # Write props JSON (avoids Windows quote-escaping issues)
+                props_file = os.path.join(remotion_dir, "props", f"_render_props_semantic_{idx}.json")
+                os.makedirs(os.path.dirname(props_file), exist_ok=True)
+                import json as _json
+                with open(props_file, "w", encoding="utf-8") as _f:
+                    _json.dump({
+                        "vibeConfig": vibe_config,
+                        "sceneData": scene_data,
+                        "transparent": True,
+                    }, _f, ensure_ascii=False)
+                
+                overlay_path = os.path.abspath(working_path.replace(".mp4", f"_semantic_{idx}.webm"))
+                temp_out = base_name + f"_remotion_blend_{idx}.mp4"
+                
+                print(f"[SemanticRenderer] Rendering SemanticScene composition at t={start}s ({duration_frames} frames)")
+                
+                # Render transparent WebM using Remotion CLI
+                render_cmd = (
+                    f'npx remotion render src/index.tsx SemanticScene'
+                    f' "{overlay_path}"'
+                    f' "--props={props_file}"'
+                    f' --frames 0-{duration_frames - 1}'
+                    f' --codec vp8'
+                    f' --image-format png'
+                    f' --pixel-format yuva420p'
+                    f' --background-color 00000000'
+                    f' --log error'
+                )
+                
+                try:
+                    render_result = subprocess.run(
+                        render_cmd,
+                        cwd=remotion_dir,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        shell=True,
+                        timeout=180,  # 3 min max per render
+                    )
+                except subprocess.TimeoutExpired:
+                    print(f"[SemanticRenderer] ⏰ Remotion render timed out for scene {idx}, skipping")
+                    continue
                     
-                    # Cleanup temp PNG
+                if render_result.returncode != 0:
+                    print(f"[SemanticRenderer] Remotion failed: {render_result.stderr.decode(errors='replace')[:250]}")
+                    continue
+                    
+                if not os.path.exists(overlay_path):
+                    print(f"[SemanticRenderer] No overlay file produced, skipping")
+                    continue
+                
+                # Composite WebM onto blurred/dimmed video
+                is_split = se.get("layout") == "split" or (se.get("scene_data") and se.get("scene_data", {}).get("layout") == "split")
+                filter_during = "null" if is_split else "boxblur=15:3,eq=brightness=-0.35:contrast=1.0"
+                blend_cmd = [
+                    "ffmpeg", "-i", working_path,
+                    "-i", overlay_path,
+                    "-filter_complex", (
+                        f"[0:v]trim=0:{start},setpts=PTS-STARTPTS[before];"
+                        f"[0:v]trim={start}:{end},setpts=PTS-STARTPTS,{filter_during}[during];"
+                        f"[0:v]trim={end},setpts=PTS-STARTPTS[after];"
+                        f"[during][1:v]overlay=0:0:format=auto[during_out];"
+                        f"[before][during_out][after]concat=n=3:v=1:a=0[outv]"
+                    ),
+                    "-map", "[outv]", "-map", "0:a",
+                    "-c:v", "libx264", "-c:a", "copy", "-preset", "fast",
+                    temp_out, "-y", "-loglevel", "error"
+                ]
+                
+                blend_res = subprocess.run(blend_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
+                if blend_res.returncode == 0 and os.path.exists(temp_out):
+                    os.replace(temp_out, working_path)
+                    print(f"[SemanticRenderer] ✅ Remotion overlay successfully applied for scene {idx} ({start}s-{end}s)")
+                else:
+                    print(f"[SemanticRenderer] FFmpeg overlay failed: {blend_res.stderr.decode()}")
+                
+                # Cleanup temp files
+                for fpath in (overlay_path, props_file):
                     try:
-                        os.remove(png_path)
+                        if os.path.exists(fpath):
+                            os.remove(fpath)
+                    except:
+                        pass
+
+        # Render custom HTML graphics via Remotion's HtmlGraphicsScene
+        if hyperframes_edits:
+            print(f"[GraphicsRenderer] Activating Remotion HTML Graphics scene compilation pipeline for {len(hyperframes_edits)} edits...")
+            remotion_dir = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "..", "..", "remotion")
+            )
+            base_name, _ = os.path.splitext(working_path)
+            
+            for idx, he in enumerate(hyperframes_edits):
+                start = float(he.get("start", 0.0))
+                end = float(he.get("end", start + 5.0))
+                html_content = he.get("html_content") or he.get("html", "")
+                if not html_content:
+                    continue
+                
+                # Dynamic background transparent cleaning
+                def force_python_transparency(html: str) -> str:
+                    if not html: return ''
+                    cleaned = html
+                    for bg in ["bg-white", "bg-slate-50", "bg-neutral-50", "bg-zinc-50", "bg-gray-50"]:
+                        cleaned = cleaned.replace(bg, "bg-transparent")
+                    import re
+                    def repl(m):
+                        val = m.group(2).strip().lower().replace('!important', '').strip()
+                        is_white_like = val in [
+                            'white', '#fff', '#ffffff', '#f8fafc', '#f3f4f6', 
+                            '#fafafa', '#f5f5f5', '#f9fafb'
+                        ] or '255,255,255' in val or '255, 255, 255' in val or '248,250,252' in val or '243,244,246' in val
+                        if is_white_like:
+                            return 'background-color: transparent !important'
+                        return m.group(0)
+                    cleaned = re.sub(
+                        r'background(-color)?\s*:\s*([^;\'"]+)',
+                        repl,
+                        cleaned,
+                        flags=re.IGNORECASE
+                    )
+                    return cleaned
+                
+                html_content = force_python_transparency(html_content)
+                
+                duration_sec = end - start
+                duration_frames = min(299, max(30, int(duration_sec * 30)))  # Cap at 299
+                
+                props_file = os.path.join(remotion_dir, "props", f"_render_props_graphics_{idx}.json")
+                os.makedirs(os.path.dirname(props_file), exist_ok=True)
+                import json as _json
+                with open(props_file, "w", encoding="utf-8") as _f:
+                    _json.dump({
+                        "htmlContent": html_content,
+                        "transparent": True,
+                    }, _f, ensure_ascii=False)
+                
+                overlay_path = os.path.abspath(working_path.replace(".mp4", f"_graphics_{idx}.webm"))
+                temp_out = base_name + f"_remotion_graphics_blend_{idx}.mp4"
+                
+                print(f"[GraphicsRenderer] Rendering HtmlGraphicsScene composition at t={start}s ({duration_frames} frames)")
+                
+                render_cmd = (
+                    f'npx remotion render src/index.tsx HtmlGraphicsScene'
+                    f' "{overlay_path}"'
+                    f' "--props={props_file}"'
+                    f' --frames 0-{duration_frames - 1}'
+                    f' --codec vp8'
+                    f' --image-format png'
+                    f' --pixel-format yuva420p'
+                    f' --background-color 00000000'
+                    f' --log error'
+                )
+                
+                try:
+                    render_result = subprocess.run(
+                        render_cmd,
+                        cwd=remotion_dir,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        shell=True,
+                        timeout=180,
+                    )
+                except subprocess.TimeoutExpired:
+                    print(f"[GraphicsRenderer] ⏰ Remotion render timed out for graphics {idx}, skipping")
+                    continue
+                    
+                if render_result.returncode != 0:
+                    print(f"[GraphicsRenderer] Remotion failed: {render_result.stderr.decode(errors='replace')[:250]}")
+                    continue
+                    
+                if not os.path.exists(overlay_path):
+                    print(f"[GraphicsRenderer] No overlay file produced, skipping")
+                    continue
+                
+                # Composite WebM onto video using FFmpeg
+                blend_cmd = [
+                    "ffmpeg", "-i", working_path,
+                    "-i", overlay_path,
+                    "-filter_complex", (
+                        f"[0:v]trim=0:{start},setpts=PTS-STARTPTS[before];"
+                        f"[0:v]trim={start}:{end},setpts=PTS-STARTPTS[during];"
+                        f"[0:v]trim={end},setpts=PTS-STARTPTS[after];"
+                        f"[during][1:v]overlay=0:0:format=auto[during_out];"
+                        f"[before][during_out][after]concat=n=3:v=1:a=0[outv]"
+                    ),
+                    "-map", "[outv]", "-map", "0:a",
+                    "-c:v", "libx264", "-c:a", "copy", "-preset", "fast",
+                    temp_out, "-y", "-loglevel", "error"
+                ]
+                
+                blend_res = subprocess.run(blend_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
+                if blend_res.returncode == 0 and os.path.exists(temp_out):
+                    os.replace(temp_out, working_path)
+                    print(f"[GraphicsRenderer] ✅ Graphics overlay successfully applied for graphics {idx} ({start}s-{end}s)")
+                else:
+                    print(f"[GraphicsRenderer] FFmpeg overlay failed: {blend_res.stderr.decode()}")
+                    
+                # Cleanup temp files
+                for fpath in (overlay_path, props_file):
+                    try:
+                        if os.path.exists(fpath):
+                            os.remove(fpath)
                     except:
                         pass
 
@@ -1456,30 +1888,45 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 broll_path = download_broll(q, duration)
             if broll_path:
                 print(f"[RenderEngine] Overlaying broll {broll_path} at {start}-{end}s")
-                # Load B-Roll
                 b_in = ffmpeg.input(broll_path).video
                 # Scale and crop to target resolution, adjust PTS to start at exact timestamp
-                b_scaled = b_in.filter('scale', width, height, force_original_aspect_ratio='increase').filter('crop', width, height).filter('setpts', f'PTS-STARTPTS+{start}/TB')
-                # Apply user color correction to B-Roll
-                b_scaled = apply_color_corrections(b_scaled, edits)
-                # Overlay it onto main video
-                v_out = ffmpeg.overlay(v_out, b_scaled, enable=f"between(t,{start},{end})", eof_action='pass')
+                if broll.get("layout") == "split":
+                    b_scaled = b_in.filter('scale', width, int(height/2), force_original_aspect_ratio='increase').filter('crop', width, int(height/2)).filter('setpts', f'PTS-STARTPTS+{start}/TB')
+                    b_scaled = apply_color_corrections(b_scaled, edits, brand_id=brand_id)
+                    v_out = ffmpeg.overlay(v_out, b_scaled, x=0, y=int(height/2), enable=f"between(t,{start},{end})", eof_action='pass')
+                else:
+                    b_scaled = b_in.filter('scale', width, height, force_original_aspect_ratio='increase').filter('crop', width, height).filter('setpts', f'PTS-STARTPTS+{start}/TB').filter('fade', type='in', start_time=start, duration=0.25)
+                    b_scaled = apply_color_corrections(b_scaled, edits, brand_id=brand_id)
+                    v_out = ffmpeg.overlay(v_out, b_scaled, enable=f"between(t,{start},{end})", eof_action='pass')
             else:
                 # Local professional fallback: Use the original input video stream, but apply a zoom + cyberpunk color grading!
                 print(f"[RenderEngine] No Pexels B-Roll downloaded. Using cinematic fallback grade on input video at {start}-{end}s")
-                b_scaled = (
-                    ffmpeg.input(input_path).video
-                    .filter('trim', start=start, end=end)
-                    .filter('setpts', 'PTS-STARTPTS')
-                    .filter('scale', width, height, force_original_aspect_ratio='increase')
-                    .filter('crop', width, height)
-                    .filter('eq', saturation=1.8, contrast=1.2, brightness=0.05)  # Professional pop color grading
-                    .filter('hue', h="120")  # Cyberpunk gold/cyan tint
-                    .filter('setpts', f'PTS-STARTPTS+{start}/TB')
-                )
-                # Apply user color correction on top of the fallback B-roll
-                b_scaled = apply_color_corrections(b_scaled, edits)
-                v_out = ffmpeg.overlay(v_out, b_scaled, enable=f"between(t,{start},{end})", eof_action='pass')
+                if broll.get("layout") == "split":
+                    b_scaled = (
+                        ffmpeg.input(input_path).video
+                        .filter('trim', start=start, end=end)
+                        .filter('setpts', 'PTS-STARTPTS')
+                        .filter('scale', width, int(height/2), force_original_aspect_ratio='increase')
+                        .filter('crop', width, int(height/2))
+                        .filter('eq', saturation=1.8, contrast=1.2, brightness=0.05)  # Professional pop color grading
+                        .filter('hue', h="120")  # Cyberpunk gold/cyan tint
+                        .filter('setpts', f'PTS-STARTPTS+{start}/TB')
+                    )
+                    b_scaled = apply_color_corrections(b_scaled, edits, brand_id=brand_id)
+                    v_out = ffmpeg.overlay(v_out, b_scaled, x=0, y=int(height/2), enable=f"between(t,{start},{end})", eof_action='pass')
+                else:
+                    b_scaled = (
+                        ffmpeg.input(input_path).video
+                        .filter('trim', start=start, end=end)
+                        .filter('setpts', 'PTS-STARTPTS')
+                        .filter('scale', width, height, force_original_aspect_ratio='increase')
+                        .filter('crop', width, height)
+                        .filter('eq', saturation=1.8, contrast=1.2, brightness=0.05)  # Professional pop color grading
+                        .filter('hue', h="120")  # Cyberpunk gold/cyan tint
+                        .filter('setpts', f'PTS-STARTPTS+{start}/TB')
+                    )
+                    b_scaled = apply_color_corrections(b_scaled, edits, brand_id=brand_id)
+                    v_out = ffmpeg.overlay(v_out, b_scaled, enable=f"between(t,{start},{end})", eof_action='pass')
 
     # --- Step 5: Subtitles via separate subprocess pass (avoids Windows path/space issues) ---
     # We do NOT add the ASS filter to the main graph. Instead we run the main 
@@ -1514,7 +1961,31 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
             if not ok:
                 print(f"[RenderEngine] Main FFmpeg FAILED: {err[:300]}")
                 return False
-            return True
+                
+            mask_edit = next((e for e in edits if e.get("action") == "speaker_masking"), None)
+            is_masking_enabled = mask_edit is not None and mask_edit.get("enabled", False)
+            if is_masking_enabled:
+                unblurred_output = output_path.replace('.mp4', '_unblurred.mp4')
+                import shutil
+                if os.path.exists(output_path):
+                    shutil.copy2(output_path, unblurred_output)
+                    effect_type = mask_edit.get("effect_type", "behind_text")
+                    if effect_type == "blur_bg":
+                        blur_strength = mask_edit.get("blur_strength", 10.0)
+                        temp_blur = output_path.replace('.mp4', '_blur_temp.mp4')
+                        subprocess.run([
+                            'ffmpeg', '-y', '-i', unblurred_output,
+                            '-vf', f'boxblur={blur_strength}',
+                            '-c:a', 'copy', temp_blur
+                        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        if os.path.exists(temp_blur):
+                            os.replace(temp_blur, output_path)
+                    
+                    from app.services.masking_service import apply_speaker_masking
+                    apply_speaker_masking(unblurred_output, output_path, mask_edit, width, height)
+                    
+                    if os.path.exists(unblurred_output):
+                        os.remove(unblurred_output)
     except Exception as e:
         print(f"[RenderEngine] Main FFmpeg Exception: {e}")
         return False
@@ -1522,6 +1993,27 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
     # --- Step 6: Apply ASS subtitles via subprocess (Windows-safe) ---
     if has_subtitles and os.path.exists(ass_path) and os.path.exists(pre_sub_output):
         import tempfile, shutil
+        
+        # Check masking config
+        mask_edit = next((e for e in edits if e.get("action") == "speaker_masking"), None)
+        is_masking_enabled = mask_edit is not None and mask_edit.get("enabled", False)
+        
+        pre_sub_unblurred = None
+        if is_masking_enabled:
+            pre_sub_unblurred = pre_sub_output.replace('.mp4', '_unblurred.mp4')
+            shutil.copy2(pre_sub_output, pre_sub_unblurred)
+            
+            effect_type = mask_edit.get("effect_type", "behind_text")
+            if effect_type == "blur_bg":
+                blur_strength = mask_edit.get("blur_strength", 10.0)
+                temp_blur = pre_sub_output.replace('.mp4', '_blur_temp.mp4')
+                subprocess.run([
+                    'ffmpeg', '-y', '-i', pre_sub_unblurred,
+                    '-vf', f'boxblur={blur_strength}',
+                    '-c:a', 'copy', temp_blur
+                ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if os.path.exists(temp_blur):
+                    os.replace(temp_blur, pre_sub_output)
         
         temp_dir = tempfile.gettempdir()
         # Use a SIMPLE filename with no colons/spaces/special chars for the filter string
@@ -1537,6 +2029,22 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 shutil.copytree(fonts_src, temp_fonts)
             except Exception as e:
                 print(f"[Subtitles] Font copy warning: {e}")
+        elif not os.path.exists(temp_fonts):
+            os.makedirs(temp_fonts, exist_ok=True)
+            
+        # Copy brand-specific fonts to temp_fonts
+        if brand_id:
+            brand_fonts_src = os.path.abspath(os.path.join('uploads', 'brands', brand_id, 'fonts'))
+            if os.path.exists(brand_fonts_src):
+                try:
+                    for f in os.listdir(brand_fonts_src):
+                        src_f = os.path.join(brand_fonts_src, f)
+                        dst_f = os.path.join(temp_fonts, f)
+                        if os.path.isfile(src_f):
+                            shutil.copy2(src_f, dst_f)
+                    print(f"[Subtitles] Copied brand fonts from {brand_fonts_src} to {temp_fonts}")
+                except Exception as e:
+                    print(f"[Subtitles] Brand font copy warning: {e}")
         
         # KEY FIX: Run FFmpeg from temp_dir using RELATIVE filename in filter string.
         # This avoids ALL Windows path escaping issues (drive letter colons, spaces).
@@ -1565,8 +2073,19 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 print(f"[Subtitles] FAILED (code {result.returncode}): {err}")
                 shutil.move(abs_presub, abs_output)
             else:
+                # Apply speaker masking overlay
+                if is_masking_enabled and pre_sub_unblurred and os.path.exists(pre_sub_unblurred):
+                    from app.services.masking_service import apply_speaker_masking
+                    apply_speaker_masking(pre_sub_unblurred, output_path, mask_edit, width, height)
+                
+                # Cleanup presub files
                 if os.path.exists(abs_presub):
                     os.remove(abs_presub)
+                if pre_sub_unblurred and os.path.exists(pre_sub_unblurred):
+                    try:
+                        os.remove(pre_sub_unblurred)
+                    except:
+                        pass
                 print(f"[Subtitles] SUCCESS")
         except Exception as e:
             print(f"[Subtitles] Exception: {e}")
@@ -1603,42 +2122,4 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 os.remove(norm_output)
     
     return True
-
-
-async def render_hyperframes_composition(file_id: str, html_content: str, callback) -> str:
-    from app.main import TMP_DIR
-    hyperframes_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../hyperframes_studio"))
-    
-    # Save html to hyperframes_studio/index.html
-    html_path = os.path.join(hyperframes_dir, "index.html")
-    with open(html_path, "w", encoding="utf-8") as f:
-        f.write(html_content)
-        
-    output_path = os.path.abspath(os.path.join(TMP_DIR, f"{file_id}_hyperframes.mp4"))
-    
-    if callback:
-        await callback("🖌️ Запуск Hyperframes движка (рендеринг в браузере)...")
-    
-    cmd = [
-        "npx", "--yes", "hyperframes", "render",
-        "--output", output_path
-    ]
-    
-    import asyncio
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        cwd=hyperframes_dir,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
-    )
-    
-    stdout, stderr = await process.communicate()
-    
-    if process.returncode != 0:
-        err = stderr.decode('utf-8', errors='replace')
-        print(f"[Hyperframes] Render failed: {err}")
-        return ""
-        
-    print(f"[Hyperframes] SUCCESS -> {output_path}")
-    return output_path
 

@@ -20,6 +20,8 @@ interface ReferencesSidebarProps {
     videoRef?: React.RefObject<HTMLVideoElement | null>;
     selectedSubIndices?: number[];
     subtitleChunks?: any[];
+    onBrandAssetsChange?: (id: string, assets: any) => void;
+    onUpdateSubtitleGlobal?: (field: string, value: any) => void;
 }
 
 interface MusicTrack {
@@ -272,7 +274,9 @@ export default function ReferencesSidebar({
     onDragStateChange,
     videoRef,
     selectedSubIndices,
-    subtitleChunks
+    subtitleChunks,
+    onBrandAssetsChange,
+    onUpdateSubtitleGlobal
 }: ReferencesSidebarProps) {
     const [sidebarTab, setSidebarTab] = useState<'media' | 'color' | 'inspect'>('media');
     const [selectedSubMode, setSelectedSubMode] = useState<'single' | 'all'>('single');
@@ -895,25 +899,17 @@ export default function ReferencesSidebar({
     });
 
     return (
-        <div 
-            className="w-full h-full flex flex-col overflow-hidden relative font-sans select-none text-neutral-800 dark:text-neutral-200"
-            style={{
-                background: "rgba(18, 18, 18, 0.75)",
-                backdropFilter: "blur(30px)",
-                WebkitBackdropFilter: "blur(30px)",
-                borderLeft: "1px solid rgba(255, 255, 255, 0.06)"
-            }}
-        >
+        <div className="w-full h-full flex flex-col overflow-hidden relative font-sans select-none text-neutral-800 dark:text-neutral-200 bg-transparent">
             
             {/* Header Tabs (Sleek Apple Segmented Control) */}
-            <div className="bg-transparent border-b border-white/5 flex flex-col shrink-0 px-4 pt-4 pb-3">
+            <div className="bg-transparent border-b border-white/[0.06] flex flex-col shrink-0 px-4 pt-4 pb-3">
                 <div className="flex items-center justify-between mb-3">
-                    <h2 className="text-[11px] font-bold tracking-widest text-zinc-400 uppercase">control deck</h2>
+                    <h2 className="text-[11px] font-bold tracking-widest text-zinc-400 uppercase">панель управления</h2>
                     {onClose && (
                         <button 
                             onClick={onClose}
                             className="w-6 h-6 rounded-full flex items-center justify-center text-[11px] text-zinc-400 hover:text-white hover:bg-white/10 transition-all cursor-pointer bg-white/5 border border-white/10 shadow-sm"
-                            title="Hide library"
+                            title="Скрыть"
                         >
                             ✕
                         </button>
@@ -925,7 +921,7 @@ export default function ReferencesSidebar({
                         onClick={() => setSidebarTab('media')}
                         className={`flex-1 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all duration-250 flex items-center justify-center gap-1.5 cursor-pointer ${sidebarTab === 'media' ? 'bg-white/10 text-white border border-white/5 shadow-sm' : 'text-zinc-455 hover:text-zinc-200'}`}
                     >
-                        <span>library</span>
+                        <span>ассеты</span>
                     </button>
                     <button 
                         onClick={() => setSidebarTab('color')}
@@ -938,7 +934,7 @@ export default function ReferencesSidebar({
                             onClick={() => setSidebarTab('inspect')}
                             className={`flex-1 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all duration-250 flex items-center justify-center gap-1.5 cursor-pointer ${sidebarTab === 'inspect' ? 'bg-white/10 text-blue-400 border border-white/5 shadow-sm' : 'text-zinc-455 hover:text-zinc-200'}`}
                         >
-                            <span>inspect</span>
+                            <span>свойства</span>
                         </button>
                     )}
                 </div>
@@ -952,19 +948,19 @@ export default function ReferencesSidebar({
                         {isMobile ? (
                             <div className="bg-white/[0.02] rounded-2xl p-3 border border-white/5 text-zinc-355 flex flex-col gap-1.5 shadow-md backdrop-blur-md font-sans">
                                 <span className="text-[10px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
-                                    💡 Touch Tap-to-Insert
+                                    💡 Вставка в одно касание
                                 </span>
                                 <span className="text-[11px] leading-relaxed text-zinc-300 font-medium">
-                                    Tap the "+" button or click "select track" on any card to instantly insert the media element into your timeline.
+                                    Нажмите кнопку «+» или «выбрать трек» на любой карточке, чтобы мгновенно добавить элемент на таймлайн.
                                 </span>
                             </div>
                         ) : (
                             <div className="bg-white/[0.02] rounded-2xl p-3 border border-white/5 text-zinc-355 flex flex-col gap-1.5 shadow-md backdrop-blur-md font-sans">
                                 <span className="text-[10px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
-                                    💡 Interactive Drag & Drop
+                                    💡 Перетаскивание ассетов
                                 </span>
                                 <span className="text-[11px] leading-relaxed text-zinc-300 font-medium">
-                                    Drag any reference card below and drop it directly onto the timeline tracks to overlay visual pacing elements.
+                                    Перетащите любую карточку ассета на дорожки таймлайна, чтобы наложить её на видео.
                                 </span>
                             </div>
                         )}
@@ -1072,8 +1068,8 @@ export default function ReferencesSidebar({
                             <div className="space-y-2">
                                 {additionalAssets.length === 0 ? (
                                     <div className="text-center p-6 bg-white/[0.01] border border-white/5 rounded-2xl">
-                                        <span className="text-[11px] text-zinc-550 font-medium">
-                                            No additional videos uploaded.
+                                        <span className="text-[11px] text-zinc-555 font-medium">
+                                            Нет добавленных видео.
                                         </span>
                                     </div>
                                 ) : (
@@ -1112,11 +1108,11 @@ export default function ReferencesSidebar({
                                                             <span className="w-0.5 h-0.5 rounded-full bg-white/20" />
                                                             {hasTranscript ? (
                                                                 <span className="text-[8.5px] font-semibold text-emerald-400 bg-emerald-950/20 px-1.5 py-0.5 rounded border border-emerald-500/10">
-                                                                    AI Ready
+                                                                    ИИ готов
                                                                 </span>
                                                             ) : (
                                                                 <span className="text-[8.5px] font-semibold text-amber-400 bg-amber-950/20 px-1.5 py-0.5 rounded border border-amber-500/10 animate-pulse">
-                                                                    AI Processing...
+                                                                    ИИ обрабатывает...
                                                                 </span>
                                                             )}
                                                         </div>
@@ -1138,9 +1134,9 @@ export default function ReferencesSidebar({
                                                                 ? 'border-emerald-500 text-emerald-400 bg-emerald-950/80' 
                                                                 : 'border-white/10 hover:border-amber-500 hover:text-amber-500 text-zinc-300'
                                                         }`}
-                                                        title="Stitch clip onto main timeline (V1)"
+                                                        title="Добавить клип на основной таймлайн (V1)"
                                                     >
-                                                        +Main
+                                                        +Основной
                                                     </button>
                                                     
                                                     {/* Overlay as B-Roll V2 Track Button */}
@@ -1154,7 +1150,7 @@ export default function ReferencesSidebar({
                                                                 ? 'border-emerald-500 text-emerald-400 bg-emerald-950/80' 
                                                                 : 'border-white/10 hover:border-amber-500 hover:text-amber-500 text-zinc-300'
                                                         }`}
-                                                        title="Overlay clip as B-Roll (V2)"
+                                                        title="Наложить клип как B-Roll (V2)"
                                                     >
                                                         +B-Roll
                                                     </button>
@@ -1171,7 +1167,7 @@ export default function ReferencesSidebar({
                             <div className="flex items-center justify-between">
                                 <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
                                     <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                                    AI Stable Audio Generator
+                                    ИИ-генератор аудио (Stable Audio)
                                 </h3>
                             </div>
                             
@@ -1181,7 +1177,7 @@ export default function ReferencesSidebar({
                                     <textarea
                                         value={aiPrompt}
                                         onChange={(e) => setAiPrompt(e.target.value)}
-                                        placeholder="e.g. 80s retro lofi study beat, or cinematic deep riser whoosh..."
+                                        placeholder="Например: 80s retro lofi study beat, cinematic deep riser whoosh..."
                                         rows={2}
                                         className="w-full bg-black/40 border border-white/5 rounded-xl px-3 py-2 text-[11px] text-white placeholder-zinc-555 focus:outline-none focus:border-white/20 transition-all resize-none font-sans"
                                     />
@@ -1189,7 +1185,7 @@ export default function ReferencesSidebar({
 
                                 <div className="flex gap-4">
                                     <div className="flex-1 flex flex-col gap-1.5">
-                                        <span className="text-[9.5px] font-semibold text-zinc-400 uppercase tracking-wider">Type</span>
+                                        <span className="text-[9.5px] font-semibold text-zinc-400 uppercase tracking-wider">Тип</span>
                                         <div className="flex bg-black/40 p-0.5 rounded-xl border border-white/5 gap-0.5">
                                             <button
                                                 type="button"
@@ -1198,7 +1194,7 @@ export default function ReferencesSidebar({
                                                     !aiIsBgm ? 'bg-white/10 text-white border border-white/5' : 'text-zinc-455 hover:text-zinc-200'
                                                 }`}
                                             >
-                                                sfx
+                                                эффект (sfx)
                                             </button>
                                             <button
                                                 type="button"
@@ -1207,12 +1203,12 @@ export default function ReferencesSidebar({
                                                     aiIsBgm ? 'bg-white/10 text-white border border-white/5' : 'text-zinc-455 hover:text-zinc-200'
                                                 }`}
                                             >
-                                                music
+                                                музыка
                                             </button>
                                         </div>
                                     </div>
                                     <div className="flex-1 flex flex-col gap-1.5">
-                                        <span className="text-[9.5px] font-semibold text-zinc-400 uppercase tracking-wider">Duration: {aiDuration}s</span>
+                                        <span className="text-[9.5px] font-semibold text-zinc-400 uppercase tracking-wider">Длительность: {aiDuration}с</span>
                                         <input
                                             type="range"
                                             min="3"
@@ -1238,14 +1234,14 @@ export default function ReferencesSidebar({
                                     {isGeneratingAudio ? (
                                         <>
                                             <div className="w-3.5 h-3.5 rounded-full border-[1.5px] border-zinc-900 border-t-transparent animate-spin" />
-                                            <span>Generating via Replicate...</span>
+                                            <span>Генерация через Replicate...</span>
                                         </>
                                     ) : (
                                         <>
                                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                                                 <path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" />
                                             </svg>
-                                            <span>Generate Audio Track</span>
+                                            <span>Сгенерировать аудио</span>
                                         </>
                                     )}
                                 </button>
@@ -1255,13 +1251,13 @@ export default function ReferencesSidebar({
                         {/* AI Generated History & Library */}
                         <div className="space-y-3">
                             <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
-                                AI Generated History
+                                История ИИ-генераций
                             </h3>
                             
                             {mediaLibrary.filter(item => item.id?.startsWith('ai_audio') || item.filename?.startsWith('AI:')).length === 0 ? (
                                 <div className="text-center p-6 bg-white/[0.01] border border-white/5 rounded-2xl">
-                                    <span className="text-[11px] text-zinc-550 font-medium">
-                                        No generated audio tracks yet.
+                                    <span className="text-[11px] text-zinc-555 font-medium">
+                                        Пока нет сгенерированных аудиодорожек.
                                     </span>
                                 </div>
                             ) : (
@@ -1284,10 +1280,10 @@ export default function ReferencesSidebar({
                                                     onDragStart={(e) => handleDragStart(e, "music", {
                                                         name: track.filename,
                                                         title: track.filename,
-                                                        artist: "AI Model",
-                                                        category: "AI Generated",
+                                                        artist: "ИИ Модель",
+                                                        category: "Создано ИИ",
                                                         rel_path: track.path,
-                                                        description: "AI generated soundtrack"
+                                                        description: "Музыкальный трек, созданный ИИ"
                                                     })}
                                                     onDragEnd={() => onDragStateChange?.(null)}
                                                     className={`p-2.5 border rounded-2xl flex items-center justify-between gap-3 transition-all duration-250 cursor-grab active:cursor-grabbing shadow-sm ${
@@ -1324,7 +1320,7 @@ export default function ReferencesSidebar({
                                                                     {track.duration ? `${track.duration.toFixed(1)}s` : '0.0s'}
                                                                 </span>
                                                                 <span className="w-0.5 h-0.5 rounded-full bg-white/20" />
-                                                                <span className="text-[9px] text-zinc-500 font-medium">AI Generated</span>
+                                                                <span className="text-[9px] text-zinc-500 font-medium">Создано ИИ</span>
                                                             </div>
                                                         </div>
                                                     </div>
@@ -1338,7 +1334,7 @@ export default function ReferencesSidebar({
                                                                 : 'bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-200 active:scale-98'
                                                         }`}
                                                     >
-                                                        {isApplied ? 'active' : 'add'}
+                                                        {isApplied ? 'активен' : 'добавить'}
                                                     </button>
                                                 </div>
                                             );
@@ -1350,7 +1346,7 @@ export default function ReferencesSidebar({
                         {/* Video B-Rolls Library */}
                         <div className="space-y-3">
                             <div className="flex items-center justify-between">
-                                <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">video b-roll library</h3>
+                                <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">Библиотека B-Roll перебивок</h3>
                             </div>
                             
                             <div className="grid grid-cols-2 gap-2.5">
@@ -1490,7 +1486,7 @@ export default function ReferencesSidebar({
                                         >
                                             <div className="w-full h-14 bg-black pointer-events-none overflow-hidden opacity-60 group-hover:opacity-90 transition-opacity">
                                                 <iframe
-                                                    srcDoc={`<!doctype html><html><head><meta charset="UTF-8"/><script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script><style>*{margin:0;padding:0;box-sizing:border-box;}html,body{width:100%;height:100%;overflow:hidden;background:#050507;display:flex;align-items:center;justify-content:center;}.clip{position:absolute;}#root{width:1080px;height:1920px;position:relative;transform-origin:top left;transform:scale(0.074);}</style></head><body><div id="root">${item.html}</div></body></html>`}
+                                                    srcDoc={`<!doctype html><html><head><meta charset="UTF-8"/><script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script><script src="https://cdn.tailwindcss.com"></script><style>*{margin:0;padding:0;box-sizing:border-box;}html,body{width:100%;height:100%;overflow:hidden;background:#050507;display:flex;align-items:center;justify-content:center;}.clip{position:absolute;}#root{width:1080px;height:1920px;position:relative;transform-origin:top left;transform:scale(0.074);}</style></head><body><div id="root">${item.html}</div></body></html>`}
                                                     className="w-full h-full border-none rounded-t-2xl"
                                                     style={{ background: 'transparent' }}
                                                     title={`lib-graphic-${item.id}`}

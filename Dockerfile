@@ -77,6 +77,8 @@ ENV PORT=8000
 # Expose Port
 EXPOSE 8000
 
-# Start FastAPI using uvicorn from backend directory
+# Start FastAPI with persistent-data bootstrap (Railway volume → DATA_DIR)
 WORKDIR /app/backend
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port $PORT"]
+RUN chmod +x /app/backend/entrypoint.sh
+ENV DATA_DIR=/app/backend/uploads
+CMD ["sh", "/app/backend/entrypoint.sh"]

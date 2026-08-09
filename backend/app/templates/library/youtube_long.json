@@ -1,0 +1,78 @@
+{
+  "id": "youtube_long",
+  "name": "YouTube Long (Retro Grid & Bento)",
+  "description": "Динамичный стиль YouTube: 3D ретро-сетка на фоне, Bento-карточки, акцентные желтые субтитры Montserrat, кинетические наезды камеры и сплит-экраны.",
+  "preview_url": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=600&auto=format&fit=crop",
+  "subtitles": {
+    "font_management": {
+      "base_sans_font": "Montserrat-ExtraBold.ttf",
+      "accent_serif_font": "CormorantGaramond-Italic.ttf",
+      "font_size_px": 64,
+      "line_height": 1.3,
+      "position_y_percent": 75
+    },
+    "color_palette": {
+      "text_main": "#FFFFFF",
+      "text_muted": "#CCCCCC",
+      "text_accent": "#FACC15",
+      "use_bg_inversion_on_peak": true
+    },
+    "animation": {
+      "type": "word_by_word_fly",
+      "duration_frames": 6,
+      "easing_curve": "cubic-bezier(0.16, 1, 0.3, 1)"
+    },
+    "layout": {
+      "max_words_per_screen": 3,
+      "text_case": "UPPER",
+      "use_shadow": true,
+      "shadow_blur_px": 18,
+      "shadow_opacity": 0.4
+    }
+  },
+  "video_processing": {
+    "audio_cut_parameters": {
+      "silence_threshold_db": -35.0,
+      "min_silence_duration_sec": 0.2,
+      "crossfade_duration_ms": 30
+    },
+    "smart_zoom": {
+      "trigger_on_emotional_peak": true,
+      "zoom_scale_factor": 1.12,
+      "animation_speed_frames": 8
+    },
+    "broll_matching": {
+      "clip_aesthetic_score_threshold": 6.0,
+      "min_broll_duration_sec": 1.5,
+      "max_broll_duration_sec": 3.5
+    }
+  },
+  "sound_design": {
+    "background_music": {
+      "genre_tags": [
+        "tech-lofi",
+        "fast-groove",
+        "retro-grid"
+      ],
+      "target_bpm": 115,
+      "ducking_volume_db": -10
+    },
+    "sfx_trigger_map": [
+      {
+        "event": "video_hard_cut",
+        "sfx_file": "premium_whoosh_soft.wav",
+        "volume_scale": 0.7
+      },
+      {
+        "event": "accent_word_popup",
+        "sfx_file": "digital_click_clean.wav",
+        "volume_scale": 0.5
+      },
+      {
+        "event": "bento_grid_appear",
+        "sfx_file": "smooth_ui_swipe.wav",
+        "volume_scale": 0.6
+      }
+    ]
+  }
+}

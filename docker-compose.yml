@@ -31,12 +31,16 @@ services:
       - "8000:8000"
     environment:
       - PORT=8000
+      - DATA_DIR=/app/backend/uploads
+      - TRIAL_KEY_DAYS=7
+      - TRIAL_TOKENS_LIMIT=250000
     env_file:
       - ./backend/.env
     depends_on:
       - db
       - redis
     volumes:
+      # Persist videos, access keys (admin_store.json), RVM weights across restarts
       - backend_uploads:/app/backend/uploads
       - ./backend/assets:/app/backend/assets
 
@@ -50,7 +54,9 @@ services:
       - "3000:3000"
     environment:
       - PORT=3000
+      # In production set BOTH to the public backend URL
       - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
     depends_on:
       - backend
 

@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from app.api.admin import validate_user_access_key
 from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
 import os
@@ -28,6 +29,7 @@ class ChatRequest(BaseModel):
     active_edits: Optional[list] = None
     focused_item: Optional[dict] = None
     target_format: str = "auto"
+    brand_id: Optional[str] = None
 
 
 class RenderStyleRequest(BaseModel):
@@ -40,13 +42,14 @@ class RenderStyleRequest(BaseModel):
     edits: Optional[list] = None
     edl: Optional[dict] = None
     template_id: Optional[str] = None
+    brand_id: Optional[str] = None
 
 def log_progress(file_id: str, message: str):
     log_path = os.path.join("uploads", f"{file_id}.log")
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(message + "\n")
 
-def process_render_task(file_id: str, edits: list, edl: dict = None, font: str = "Arial", font_size: int = 100, use_outline: bool = True, font_color: str = "White", template_id: str = None, is_pure_addition: bool = False):
+def process_render_task(file_id: str, edits: list, edl: dict = None, font: str = "Arial", font_size: int = 100, use_outline: bool = True, font_color: str = "White", template_id: str = None, is_pure_addition: bool = False, brand_id: str = None):
     """Background task to trigger actual FFmpeg rendering from Agent instructions"""
     lock_path = os.path.join("uploads", f"{file_id}.rendering")
     
@@ -109,8 +112,8 @@ def process_render_task(file_id: str, edits: list, edl: dict = None, font: str =
 
     output_path = os.path.join("uploads", f"{file_id}_rendered.mp4")
     log_progress(file_id, f"🔥 Запущен процесс рендеринга видео со шрифтом {font} (FFmpeg)...")
-    print(f"[RenderTask] Calling render_video: input={video_file}, output={output_path}, edits={len(edits)}")
-    success = render_video(video_file, output_path, transcript_data, edits, edl, font, font_size, use_outline, font_color, template_id=template_id)
+    print(f"[RenderTask] Calling render_video: input={video_file}, output={output_path}, edits={len(edits)}, brand_id={brand_id}")
+    success = render_video(video_file, output_path, transcript_data, edits, edl, font, font_size, use_outline, font_color, template_id=template_id, brand_id=brand_id)
     print(f"[RenderTask] render_video returned: success={success}")
     
     if os.path.exists(lock_path):
@@ -335,22 +338,35 @@ def _parse_json_blocks(text: str) -> list:
 
 
 @router.post("")
-async def chat_with_director(request: ChatRequest, background_tasks: BackgroundTasks):
+async def chat_with_director(request: ChatRequest, background_tasks: BackgroundTasks, _key=Depends(validate_user_access_key)):
     import asyncio
     async def stream_response():
         # --- PHASE 0: Bypass LLM if force_edits is provided ---
         if request.force_edits is not None or request.edl is not None:
             yield json.dumps({"type": "log", "message": "Render Engine: Финализация выбранного варианта..."}) + "\n"
             yield json.dumps({"type": "log", "message": "Render Engine: Запуск FFmpeg пайплайна (EDL Engine)..."}) + "\n"
-            background_tasks.add_task(process_render_task, request.file_id, request.force_edits or [], request.edl, request.font, request.font_size, request.use_outline, request.font_color, request.template_id)
+            background_tasks.add_task(process_render_task, request.file_id, request.force_edits or [], request.edl, request.font, request.font_size, request.use_outline, request.font_color, request.template_id, False, request.brand_id)
             yield json.dumps({"type": "result", "role": "ai", "content": "Принято! Я запустил многослойный рендер (EDL). Через несколько минут результат будет готов.", "variants": []}) + "\n"
             return
             
         yield json.dumps({"type": "log", "message": "Manager Agent: Адаптация запроса и распределение задач..."}) + "\n"
-        await asyncio.sleep(0.5)
+        # Seed the human thought-chain immediately (visible reasoning UI)
+        yield json.dumps({
+            "type": "reasoning_event",
+            "step": "REASONING: analyze prompt",
+            "status": "running",
+            "thought": "Thinking… разбираю ваш запрос",
+            "details": "Thinking… разбираю ваш запрос",
+            "phase": "think",
+            "user_visible": True,
+            "agent": "Cinematic Brain",
+            "progress": 0.08,
+        }) + "\n"
+        await asyncio.sleep(0.35)
 
         is_evaluation = request.message.startswith("SYSTEM_EVALUATION")
         auto_cuts = []
+        topic_boundaries = []
         
         if is_evaluation:
             yield json.dumps({"type": "log", "message": "Evaluation Module: Загружаю свежий рендер в зрительную кору..."}) + "\n"
@@ -358,9 +374,31 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
             yield json.dumps({"type": "log", "message": "Evaluation Module: Анализирую итоговый результат на предмет ошибок..."}) + "\n"
         else:
             yield json.dumps({"type": "log", "message": "Editor Agent: Подготовка контекста и транскрипта..."}) + "\n"
-            await asyncio.sleep(0.5)
+            yield json.dumps({
+                "type": "reasoning_event",
+                "step": "REASONING: analyze media",
+                "status": "running",
+                "thought": "Смотрю исходное видео — если оно сырое, усилю картинку графикой",
+                "details": "Смотрю исходное видео — если оно сырое, усилю картинку графикой",
+                "phase": "analyze",
+                "user_visible": True,
+                "agent": "Cinematic Brain",
+                "progress": 0.15,
+            }) + "\n"
+            await asyncio.sleep(0.4)
             yield json.dumps({"type": "log", "message": "Motion Agent: Читаю визуальный контекст и планирую графику..."}) + "\n"
-            await asyncio.sleep(0.5)
+            yield json.dumps({
+                "type": "reasoning_event",
+                "step": "REASONING: plan graphics",
+                "status": "running",
+                "thought": "Планирую, какие сцены нарисовать и куда их поставить…",
+                "details": "Планирую, какие сцены нарисовать и куда их поставить…",
+                "phase": "plan",
+                "user_visible": True,
+                "agent": "Cinematic Brain",
+                "progress": 0.22,
+            }) + "\n"
+            await asyncio.sleep(0.35)
 
         try:
             from app.workflows.graph import editor_graph
@@ -405,7 +443,7 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
 
             async def run_workflow():
                 try:
-                    async for event in editor_graph.astream_events(initial_state, version="v2"):
+                    async for event in editor_graph.astream_events(initial_state, version="v2", config={"recursion_limit": 100}):
                         await event_queue.put({"type": "graph_event", "data": event})
                 except Exception as e:
                     import traceback
@@ -431,21 +469,33 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
                         # Node execution updates (Technical shims bypassed in favor of clean stages)
                         pass
                             
-                        # Capture active_edits from execute_tools node output
-                        if ev == "on_chain_end" and name == "execute_tools":
+                        # Capture active_edits from execute_single_tool node output
+                        if ev == "on_chain_end" and name == "execute_single_tool":
                             output = event["data"].get("output", {})
                             if "active_edits" in output:
                                 graph_active_edits = output["active_edits"]
-                                print(f"[Chat] execute_tools finished, captured {len(graph_active_edits)} edits")
+                                print(f"[Chat] execute_single_tool finished, captured {len(graph_active_edits)} edits. Yielding to UI...")
+                                yield json.dumps({
+                                    "type": "result",
+                                    "role": "ai",
+                                    "content": "",
+                                    "variants": [],
+                                    "edits": graph_active_edits,
+                                    "ready_to_render": False
+                                }) + "\n"
 
-                        # prepare_context: grab auto_cuts and aspect_ratio
+                        # prepare_context: grab auto_cuts, topic boundaries and aspect_ratio
                         if ev == "on_chain_end" and name == "prepare_context":
                             output = event["data"].get("output", {})
                             graph_aspect_ratio = output.get("aspect_ratio", "vertical")
                             auto_cuts = output.get("auto_cuts", [])
+                            topic_boundaries = output.get("topic_boundaries", []) or []
                             if auto_cuts:
                                 yield json.dumps({"type": "log", "message": f"Editor Agent: Найдено {len(auto_cuts)} затянутых пауз. Они могут быть удалены по вашему запросу."}) + "\n"
                                 await asyncio.sleep(0.3)
+                            if topic_boundaries:
+                                yield json.dumps({"type": "log", "message": f"Editor Agent: Найдено {len(topic_boundaries)} смен темы для переходов."}) + "\n"
+                                await asyncio.sleep(0.2)
 
                         # Critic agent: emit review status to frontend
                         elif ev == "on_chain_end" and name == "critic_agent":
@@ -560,15 +610,52 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
                 active = graph_active_edits
                 print(f"[Chat] Using final graph_active_edits: {len(active)} edits")
             all_edits = list(active)  # Keep all existing edits (including previous cut_out edits)
+            msg_l = request.message.lower()
             # Only apply auto-cuts if user explicitly asks to remove silences, filler words, or repeated takes
-            explicit_cut_request = any(p in request.message.lower() for p in [
-                "тишина", "пауза", "молчание", "вырежи", "удали", "мусор", 
-                "filler", "silence", "pause", "stutter", "повтори", "дубль", "clean"
+            explicit_cut_request = any(p in msg_l for p in [
+                "тишин", "пауз", "молчан", "вырез", "удал", "мусор",
+                "filler", "silence", "pause", "stutter", "повтор", "дубл", "clean",
+                "убр", "сокр", "сжат"
             ])
-            if request.message != "INIT_PLAN" and explicit_cut_request:
+            # Full montage / Shorts flow also implies jump-cuts + transitions
+            full_montage_request = any(p in msg_l for p in [
+                "полный монтаж", "авто-монтаж", "автомонтаж", "смонтируй", "смонтировать",
+                "монтируй", "начинай", "поехали", "сделай всё", "сделай все",
+                "shorts", "reels", "tiktok", "для соцсетей", "динамичн"
+            ])
+            if request.message != "INIT_PLAN" and (explicit_cut_request or full_montage_request):
                 # Remove previous cut_out edits to avoid duplicates before adding fresh auto-cuts
                 all_edits = [e for e in all_edits if e.get("action") != "cut_out"]
                 all_edits.extend(auto_cuts)
+
+                # Director auto-pass: transitions on cut splices + topic changes
+                try:
+                    from app.workflows.timeline_state import TimelineState
+                    from app.workflows.production_memory import ProductionMemory
+                    from app.workflows.production_session import load_session
+                    from app.services.topic_transition_service import ensure_transitions_on_splices
+
+                    session = load_session(request.file_id) or {}
+                    if not session.get("project_id"):
+                        session["project_id"] = request.file_id
+                    timeline = TimelineState(all_edits)
+                    memory = ProductionMemory(session)
+                    auto_logs = ensure_transitions_on_splices(
+                        timeline,
+                        memory,
+                        topic_boundaries,
+                        from_cuts=True,
+                        from_topics=True,
+                        min_gap_sec=2.5,
+                    )
+                    all_edits = timeline.get_serialized_edits()
+                    if auto_logs:
+                        yield json.dumps({
+                            "type": "log",
+                            "message": f"🎬 Режиссёр: поставил {len(auto_logs)} переходов на склейки/смены темы."
+                        }) + "\n"
+                except Exception as tr_err:
+                    print(f"[Chat] Auto splice transitions failed: {tr_err}")
 
             reply_texts = []
             variants = []
@@ -650,16 +737,19 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
                             yield json.dumps({"type": "log", "message": f"🔊 Звук для сцены: {s_asset['name']}"}) + "\n"
                             yield json.dumps({"type": "reasoning", "step": f"🔊 [Инструмент] Звуковой эффект: '{sq}' -> {s_asset['name']}", "status": "done"}) + "\n"
 
-                # add_broll: resolve direct stock video URL
+                # add_broll: resolve to a Three.js composition
                 if edit.get("action") == "add_broll" and "query" in edit and not edit.get("broll_url"):
                     from app.services.pexels_service import resolve_broll_url
-                    dur = float(edit.get("end", 3)) - float(edit.get("start", 0))
-                    ar = graph_aspect_ratio
-                    b_url = resolve_broll_url(edit["query"], dur, aspect_ratio=ar)
-                    if b_url:
-                        edit["broll_url"] = b_url
-                        yield json.dumps({"type": "log", "message": f"📹 Найден b-roll для '{edit['query']}': {b_url[:50]}..."}) + "\n"
-                        yield json.dumps({"type": "reasoning", "step": f"📹 [Инструмент] Поиск B-roll по теме '{edit['query']}': найдено видео Pexels", "status": "done"}) + "\n"
+                    duration = float(edit.get("duration", 4.0))
+                    broll_link = resolve_broll_url(edit["query"], duration, aspect_ratio=graph_aspect_ratio)
+                    if broll_link:
+                        edit["broll_url"] = broll_link
+                        yield json.dumps({"type": "log", "message": f"📹 Найден B-roll на Pexels по теме '{edit['query']}'"}) + "\n"
+                        yield json.dumps({"type": "reasoning", "step": f"📹 [Инструмент] Поиск B-roll по запросу '{edit['query']}': найдено видео Pexels", "status": "done"}) + "\n"
+                    else:
+                        edit["broll_url"] = "remotion_three_js_dynamic"
+                        yield json.dumps({"type": "log", "message": f"🎨 Инициализирована 3D-графика Three.js/Remotion для '{edit['query']}'"}) + "\n"
+                        yield json.dumps({"type": "reasoning", "step": f"🎨 [Инструмент] Инициализация 3D-графики по теме '{edit['query']}': готово", "status": "done"}) + "\n"
 
             # ── Real-Time Preview Mode ─────────────────────────────────────
             # All edits are applied in real-time in the browser via SandboxPlayer.
@@ -667,10 +757,16 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
             if all_edits:
                 yield json.dumps({"type": "log", "message": "Правки применены. Превью доступно в реальном времени."}) + "\n"
 
-            # Log semantic_scene additions
-            overlay_edits = [e for e in all_edits if e.get("action") == "semantic_scene"]
+            # Log generative / semantic graphics additions
+            overlay_edits = [e for e in all_edits if e.get("action") in (
+                "semantic_scene", "hyperframes_html", "add_hyperframes_graphics",
+                "canvas_overlay", "scene_override",
+            )]
             if overlay_edits:
-                yield json.dumps({"type": "log", "message": f"✨ Motion Graphics: добавлено {len(overlay_edits)} семантичных инфографик."}) + "\n"
+                yield json.dumps({
+                    "type": "log",
+                    "message": f"✨ Motion Graphics: добавлено {len(overlay_edits)} графических сцен/плашек."
+                }) + "\n"
 
             # Calculate duration
             duration = 17.0
@@ -716,83 +812,87 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
                 }) + "\n"
                 await asyncio.sleep(0.3)
             else:
-                # 1. Removed fillers & repeated takes
-                fillers_val = len(auto_cuts) if len(auto_cuts) > 0 else 12
-                takes_val = max(1, fillers_val // 4) if len(auto_cuts) > 0 else 3
-                if explicit_cut_request:
-                    yield json.dumps({
-                        "type": "reasoning",
-                        "step": f"Removed {fillers_val} fillers · {takes_val} repeated takes ✓",
-                        "status": "done"
-                    }) + "\n"
-                else:
-                    yield json.dumps({
-                        "type": "reasoning",
-                        "step": "Skipped auto-cuts (raw video preserved) ✓",
-                        "status": "done"
-                    }) + "\n"
-                await asyncio.sleep(0.3)
+                # Human narrative wrap-up (no English tech checklist in the chat)
+                from app.workflows.thought_narrator import enrich_event
 
-                # 2. Found highlights
-                highlights_val = len([e for e in all_edits if e.get("action") in ("camera_zoom", "scene_override")])
-                yield json.dumps({
-                    "type": "reasoning",
-                    "step": f"Found {highlights_val} highlights ✓",
-                    "status": "done"
-                }) + "\n"
-                await asyncio.sleep(0.3)
-
-                # 3. Cut sequence
+                GRAPHIC_ACTIONS = (
+                    "canvas_overlay", "add_motion_graphic", "add_dynamic_graphic",
+                    "add_text_overlay", "hyperframes_html", "add_hyperframes_graphics",
+                    "semantic_scene", "scene_override",
+                )
+                graphics_edits = [e for e in all_edits if e.get("action") in GRAPHIC_ACTIONS]
+                graphics_val = len(graphics_edits)
                 cuts_val = len([e for e in all_edits if e.get("action") == "cut_out"])
                 duration_val = int(duration) if duration > 0 else 17
-                yield json.dumps({
-                    "type": "reasoning",
-                    "step": f"Cut sequence · {cuts_val} cuts · {duration_val}s ✓",
-                    "status": "done"
-                }) + "\n"
-                await asyncio.sleep(0.3)
+                has_bgm = any(
+                    e.get("action") == "add_asset"
+                    and "sfx" not in (e.get("asset_query") or "").lower()
+                    and "whoosh" not in (e.get("asset_query") or "").lower()
+                    for e in all_edits
+                )
 
-                # 4. Added Motion Graphics
-                graphics_val = len([e for e in all_edits if e.get("action") in ("canvas_overlay", "add_motion_graphic", "add_dynamic_graphic", "add_text_overlay")])
-                yield json.dumps({
-                    "type": "reasoning",
-                    "step": f"Added Motion Graphics · {graphics_val} clips ✓",
-                    "status": "done"
-                }) + "\n"
-                await asyncio.sleep(0.3)
+                wrap_thoughts = []
+                if not explicit_cut_request:
+                    wrap_thoughts.append("Видео оставил почти сырым — лучше нарастить эстетику графикой, чем резать вслепую.")
+                elif cuts_val:
+                    wrap_thoughts.append(f"Убрал лишние паузы — осталось около {duration_val}с чистого ритма.")
 
-                # 5. Scored
-                bgm_edit = next((e for e in all_edits if e.get("action") == "add_asset" and "sfx" not in e.get("asset_query", "").lower() and "whoosh" not in e.get("asset_query", "").lower()), None)
-                bgm_genre = "ambient"
-                if bgm_edit:
-                    q = bgm_edit.get("asset_query", "").lower()
-                    if "lofi" in q or "coffee" in q or "chill" in q:
-                        bgm_genre = "lofi"
-                    elif "trap" in q or "anikdote" in q or "pursuit" in q:
-                        bgm_genre = "trap"
-                    elif "phonk" in q or "metamorphosis" in q:
-                        bgm_genre = "phonk"
-                    elif "piano" in q:
-                        bgm_genre = "piano"
-                score_dur = max(5, duration_val - 2)
-                yield json.dumps({
-                    "type": "reasoning",
-                    "step": f"Scored · {score_dur}s {bgm_genre} ✓",
-                    "status": "done"
-                }) + "\n"
-                await asyncio.sleep(0.3)
+                if graphics_val:
+                    wrap_thoughts.append(
+                        f"На таймлайне теперь {graphics_val} графических сцен — можно подвигать их руками, если захочется."
+                    )
+                else:
+                    wrap_thoughts.append("Графику пока не добавлял — скажи, если нужна ещё одна перебивка.")
 
-                # 6. Done status bar
-                yield json.dumps({
-                    "type": "reasoning",
-                    "step": f"Done · {duration_val}s · {cuts_val} cuts · {graphics_val} graphics · 1 score",
-                    "status": "done"
-                }) + "\n"
+                if has_bgm:
+                    wrap_thoughts.append("Фон по звуку тоже на месте — ролик должен ощущаться собраннее.")
+
+                wrap_thoughts.append("Почти готово — собираю короткий ответ для вас…")
+
+                for thought_text in wrap_thoughts:
+                    payload = enrich_event({
+                        "type": "reasoning_event",
+                        "step": f"REASONING: {thought_text[:48]}",
+                        "status": "done",
+                        "details": thought_text,
+                        "thought": thought_text,
+                        "user_visible": True,
+                        "phase": "review",
+                        "agent": "Cinematic Brain",
+                    })
+                    yield json.dumps(payload) + "\n"
+                    await asyncio.sleep(0.12)
             await asyncio.sleep(0.1)
 
             clean_replies = [r for r in reply_texts if r.strip()]
             non_generic = [r for r in clean_replies if r.lower().strip(".! ") not in ("готово", "done", "ready")]
             final_content = "\n\n".join(non_generic) if non_generic else ("\n\n".join(clean_replies) or "Готово.")
+
+            # Brief post-run summary of generative graphics for the user
+            try:
+                GRAPHIC_ACTIONS = (
+                    "hyperframes_html", "add_hyperframes_graphics", "canvas_overlay",
+                    "semantic_scene", "scene_override", "add_motion_graphic", "add_dynamic_graphic",
+                )
+                g_edits = [e for e in all_edits if e.get("action") in GRAPHIC_ACTIONS]
+                if g_edits:
+                    lines = ["Кратко по графике:"]
+                    for ge in g_edits[-5:]:
+                        mode = ge.get("mode") or ge.get("layout") or "overlay"
+                        mode_ru = {
+                            "overlay": "плашка",
+                            "full_broll": "полноэкранный B-roll",
+                            "fullscreen": "полноэкранный B-roll",
+                            "split": "split",
+                        }.get(str(mode), str(mode))
+                        gs = float(ge.get("start", 0) or 0)
+                        ge_end = float(ge.get("end", gs) or gs)
+                        lines.append(f"• {mode_ru} на {gs:.1f}–{ge_end:.1f}с")
+                    summary_block = "\n".join(lines)
+                    if summary_block not in final_content:
+                        final_content = (final_content.rstrip() + "\n\n" + summary_block).strip()
+            except Exception:
+                pass
 
             yield json.dumps({
                 "type": "result",
@@ -812,7 +912,7 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
     return StreamingResponse(stream_response(), media_type="application/x-ndjson")
 
 @router.post("/render")
-async def direct_render_from_ui(request: RenderStyleRequest, background_tasks: BackgroundTasks):
+async def direct_render_from_ui(request: RenderStyleRequest, background_tasks: BackgroundTasks, _key=Depends(validate_user_access_key)):
     """Directly re-render via UI without LLM stream"""
-    background_tasks.add_task(process_render_task, request.file_id, request.edits or [], request.edl, request.font, request.font_size, request.use_outline, request.font_color, request.template_id)
+    background_tasks.add_task(process_render_task, request.file_id, request.edits or [], request.edl, request.font, request.font_size, request.use_outline, request.font_color, request.template_id, False, request.brand_id)
     return {"status": "rendering started"}
