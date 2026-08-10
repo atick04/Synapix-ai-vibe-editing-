@@ -61,7 +61,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     const [fontSize, setFontSize] = useState(100);
     const [fontColor, setFontColor] = useState("White");
     const [useOutline, setUseOutline] = useState(true);
-    const [chat, setChat] = useState<{ role: string, text?: string, steps?: any[], variants?: any[] }[]>([]);
+    const [chat, setChat] = useState<{ role: string, text?: string, steps?: any[], variants?: any[], thoughts?: any[] }[]>([]);
     const [transcript, setTranscript] = useState<any>(null);
     const [mediaLibrary, setMediaLibrary] = useState<any[]>([]);
 

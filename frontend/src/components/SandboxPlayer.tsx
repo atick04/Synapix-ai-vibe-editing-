@@ -44,13 +44,10 @@ interface Edit {
     text_color?: string;
     text_opacity?: number;
     gradient_color2?: string;
+    replace_background?: boolean;
     mode?: string;       // overlay | full_broll | fullscreen | split
     layout?: string;
     design_aspect?: string; // "16:9" | "9:16" — canvas HTML was authored for
-    offset_x?: number;
-    offset_y?: number;
-    scale_x?: number;
-    scale_y?: number;
     preset?: string;
     component?: string;
 
@@ -95,7 +92,6 @@ interface Edit {
     particle_size?: number;
     custom_shader?: string;
     vibe_config?: any;
-    layout?: string;
     is_split?: boolean;
 }
 
