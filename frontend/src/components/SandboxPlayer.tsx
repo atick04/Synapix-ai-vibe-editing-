@@ -5202,7 +5202,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                             pointerEvents: 'none' as const,
                             top: isBrollSplit ? '50%' : 0,
                             height: isBrollSplit ? '50%' : '100%',
-                            objectFit: (isBrollSplit ? 'cover' : 'contain') as const,
+                            objectFit: isBrollSplit ? ('cover' as const) : ('contain' as const),
                             background: 'transparent',
                             backgroundColor: 'transparent'
                         };
