@@ -1,197 +1,347 @@
-import { useState } from "react";
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { apiFetch } from "@/utils/api";
 
 interface ExportModalProps {
-    id: string;
-    API_URL: string;
-    activeEdits: any[];
-    multiTrackEdl: any;
-    fontStyle: string;
-    fontSize: number;
-    fontColor: string;
-    useOutline: boolean;
-    selectedTemplate: string | null;
-    onClose: () => void;
-    onStatusChange: (isRendering: boolean) => void;
-    brandId?: string;
+  id: string;
+  API_URL: string;
+  activeEdits: any[];
+  multiTrackEdl: any;
+  fontStyle: string;
+  fontSize: number;
+  fontColor: string;
+  useOutline: boolean;
+  selectedTemplate: string | null;
+  onClose: () => void;
+  onPaywall?: () => void;
+  onStatusChange: (isRendering: boolean) => void;
+  brandId?: string;
 }
 
-export default function ExportModal({
-    id, API_URL, activeEdits, multiTrackEdl, fontStyle, fontSize, fontColor, useOutline, selectedTemplate, onClose, onStatusChange, brandId
-}: ExportModalProps) {
-    const [exportResolution, setExportResolution] = useState('1080p');
-    const [exportFps, setExportFps] = useState(30);
-    const [exportQuality, setExportQuality] = useState('high');
-    const [exportFormat, setExportFormat] = useState('mp4_h264');
-    const [exportAudioBitrate, setExportAudioBitrate] = useState('192k');
-    const [isExporting, setIsExporting] = useState(false);
-    const [exportDone, setExportDone] = useState(false);
+type Quality = "high" | "medium" | "fast";
+type Resolution = "1080p" | "720p";
 
-    const handleExport = async () => {
+const QUALITY_OPTIONS: { value: Quality; label: string; hint: string }[] = [
+  { value: "fast", label: "Быстрое", hint: "~1 мин · без ротоскопа" },
+  { value: "medium", label: "Обычное", hint: "Баланс скорость / качество" },
+  { value: "high", label: "Высокое", hint: "Дольше · маска если уже есть" },
+];
+
+const RESOLUTION_OPTIONS: { value: Resolution; label: string; hint: string }[] = [
+  { value: "1080p", label: "1080 × 1920", hint: "Рекомендуется для Reels" },
+  { value: "720p", label: "720 × 1280", hint: "Быстрее и легче файл" },
+];
+
+export default function ExportModal({
+  id,
+  API_URL,
+  activeEdits,
+  multiTrackEdl,
+  fontStyle,
+  fontSize,
+  fontColor,
+  useOutline,
+  selectedTemplate,
+  onClose,
+  onPaywall,
+  onStatusChange,
+  brandId,
+}: ExportModalProps) {
+  const [mounted, setMounted] = useState(false);
+  const [resolution, setResolution] = useState<Resolution>("1080p");
+  const [quality, setQuality] = useState<Quality>("fast");
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportDone, setExportDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [statusLine, setStatusLine] = useState("Готов к экспорту");
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
+  const downloadUrl = `${API_URL}/uploads/${id}_rendered.mp4`;
+  const resLabel = resolution === "1080p" ? "1080×1920" : "720×1280";
+  const qualityLabel = QUALITY_OPTIONS.find((q) => q.value === quality)?.label || quality;
+
+  const handleExport = async () => {
+    try {
+      setIsExporting(true);
+      setExportDone(false);
+      setError(null);
+      setStatusLine("Запускаем рендер…");
+      onStatusChange(true);
+
+      // Match preview: prefer subtitle edit fonts over page Arial default
+      const subEdit = activeEdits.find((e: any) => e.action === "add_subtitles");
+      const exportFont = subEdit?.font || fontStyle || "Montserrat-ExtraBold";
+      const exportFontSize = Number(subEdit?.font_size || fontSize || 84);
+      const exportFontColor = subEdit?.font_color || fontColor || "White";
+      const exportOutline =
+        subEdit?.use_outline !== undefined ? !!subEdit.use_outline : useOutline;
+
+      const exportEdits = activeEdits.map((e: any) => {
+        if (e.action !== "add_subtitles") return e;
+        const behind =
+          !!e.behind_speaker ||
+          e.position === "behind_speaker" ||
+          e.position === "behind";
+        return behind
+          ? { ...e, behind_speaker: true, position: e.position || "behind_speaker" }
+          : e;
+      });
+
+      const res = await apiFetch("/api/video/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          file_id: id,
+          resolution,
+          quality,
+          fps: 30,
+          format: "mp4_h264",
+          audio_bitrate: "192k",
+          edits: exportEdits.length > 0 ? exportEdits : null,
+          edl: multiTrackEdl,
+          font: exportFont,
+          font_size: exportFontSize,
+          font_color: exportFontColor,
+          use_outline: exportOutline,
+          template_id: selectedTemplate || "instagram_reels",
+          brand_id: brandId || null,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 402 || data.detail === "free_reel_used") {
+          onPaywall?.();
+          return;
+        }
+        throw new Error(data.detail || `Ошибка ${res.status}`);
+      }
+
+      setStatusLine("Рендерим Instagram Reel…");
+
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = setInterval(async () => {
         try {
-            setIsExporting(true);
-            setExportDone(false);
-            onStatusChange(true);
-            await fetch(`${API_URL}/api/video/export`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    file_id: id,
-                    resolution: exportResolution,
-                    fps: exportFps,
-                    quality: exportQuality,
-                    format: exportFormat,
-                    audio_bitrate: exportAudioBitrate,
-                    edits: activeEdits.length > 0 ? activeEdits : null,
-                    edl: multiTrackEdl,
-                    font: fontStyle,
-                    font_size: fontSize,
-                    font_color: fontColor,
-                    use_outline: useOutline,
-                    template_id: selectedTemplate || null,
-                    brand_id: brandId || null,
-                })
-            });
-            
-            const poll = setInterval(async () => {
-                const st = await fetch(`${API_URL}/api/video/${id}/status`).then(r => r.json());
-                if (st.status === 'ready') {
-                    clearInterval(poll);
-                    setIsExporting(false);
-                    onStatusChange(false);
-                    setExportDone(true);
-                }
-            }, 2000);
-        } catch (error) {
-            console.error(error);
+          const st = await apiFetch(`/api/video/${id}/status`).then((r) => r.json());
+          if (Array.isArray(st.logs) && st.logs.length) {
+            const last = String(st.logs[st.logs.length - 1] || "");
+            if (last) {
+              setStatusLine(
+                last.replace(/^[^\wа-яА-Я🚀⚙️✅❌]+/u, "").slice(0, 90) || last.slice(0, 90)
+              );
+            }
+          }
+          if (st.status === "ready") {
+            if (pollRef.current) clearInterval(pollRef.current);
             setIsExporting(false);
             onStatusChange(false);
+            setExportDone(true);
+            setStatusLine("Готово");
+          }
+        } catch {
+          /* keep polling */
         }
-    };
+      }, 2000);
+    } catch (e: any) {
+      console.error(e);
+      setError(e?.message || "Не удалось запустить экспорт");
+      setIsExporting(false);
+      onStatusChange(false);
+      setStatusLine("Ошибка");
+    }
+  };
 
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-6" style={{ background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(4px)' }}>
-            <div className="w-full max-w-lg rounded-xl border border-zinc-900 overflow-hidden font-sans" style={{ background: '#09090b' }}>
-                <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-900 bg-white/80 dark:bg-neutral-900/80 backdrop-blur-xl">
-                    <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-xl border border-zinc-800 bg-neutral-100 dark:bg-neutral-800 flex items-center justify-center text-amber-500">
-                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                        </div>
-                        <div>
-                            <h2 className="text-[12px] font-bold uppercase tracking-widest text-zinc-200">Настройки экспорта</h2>
-                            <p className="text-[12px] text-zinc-550 lowercase">настройки рендера ffmpeg</p>
-                        </div>
-                    </div>
-                    <button onClick={onClose} className="text-zinc-650 hover:text-zinc-400 transition-colors cursor-pointer">
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" /></svg>
-                    </button>
-                </div>
+  if (!mounted) return null;
 
-                <div className="px-4 py-3.5 space-y-3.5">
-                    <div className="grid grid-cols-2 gap-6">
-                        <div>
-                            <label className="block text-[12px] font-bold text-zinc-550 mb-2 uppercase tracking-widest">Разрешение</label>
-                            <div className="flex gap-2">
-                                {['720p','1080p','4k'].map(r => (
-                                    <button key={r} onClick={() => setExportResolution(r)}
-                                        className={`flex-1 py-1.5 border text-[12px] font-bold transition-all rounded-xl cursor-pointer ${
-                                            exportResolution === r ? 'border-amber-500/30 bg-amber-500/10 text-amber-500' : 'border-zinc-900 bg-zinc-950/20 text-zinc-500 hover:border-zinc-800'
-                                        }`}>{r}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                        <div>
-                            <label className="block text-[12px] font-bold text-zinc-550 mb-2 uppercase tracking-widest">Кадры/сек (fps)</label>
-                            <div className="flex gap-2">
-                                {[24,30,60].map(f => (
-                                    <button key={f} onClick={() => setExportFps(f)}
-                                        className={`flex-1 py-1.5 border text-[12px] font-bold transition-all rounded-xl cursor-pointer ${
-                                            exportFps === f ? 'border-amber-500/30 bg-amber-500/10 text-amber-500' : 'border-zinc-900 bg-zinc-950/20 text-zinc-500 hover:border-zinc-800'
-                                        }`}>{f}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div>
-                        <label className="block text-[12px] font-bold text-zinc-550 mb-2 uppercase tracking-widest">Профиль качества</label>
-                        <div className="grid grid-cols-3 gap-2">
-                            {[{v:'high',l:'высокое',s:'crf 18'},{v:'medium',l:'среднее',s:'crf 23'},{v:'fast',l:'быстрое',s:'crf 28'}].map(q => (
-                                <button key={q.v} onClick={() => setExportQuality(q.v)}
-                                    className={`py-2 px-3 text-left border transition-all rounded-xl cursor-pointer ${
-                                        exportQuality === q.v ? 'border-amber-500/30 bg-amber-500/10' : 'border-zinc-900 bg-zinc-950/20 hover:border-zinc-800'
-                                    }`}>
-                                    <div className={`text-[12px] font-bold lowercase ${exportQuality === q.v ? 'text-amber-500' : 'text-zinc-400'}`}>{q.l}</div>
-                                    <div className="text-[12px] text-zinc-600 mt-0.5">{q.s}</div>
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-6">
-                        <div>
-                            <label className="block text-[12px] font-bold text-zinc-550 mb-2 uppercase tracking-widest">Формат и кодек</label>
-                            <div className="space-y-1.5">
-                                {[{v:'mp4_h264',l:'mp4 / h.264'},{v:'mp4_h265',l:'mp4 / h.265'},{v:'webm',l:'webm / vp9'}].map(fmt => (
-                                    <button key={fmt.v} onClick={() => setExportFormat(fmt.v)}
-                                        className={`w-full py-1.5 px-4 text-left text-[12px] font-bold border transition-all rounded-xl cursor-pointer ${
-                                            exportFormat === fmt.v ? 'border-amber-500/30 bg-amber-500/10 text-amber-500' : 'border-zinc-900 bg-zinc-950/20 text-zinc-500 hover:border-zinc-800'
-                                        }`}>{fmt.l}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                        <div>
-                            <label className="block text-[12px] font-bold text-zinc-550 mb-2 uppercase tracking-widest">Битрейт аудио</label>
-                            <div className="space-y-1.5">
-                                {['128k','192k','320k'].map(ab => (
-                                    <button key={ab} onClick={() => setExportAudioBitrate(ab)}
-                                        className={`w-full py-1.5 px-4 text-left text-[12px] font-bold border transition-all rounded-xl cursor-pointer ${
-                                            exportAudioBitrate === ab ? 'border-amber-500/30 bg-amber-500/10 text-amber-500' : 'border-zinc-900 bg-zinc-950/20 text-zinc-500 hover:border-zinc-800'
-                                        }`}>{ab} {ab === '128k' ? '(стандарт)' : ab === '192k' ? '(высокий)' : '(студия)'}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="px-4 py-3 text-[12px] text-zinc-500 flex items-center gap-2 border border-zinc-900 bg-zinc-950/40">
-                        <svg className="w-3.5 h-3.5 text-amber-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                        <span>итог: <span className="text-zinc-300">{exportResolution} &bull; {exportFps}fps &bull; {exportQuality} &bull; {exportFormat.replace('_','/')} &bull; {exportAudioBitrate}</span></span>
-                    </div>
-
-                    {exportDone && (
-                        <div className="px-4 py-3.5 flex items-center gap-3 border border-amber-500/20 bg-amber-500/5 text-amber-500">
-                            <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                            <span className="text-[12px] font-sans lowercase">Экспорт завершён! Видео готово к скачиванию.</span>
-                            <a href={`${API_URL}/uploads/${id}_rendered.mp4`} download
-                                className="ml-auto px-4 py-1 bg-amber-500 hover:bg-amber-600 text-black font-bold text-[12px] transition-colors rounded-xl"
-                            >
-                                скачать
-                            </a>
-                        </div>
-                    )}
-                </div>
-
-                <div className="px-4 py-3 border-t border-zinc-900 flex justify-end gap-3 bg-white/80 dark:bg-neutral-900/80 backdrop-blur-xl">
-                    <button onClick={onClose} className="px-4 py-2 border border-zinc-900 hover:border-zinc-800 text-[12px] text-zinc-500 hover:text-zinc-300 transition-all rounded-xl cursor-pointer">
-                        отмена
-                    </button>
-                    <button
-                        disabled={isExporting}
-                        onClick={handleExport}
-                        className="flex items-center gap-2 px-5 py-3 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-black text-[12px] font-bold transition-all rounded-xl cursor-pointer"
-                    >
-                        {isExporting ? (
-                            <>
-                                <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
-                                <span>рендеринг...</span>
-                            </>
-                        ) : 'начать экспорт'}
-                    </button>
-                </div>
-            </div>
+  return createPortal(
+    <div
+      className="fixed inset-0 flex items-center justify-center p-4 sm:p-6"
+      style={{
+        zIndex: 100000,
+        background: "rgba(0,0,0,0.78)",
+        backdropFilter: "blur(10px)",
+        WebkitBackdropFilter: "blur(10px)",
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !isExporting) onClose();
+      }}
+    >
+      <div
+        className="relative w-full max-w-[420px] rounded-2xl overflow-hidden border border-white/10 bg-[#121214] shadow-[0_24px_80px_rgba(0,0,0,0.55)]"
+        style={{ zIndex: 100001 }}
+      >
+        <div className="flex items-start justify-between px-5 pt-5 pb-4 border-b border-white/5">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-400/90 mb-1">
+              Instagram Reels
+            </p>
+            <h2 className="text-[18px] font-semibold tracking-tight text-white">Экспорт</h2>
+            <p className="text-[13px] text-neutral-500 mt-1">9:16 · MP4 · H.264</p>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={isExporting}
+            className="w-8 h-8 rounded-full flex items-center justify-center text-neutral-500 hover:text-white hover:bg-white/5 transition-colors disabled:opacity-40"
+            aria-label="Закрыть"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
-    );
+
+        <div className="px-5 py-5 space-y-5">
+          <div>
+            <label className="block text-[12px] font-medium text-neutral-400 mb-2">Разрешение</label>
+            <div className="grid grid-cols-2 gap-2">
+              {RESOLUTION_OPTIONS.map((opt) => {
+                const active = resolution === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    disabled={isExporting}
+                    onClick={() => setResolution(opt.value)}
+                    className={`text-left rounded-xl px-3.5 py-3 border transition-all ${
+                      active
+                        ? "border-sky-400/50 bg-sky-500/10"
+                        : "border-white/8 bg-white/[0.03] hover:border-white/15"
+                    } disabled:opacity-50`}
+                  >
+                    <div className={`text-[13px] font-semibold ${active ? "text-sky-400" : "text-neutral-200"}`}>
+                      {opt.label}
+                    </div>
+                    <div className="text-[11px] text-neutral-500 mt-0.5">{opt.hint}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[12px] font-medium text-neutral-400 mb-2">Качество</label>
+            <div className="grid grid-cols-3 gap-2">
+              {QUALITY_OPTIONS.map((opt) => {
+                const active = quality === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    disabled={isExporting}
+                    onClick={() => setQuality(opt.value)}
+                    className={`text-left rounded-xl px-3 py-3 border transition-all ${
+                      active
+                        ? "border-sky-400/50 bg-sky-500/10"
+                        : "border-white/8 bg-white/[0.03] hover:border-white/15"
+                    } disabled:opacity-50`}
+                  >
+                    <div className={`text-[13px] font-semibold ${active ? "text-sky-400" : "text-neutral-200"}`}>
+                      {opt.label}
+                    </div>
+                    <div className="text-[10px] text-neutral-500 mt-0.5 leading-snug">{opt.hint}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3.5 py-3 flex items-start gap-2.5">
+            <div className="mt-0.5 w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0" />
+            <p className="text-[12px] text-neutral-400 leading-relaxed">
+              Итог: <span className="text-neutral-200">{resLabel}</span>
+              {" · "}
+              <span className="text-neutral-200">{qualityLabel}</span>
+              {" · "}
+              <span className="text-neutral-200">MP4</span>
+            </p>
+          </div>
+
+          {(isExporting || statusLine !== "Готов к экспорту") && !exportDone && (
+            <div className="rounded-xl border border-white/8 bg-black/30 px-3.5 py-3">
+              <div className="flex items-center gap-2 text-[12px] text-neutral-300">
+                {isExporting && (
+                  <svg className="w-3.5 h-3.5 animate-spin text-sky-400 shrink-0" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                  </svg>
+                )}
+                <span className="truncate">{statusLine}</span>
+              </div>
+            </div>
+          )}
+
+          {error && (
+            <div className="rounded-xl border border-red-500/25 bg-red-500/10 px-3.5 py-3 text-[12px] text-red-300">
+              {error}
+            </div>
+          )}
+
+          {exportDone && (
+            <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3.5 py-3.5 flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[13px] font-medium text-emerald-300">Reel готов</p>
+                <p className="text-[11px] text-emerald-400/70 truncate">Можно скачать и выложить в Instagram</p>
+              </div>
+              <a
+                href={downloadUrl}
+                download={`synapix-reel-${id.slice(0, 8)}.mp4`}
+                className="shrink-0 px-3.5 py-2 rounded-lg bg-emerald-400 hover:bg-emerald-300 text-black text-[12px] font-semibold transition-colors"
+              >
+                Скачать
+              </a>
+            </div>
+          )}
+        </div>
+
+        <div className="px-5 py-4 border-t border-white/5 flex items-center justify-between gap-3 bg-black/20">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isExporting}
+            className="px-4 py-2.5 text-[13px] text-neutral-400 hover:text-white transition-colors disabled:opacity-40"
+          >
+            {exportDone ? "Закрыть" : "Отмена"}
+          </button>
+          {!exportDone && (
+            <button
+              type="button"
+              disabled={isExporting}
+              onClick={handleExport}
+              className="flex items-center justify-center gap-2 min-w-[160px] px-5 py-2.5 rounded-xl bg-sky-400 hover:bg-sky-300 disabled:opacity-50 text-black text-[13px] font-semibold transition-colors shadow-[0_0_24px_rgba(56,189,248,0.25)]"
+            >
+              {isExporting ? (
+                <>
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                  </svg>
+                  Рендер…
+                </>
+              ) : (
+                "Экспортировать Reel"
+              )}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
 }

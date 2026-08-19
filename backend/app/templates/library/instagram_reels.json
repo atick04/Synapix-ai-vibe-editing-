@@ -1,0 +1,85 @@
+{
+  "id": "instagram_reels",
+  "name": "Instagram Reels",
+  "description": "Автомонтаж talking-head под Instagram Reels 9:16: кинетические субтитры, зумы на акцентах, B-roll, музыка с ducking и точечные SFX.",
+  "preview_url": "/formats/reels-tiktok.png",
+  "subtitles": {
+    "font_management": {
+      "base_sans_font": "Montserrat-ExtraBold.ttf",
+      "accent_serif_font": "Montserrat-Bold.ttf",
+      "font_size_px": 84,
+      "line_height": 1.25,
+      "position_y_percent": 72
+    },
+    "color_palette": {
+      "text_main": "#FFFFFF",
+      "text_muted": "#E5E5E5",
+      "text_accent": "#FACC15",
+      "use_bg_inversion_on_peak": true
+    },
+    "animation": {
+      "type": "word_by_word_fly",
+      "duration_frames": 6,
+      "easing_curve": "cubic-bezier(0.22, 1, 0.36, 1)"
+    },
+    "layout": {
+      "max_words_per_screen": 3,
+      "text_case": "UPPER",
+      "use_shadow": true,
+      "shadow_blur_px": 16,
+      "shadow_opacity": 0.35
+    }
+  },
+  "video_processing": {
+    "audio_cut_parameters": {
+      "silence_threshold_db": -32.0,
+      "min_silence_duration_sec": 0.35,
+      "crossfade_duration_ms": 40
+    },
+    "smart_zoom": {
+      "trigger_on_emotional_peak": true,
+      "zoom_scale_factor": 1.12,
+      "animation_speed_frames": 10
+    },
+    "broll_matching": {
+      "clip_aesthetic_score_threshold": 6.5,
+      "min_broll_duration_sec": 1.5,
+      "max_broll_duration_sec": 3.5,
+      "prefer_concrete_visual_query": true,
+      "mix": {
+        "talking_head_pct": 60,
+        "title_broll_pct": 25,
+        "stock_broll_pct": 15
+      }
+    }
+  },
+  "sound_design": {
+    "background_music": {
+      "genre_tags": [
+        "reels-energy",
+        "trap-lite",
+        "cinematic-pulse",
+        "lofi-beat"
+      ],
+      "target_bpm": 118,
+      "ducking_volume_db": -14
+    },
+    "sfx_trigger_map": [
+      {
+        "event": "video_hard_cut",
+        "sfx_file": "premium_whoosh_soft.wav",
+        "volume_scale": 0.55
+      },
+      {
+        "event": "accent_word_popup",
+        "sfx_file": "digital_click_clean.wav",
+        "volume_scale": 0.35
+      },
+      {
+        "event": "graphic_appear",
+        "sfx_file": "smooth_ui_swipe.wav",
+        "volume_scale": 0.45
+      }
+    ]
+  }
+}

@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { LanguageProvider } from "@/context/LanguageContext";
+import { AuthProvider } from "@/context/AuthContext";
 import Sidebar from "@/components/Sidebar";
 
 const geistSans = Geist({
@@ -16,8 +17,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Synapix AI studio",
-  description: "Your personal AI Director for auto-editing Shorts and Reels",
+  title: "Synapix — Instagram Reels Auto Editor",
+  description: "AI auto-editor for Instagram Reels: talking-head to ready 9:16 Reel with captions, zooms, B-roll and sound",
   icons: {
     icon: "/favicon.jpg",
   },
@@ -45,10 +46,12 @@ export default function RootLayout({
       <body className="h-[100dvh] flex overflow-hidden bg-neutral-50 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 transition-colors duration-300">
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
           <LanguageProvider>
-            <Sidebar />
-            <div className="flex-1 flex flex-col overflow-hidden">
-              {children}
-            </div>
+            <AuthProvider>
+              <Sidebar />
+              <div className="flex-1 flex flex-col overflow-hidden">
+                {children}
+              </div>
+            </AuthProvider>
           </LanguageProvider>
         </ThemeProvider>
       </body>

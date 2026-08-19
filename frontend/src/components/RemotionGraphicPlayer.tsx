@@ -1,7 +1,13 @@
-import React, { useRef, useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useMemo, useState, useCallback, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { getApiUrl } from '@/utils/api';
+import { GRAPHIC_ANTI_CLIP_CSS, GRAPHIC_CANVAS_FIT_CSS, GRAPHIC_FIT_ROOT_SCRIPT } from '@/utils/graphicCanvasFit';
+import { extractPlateCopy, replacePlateCopy } from '@/utils/graphicPlateCopy';
 
-type DragMode = 'move' | 'resize-TL' | 'resize-TR' | 'resize-BL' | 'resize-BR';
+type DragMode =
+    | 'move'
+    | 'resize-TL' | 'resize-TR' | 'resize-BL' | 'resize-BR'
+    | 'resize-T' | 'resize-B' | 'resize-L' | 'resize-R';
 
 interface ContentBox {
     left: number;
@@ -32,6 +38,7 @@ interface RemotionGraphicPlayerProps {
         scaleX: number;
         scaleY: number;
     }) => void;
+    onHtmlChange?: (html: string) => void;
 }
 
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
@@ -47,21 +54,22 @@ function rewriteViewportUnits(html: string): string {
 }
 
 /**
- * Measure the primary plate/card inside the iframe.
- * Prefer the largest card-like node instead of a union of all text nodes
- * (union creates a huge selection box around sparse compositions).
+ * Measure the primary plate in iframe-local percentages.
+ * getBoundingClientRect() inside a same-origin iframe is relative to the iframe
+ * viewport — never subtract the parent host rect (that sends the box off-screen).
  */
-function measureContentBox(iframe: HTMLIFrameElement): ContentBox | null {
+function measurePlateBox(iframe: HTMLIFrameElement): ContentBox | null {
     try {
         const doc = iframe.contentDocument;
         const win = iframe.contentWindow;
         if (!doc || !win) return null;
 
+        const vw = win.innerWidth || iframe.clientWidth;
+        const vh = win.innerHeight || iframe.clientHeight;
+        if (vw < 2 || vh < 2) return null;
+
         const root = doc.getElementById('root');
         if (!root) return null;
-
-        const iframeRect = iframe.getBoundingClientRect();
-        if (iframeRect.width < 2 || iframeRect.height < 2) return null;
 
         const rootRect = root.getBoundingClientRect();
         const rootArea = Math.max(1, rootRect.width * rootRect.height);
@@ -89,10 +97,10 @@ function measureContentBox(iframe: HTMLIFrameElement): ContentBox | null {
             }
 
             const r = el.getBoundingClientRect();
-            if (r.width < 16 || r.height < 16) return;
-            // Skip full-bleed wrappers
-            if (r.width > rootRect.width * 0.92 && r.height > rootRect.height * 0.92) return;
-            if (r.width * r.height > rootArea * 0.78) return;
+            if (r.width < 12 || r.height < 12) return;
+            if (r.width > vw * 0.92 && r.height > vh * 0.92) return;
+            const area = r.width * r.height;
+            if (area > rootArea * 0.72) return;
 
             const hasText = (el.textContent || '').trim().length > 0;
             const hasBg =
@@ -105,15 +113,17 @@ function measureContentBox(iframe: HTMLIFrameElement): ContentBox | null {
                 el.hasAttribute('data-plate') ||
                 /glass|card|plate|bento|lower/i.test(el.className || '');
 
-            if (!hasText && !hasBg && !hasBorder && !isMedia) return;
+            if (!hasText && !hasBg && !hasBorder && !isMedia && !isPlate) return;
 
-            const area = r.width * r.height;
+            const aspect = r.width / Math.max(1, r.height);
+            const stripPenalty = aspect > 4 || aspect < 0.2 ? 0.35 : 1;
             const score =
                 area *
-                (isPlate ? 4 : 1) *
+                (isPlate ? 5 : 1) *
                 (hasBg ? 2.5 : 1) *
                 (hasBorder ? 1.4 : 1) *
-                (hasText ? 1.2 : 0.6);
+                (hasText ? 1.3 : 0.55) *
+                stripPenalty;
 
             cands.push({
                 left: r.left,
@@ -124,53 +134,68 @@ function measureContentBox(iframe: HTMLIFrameElement): ContentBox | null {
             });
         });
 
-        if (!cands.length) return null;
+        let minL: number;
+        let minT: number;
+        let maxR: number;
+        let maxB: number;
 
-        cands.sort((a, b) => b.score - a.score);
-        const primary = cands[0];
-
-        // Merge nearby siblings that clearly belong to the same plate cluster
-        let minL = primary.left;
-        let minT = primary.top;
-        let maxR = primary.right;
-        let maxB = primary.bottom;
-        const padPx = 48;
-        for (let i = 1; i < Math.min(cands.length, 8); i++) {
-            const c = cands[i];
-            const near =
-                c.left < maxR + padPx &&
-                c.right > minL - padPx &&
-                c.top < maxB + padPx &&
-                c.bottom > minT - padPx;
-            if (!near) continue;
-            // Don't let a far outlier inflate the box past ~55% of the frame
-            const nextW = Math.max(maxR, c.right) - Math.min(minL, c.left);
-            const nextH = Math.max(maxB, c.bottom) - Math.min(minT, c.top);
-            if (nextW > iframeRect.width * 0.62 || nextH > iframeRect.height * 0.78) continue;
-            minL = Math.min(minL, c.left);
-            minT = Math.min(minT, c.top);
-            maxR = Math.max(maxR, c.right);
-            maxB = Math.max(maxB, c.bottom);
+        if (!cands.length) {
+            const clip = root.querySelector('.clip') as HTMLElement | null;
+            if (!clip) return null;
+            const kids = Array.from(clip.children) as HTMLElement[];
+            minL = Infinity;
+            minT = Infinity;
+            maxR = -Infinity;
+            maxB = -Infinity;
+            let any = false;
+            for (const el of kids) {
+                const r = el.getBoundingClientRect();
+                if (r.width < 4 || r.height < 4) continue;
+                any = true;
+                minL = Math.min(minL, r.left);
+                minT = Math.min(minT, r.top);
+                maxR = Math.max(maxR, r.right);
+                maxB = Math.max(maxB, r.bottom);
+            }
+            if (!any) return null;
+        } else {
+            cands.sort((a, b) => b.score - a.score);
+            const primary = cands[0];
+            minL = primary.left;
+            minT = primary.top;
+            maxR = primary.right;
+            maxB = primary.bottom;
+            for (let i = 1; i < Math.min(cands.length, 4); i++) {
+                const c = cands[i];
+                if (c.score < primary.score * 0.45) break;
+                const overlaps =
+                    c.left < maxR + 12 &&
+                    c.right > minL - 12 &&
+                    c.top < maxB + 12 &&
+                    c.bottom > minT - 12;
+                if (!overlaps) continue;
+                const nextW = Math.max(maxR, c.right) - Math.min(minL, c.left);
+                const nextH = Math.max(maxB, c.bottom) - Math.min(minT, c.top);
+                if (nextW > vw * 0.55 || nextH > vh * 0.55) continue;
+                minL = Math.min(minL, c.left);
+                minT = Math.min(minT, c.top);
+                maxR = Math.max(maxR, c.right);
+                maxB = Math.max(maxB, c.bottom);
+            }
         }
 
-        const pad = 6;
-        minL -= pad;
-        minT -= pad;
-        maxR += pad;
-        maxB += pad;
-
-        const left = ((minL - iframeRect.left) / iframeRect.width) * 100;
-        const top = ((minT - iframeRect.top) / iframeRect.height) * 100;
-        const width = ((maxR - minL) / iframeRect.width) * 100;
-        const height = ((maxB - minT) / iframeRect.height) * 100;
-
-        if (width < 3 || height < 3 || width > 98 || height > 98) return null;
+        const pad = 4;
+        const left = ((minL - pad) / vw) * 100;
+        const top = ((minT - pad) / vh) * 100;
+        const width = ((maxR - minL + pad * 2) / vw) * 100;
+        const height = ((maxB - minT + pad * 2) / vh) * 100;
+        if (!Number.isFinite(left) || !Number.isFinite(top) || width < 2 || height < 2) return null;
 
         return {
-            left: round1(clamp(left, 0, 97)),
-            top: round1(clamp(top, 0, 97)),
-            width: round1(clamp(width, 3, 100 - left)),
-            height: round1(clamp(height, 3, 100 - top)),
+            left: round1(left),
+            top: round1(top),
+            width: round1(width),
+            height: round1(height),
         };
     } catch {
         return null;
@@ -193,10 +218,15 @@ export const RemotionGraphicPlayer: React.FC<RemotionGraphicPlayerProps> = ({
     selected = false,
     onSelect,
     onTransformChange,
+    onHtmlChange,
 }) => {
-    const iframeRef = useRef<HTMLIFrameElement>(null);
     const hostRef = useRef<HTMLDivElement>(null);
+    const iframeRef = useRef<HTMLIFrameElement>(null);
+    const selRef = useRef<HTMLDivElement>(null);
     const [contentBox, setContentBox] = useState<ContentBox | null>(null);
+    const [headlineDraft, setHeadlineDraft] = useState('');
+    const [keyDraft, setKeyDraft] = useState('');
+    const [panelPos, setPanelPos] = useState<{ left: number; top: number; width: number } | null>(null);
     const dragRef = useRef<{
         pointerId: number;
         mode: DragMode;
@@ -211,8 +241,6 @@ export const RemotionGraphicPlayer: React.FC<RemotionGraphicPlayerProps> = ({
     } | null>(null);
     const API_URL = getApiUrl();
 
-    // Always match the active preview/export format so plates reflow proportionally
-    // (16:9 → ~36% width cards; 9:16 → ~88% width / capped height).
     const isLandscape = targetRatio >= 1;
     const designW = isLandscape ? 1920 : 1080;
     const designH = isLandscape ? 1080 : 1920;
@@ -236,20 +264,7 @@ export const RemotionGraphicPlayer: React.FC<RemotionGraphicPlayerProps> = ({
 try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlayer]', e); }
 `).join('\n');
 
-        const overlayCaps = isFullBroll
-            ? ''
-            : `
-    .clip .glass-card, .clip .card, .clip .plate, .clip .lower-third,
-    .clip [class*="glass"], .clip [class*="bento"], .clip [data-plate], .clip [data-synapix-plate] {
-      max-width: min(100%, var(--plate-max-w)) !important;
-      max-height: min(100%, var(--plate-max-h)) !important;
-      box-sizing: border-box !important;
-    }
-    .clip > div[style*="position"][style*="absolute"] {
-      max-width: min(100%, var(--plate-max-w));
-      max-height: min(100%, var(--plate-max-h));
-      box-sizing: border-box;
-    }`;
+        const overlayCaps = '';
 
         return `<!doctype html>
 <html lang="en">
@@ -262,31 +277,29 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100% !important; height: 100% !important; overflow: hidden !important; background: transparent !important; background-color: transparent !important; color-scheme: dark !important; }
+    html {
+      --design-w: ${designW}px;
+      --design-h: ${designH}px;
+    }
+    html, body, #root, .clip,
+    .min-h-screen, .h-screen, .w-screen, .inset-0,
+    [class*="min-h-screen"], [class*="h-screen"], [class*="w-screen"] {
+      background: transparent !important;
+      background-color: transparent !important;
+    }
     #root {
-      position: absolute; top: 0; left: 0;
-      width: ${designW}px; height: ${designH}px;
-      transform-origin: top left;
-      background: transparent !important; background-color: transparent !important; overflow: hidden;
-      container-type: size;
       --plate-max-w: ${plateMaxW};
       --plate-max-h: ${plateMaxH};
       --font-hero-169: 3.2cqw; --font-title-169: 1.9cqw; --font-stat-169: 4.2cqw; --font-body-169: 1.25cqw;
       --font-hero-916: 7.2cqw; --font-title-916: 4.6cqw; --font-stat-916: 9.5cqw; --font-body-916: 2.8cqw;
     }
     .clip {
-      position: absolute; inset: 0; width: 100%; height: 100%;
-      container-type: size;
       --plate-max-w: ${plateMaxW};
       --plate-max-h: ${plateMaxH};
-      ${isFullBroll ? 'background: linear-gradient(145deg, #0a0a12 0%, #111827 45%, #0f172a 100%);' : ''}
+      ${isFullBroll ? 'background: linear-gradient(145deg, #0a0a12 0%, #111827 45%, #0f172a 100%) !important;' : ''}
     }
+    ${isFullBroll ? GRAPHIC_CANVAS_FIT_CSS : GRAPHIC_ANTI_CLIP_CSS}
     ${overlayCaps}
-    #root, #root * {
-      word-break: normal;
-      overflow-wrap: normal;
-      hyphens: none;
-    }
   </style>
 </head>
 <body style="background: transparent !important; background-color: transparent !important;">
@@ -294,31 +307,21 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
     ${fragmentWithoutScripts}
   </div>
   <script>
-    const DESIGN_W = ${designW};
-    const DESIGN_H = ${designH};
-    function scaleRoot(){
-      const r = document.getElementById('root');
-      if(!r) return;
-      r.style.width = DESIGN_W + 'px';
-      r.style.height = DESIGN_H + 'px';
-      const s = Math.min(window.innerWidth / DESIGN_W, window.innerHeight / DESIGN_H);
-      r.style.transform = 'scale(' + s + ')';
-      const scaledW = DESIGN_W * s, scaledH = DESIGN_H * s;
-      r.style.left = ((window.innerWidth - scaledW) / 2) + 'px';
-      r.style.top = ((window.innerHeight - scaledH) / 2) + 'px';
-    }
-    window.addEventListener('resize', scaleRoot);
-    scaleRoot();
+    let forceShow = false;
+    window.__DESIGN_W = ${designW};
+    window.__DESIGN_H = ${designH};
+    ${GRAPHIC_FIT_ROOT_SCRIPT}
     ${deferredScripts}
     window.addEventListener('message', function(ev){
       if(!ev.data || ev.data.type !== 'sync_time') return;
       const t = ev.data.time;
+      forceShow = !!ev.data.forceShow;
       const clipStart = ${clipStart};
       const clipEnd = ${clipEnd};
       const clipDur = Math.max(0.15, clipEnd - clipStart);
       const relTime = ev.data.relTime !== undefined ? ev.data.relTime : (t - clipStart);
       const clips = document.querySelectorAll('.clip');
-      const inWindow = t >= clipStart - 0.05 && t <= clipEnd + 0.05;
+      const inWindow = forceShow || (t >= clipStart - 0.05 && t <= clipEnd + 0.05);
       clips.forEach(function(clip){
         clip.style.display = inWindow ? 'block' : 'none';
         if (inWindow) {
@@ -360,20 +363,30 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
     setTimeout(function(){
       try { parent.postMessage({ type: 'graphic_content_updated' }, '*'); } catch(e) {}
     }, 120);
+    setTimeout(function(){
+      try { parent.postMessage({ type: 'graphic_content_updated' }, '*'); } catch(e) {}
+    }, 500);
   </script>
 </body>
 </html>`;
     }, [htmlContent, API_URL, clipStart, clipEnd, designW, designH, isFullBroll, plateMaxW, plateMaxH]);
 
     const isActive = currentTime >= clipStart && currentTime < clipEnd;
+    const isVisible = isActive || selected;
 
     const refreshContentBox = useCallback(() => {
         const iframe = iframeRef.current;
         if (!iframe) return;
-        if (!(currentTime >= clipStart && currentTime < clipEnd)) return;
-        const box = measureContentBox(iframe);
+        if (!(currentTime >= clipStart && currentTime < clipEnd) && !selected) return;
+        const box = measurePlateBox(iframe);
         if (box) setContentBox(box);
-    }, [currentTime, clipStart, clipEnd]);
+    }, [currentTime, clipStart, clipEnd, selected]);
+
+    const postPlateLayout = useCallback((resetBase = false) => {
+        const win = iframeRef.current?.contentWindow;
+        if (!win) return;
+        win.postMessage({ type: 'plate_layout', scaleX, scaleY, resetBase }, '*');
+    }, [scaleX, scaleY]);
 
     useEffect(() => {
         if (!iframeRef.current?.contentWindow) return;
@@ -381,14 +394,31 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
         iframeRef.current.contentWindow.postMessage({
             type: 'sync_time',
             time: currentTime,
-            relTime: relTime >= 0 ? relTime : 0
+            relTime: relTime >= 0 ? relTime : 0,
+            forceShow: selected || isActive,
         }, '*');
-    }, [currentTime, clipStart]);
+        postPlateLayout(false);
+    }, [currentTime, clipStart, selected, isActive, postPlateLayout]);
+
+    useEffect(() => {
+        postPlateLayout(true);
+        const t = window.setTimeout(() => postPlateLayout(false), 80);
+        return () => clearTimeout(t);
+    }, [htmlContent, postPlateLayout]);
+
+    useEffect(() => {
+        postPlateLayout(false);
+        const t = window.setTimeout(() => refreshContentBox(), 40);
+        return () => clearTimeout(t);
+    }, [scaleX, scaleY, postPlateLayout, refreshContentBox]);
 
     useEffect(() => {
         const onMsg = (ev: MessageEvent) => {
             if (ev.data?.type === 'graphic_content_updated') {
-                requestAnimationFrame(() => refreshContentBox());
+                requestAnimationFrame(() => {
+                    refreshContentBox();
+                    requestAnimationFrame(() => refreshContentBox());
+                });
             }
         };
         window.addEventListener('message', onMsg);
@@ -396,16 +426,11 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
     }, [refreshContentBox]);
 
     useEffect(() => {
-        if (!isActive || !interactive) return;
-        const t1 = window.setTimeout(refreshContentBox, 80);
-        const t2 = window.setTimeout(refreshContentBox, 300);
-        const t3 = window.setTimeout(refreshContentBox, 700);
-        return () => {
-            clearTimeout(t1);
-            clearTimeout(t2);
-            clearTimeout(t3);
-        };
-    }, [isActive, interactive, htmlContent, currentTime, refreshContentBox, offsetX, offsetY, scaleX, scaleY]);
+        if ((!isActive && !selected) || !interactive) return;
+        const times = [50, 150, 350, 700, 1200];
+        const ids = times.map((ms) => window.setTimeout(refreshContentBox, ms));
+        return () => ids.forEach(clearTimeout);
+    }, [isActive, selected, interactive, htmlContent, currentTime, refreshContentBox, offsetX, offsetY, scaleX, scaleY]);
 
     const beginDrag = (e: React.PointerEvent, mode: DragMode, captureEl: HTMLElement) => {
         if (!interactive || !onTransformChange) return;
@@ -440,35 +465,38 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
         const dyPct = ((e.clientY - startClientY) / height) * 100;
 
         if (mode === 'move') {
+            // Keep plate mostly inside the frame (tighter than before to avoid clipping)
             onTransformChange({
-                offsetX: round1(clamp(originX + dxPct, -80, 80)),
-                offsetY: round1(clamp(originY + dyPct, -80, 80)),
+                offsetX: round1(clamp(originX + dxPct, -45, 45)),
+                offsetY: round1(clamp(originY + dyPct, -45, 45)),
                 scaleX: originSX,
                 scaleY: originSY,
             });
             return;
         }
 
-        const signX = mode === 'resize-TR' || mode === 'resize-BR' ? 1 : -1;
-        const signY = mode === 'resize-BL' || mode === 'resize-BR' ? 1 : -1;
-        const sens = contentBox ? Math.max(18, contentBox.width) : 50;
-        const nextSX = round1(clamp(originSX + (signX * dxPct) / sens, 0.35, 2.5));
-        const nextSY = round1(clamp(originSY + (signY * dyPct) / sens, 0.35, 2.5));
+        const affectX = mode === 'resize-L' || mode === 'resize-R' || mode === 'resize-TL' || mode === 'resize-TR' || mode === 'resize-BL' || mode === 'resize-BR';
+        const affectY = mode === 'resize-T' || mode === 'resize-B' || mode === 'resize-TL' || mode === 'resize-TR' || mode === 'resize-BL' || mode === 'resize-BR';
+        const signX = mode === 'resize-TR' || mode === 'resize-BR' || mode === 'resize-R' ? 1 : -1;
+        const signY = mode === 'resize-BL' || mode === 'resize-BR' || mode === 'resize-B' ? 1 : -1;
+        const sens = contentBox ? Math.max(16, Math.min(contentBox.width, contentBox.height)) : 40;
+        let nextSX = affectX ? round1(clamp(originSX + (signX * dxPct) / sens, 0.25, 2.8)) : originSX;
+        let nextSY = affectY ? round1(clamp(originSY + (signY * dyPct) / sens, 0.25, 2.8)) : originSY;
 
-        // Uniform scale by default (keeps plate proportions). Hold Alt for free stretch.
-        if (!e.altKey) {
+        const isCorner = mode === 'resize-TL' || mode === 'resize-TR' || mode === 'resize-BL' || mode === 'resize-BR';
+        if (e.shiftKey && isCorner) {
             const dominant = Math.abs(dxPct) >= Math.abs(dyPct) ? nextSX : nextSY;
-            const avg = round1(clamp(dominant, 0.35, 2.5));
-            onTransformChange({ offsetX: originX, offsetY: originY, scaleX: avg, scaleY: avg });
-        } else {
-            onTransformChange({ offsetX: originX, offsetY: originY, scaleX: nextSX, scaleY: nextSY });
+            const avg = round1(clamp(dominant, 0.25, 2.8));
+            nextSX = avg;
+            nextSY = avg;
         }
+        onTransformChange({ offsetX: originX, offsetY: originY, scaleX: nextSX, scaleY: nextSY });
     };
 
     const handlePointerUp = (e: React.PointerEvent) => {
         if (dragRef.current?.pointerId === e.pointerId) {
             dragRef.current = null;
-            try { (e.target as HTMLElement).releasePointerCapture?.(e.pointerId); } catch {}
+            try { (e.target as HTMLElement).releasePointerCapture?.(e.pointerId); } catch { /* ignore */ }
             requestAnimationFrame(() => refreshContentBox());
         }
     };
@@ -485,26 +513,48 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
         zIndex: 5,
     };
 
-    const box: ContentBox = contentBox || { left: 4, top: 6, width: 32, height: 42 };
-    const originX = box.left + box.width / 2;
-    const originY = box.top + box.height / 2;
-    const uniform = Math.abs(scaleX - scaleY) < 0.02;
+    const box: ContentBox = contentBox || { left: 8, top: 8, width: 40, height: 28 };
+
+    useEffect(() => {
+        if (!selected) return;
+        const copy = extractPlateCopy(htmlContent);
+        setHeadlineDraft(copy.headline);
+        setKeyDraft(copy.key);
+    }, [selected, htmlContent]);
+
+    useLayoutEffect(() => {
+        if (!selected || !selRef.current) {
+            setPanelPos(null);
+            return;
+        }
+        const r = selRef.current.getBoundingClientRect();
+        const width = Math.min(360, Math.max(240, r.width));
+        let left = r.left + (r.width - width) / 2;
+        left = clamp(left, 8, window.innerWidth - width - 8);
+        let top = r.bottom + 10;
+        if (top + 168 > window.innerHeight) top = Math.max(8, r.top - 172);
+        setPanelPos({ left, top, width });
+    }, [selected, scaleX, scaleY, offsetX, offsetY, contentBox, headlineDraft, keyDraft]);
+
+    const commitCopy = (headline: string, key: string) => {
+        if (!onHtmlChange) return;
+        const next = replacePlateCopy(htmlContent, headline, key);
+        if (next !== htmlContent) onHtmlChange(next);
+    };
 
     return (
         <div
             ref={hostRef}
             data-graphic-host
             data-design-aspect={designAspect || (isLandscape ? '16:9' : '9:16')}
-            className="absolute inset-0 overflow-visible"
+            className="absolute inset-0"
             style={{
                 zIndex: isFullBroll ? 200 : (selected ? 210 : 100),
-                display: isActive ? 'block' : 'none',
+                display: isVisible ? 'block' : 'none',
                 background: 'transparent',
-                maxWidth: '100%',
-                maxHeight: '100%',
+                overflow: 'visible',
                 pointerEvents: 'none',
-                transform: `translate(${offsetX}%, ${offsetY}%) scale(${scaleX}, ${scaleY})`,
-                transformOrigin: `${originX}% ${originY}%`,
+                transform: `translate(${offsetX}%, ${offsetY}%)`,
             }}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
@@ -514,17 +564,21 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
                 ref={iframeRef}
                 srcDoc={srcDoc}
                 className="w-full h-full motion-graphic-iframe"
-                style={{ border: 'none', background: 'transparent', pointerEvents: 'none' }}
+                scrolling="no"
+                style={{ border: 'none', background: 'transparent', pointerEvents: 'none', overflow: 'visible', colorScheme: 'normal' }}
                 {...({ allowtransparency: "true" } as any)}
                 title="Remotion Graphic Overlay"
                 onLoad={() => {
-                    window.setTimeout(refreshContentBox, 100);
-                    window.setTimeout(refreshContentBox, 400);
+                    postPlateLayout(true);
+                    window.setTimeout(() => { postPlateLayout(false); refreshContentBox(); }, 80);
+                    window.setTimeout(() => { postPlateLayout(false); refreshContentBox(); }, 250);
+                    window.setTimeout(refreshContentBox, 600);
                 }}
             />
 
             {interactive && (
                 <div
+                    ref={selRef}
                     className="absolute"
                     style={{
                         left: `${box.left}%`,
@@ -540,7 +594,15 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
                         boxSizing: 'border-box',
                     }}
                     onPointerDown={(e) => beginDrag(e, 'move', e.currentTarget)}
-                    title={selected ? 'Перетащите · углы — размер (Alt — свободно)' : 'Кликните, чтобы выбрать графику'}
+                    onDoubleClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onSelect?.();
+                        const input = document.getElementById('graphic-plate-headline') as HTMLInputElement | null;
+                        input?.focus();
+                        input?.select();
+                    }}
+                    title={selected ? 'Перетащите · края — ширина/высота · углы — оба · Shift — пропорционально' : 'Кликните, чтобы выбрать графику'}
                 >
                     {selected && (
                         <>
@@ -561,16 +623,138 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
                                 onPointerDown={(e) => beginDrag(e, 'resize-BR', e.currentTarget)}
                             />
                             <div
+                                style={{ ...handleStyle, left: '50%', top: -5, marginLeft: -6, cursor: 'ns-resize' }}
+                                onPointerDown={(e) => beginDrag(e, 'resize-T', e.currentTarget)}
+                            />
+                            <div
+                                style={{ ...handleStyle, left: '50%', bottom: -5, marginLeft: -6, cursor: 'ns-resize' }}
+                                onPointerDown={(e) => beginDrag(e, 'resize-B', e.currentTarget)}
+                            />
+                            <div
+                                style={{ ...handleStyle, top: '50%', left: -5, marginTop: -6, cursor: 'ew-resize' }}
+                                onPointerDown={(e) => beginDrag(e, 'resize-L', e.currentTarget)}
+                            />
+                            <div
+                                style={{ ...handleStyle, top: '50%', right: -5, marginTop: -6, cursor: 'ew-resize' }}
+                                onPointerDown={(e) => beginDrag(e, 'resize-R', e.currentTarget)}
+                            />
+                            <div
                                 className="absolute left-1/2 -translate-x-1/2 -top-5 px-2 py-0.5 rounded text-[9px] font-medium pointer-events-none whitespace-nowrap"
                                 style={{ background: 'rgba(0,0,0,0.75)', color: '#fdba74', border: '1px solid rgba(249,115,22,0.4)' }}
                             >
-                                {uniform
-                                    ? `${Math.round(scaleX * 100)}%`
-                                    : `${Math.round(scaleX * 100)}% × ${Math.round(scaleY * 100)}%`}
+                                {`${Math.round(scaleX * 100)}% × ${Math.round(scaleY * 100)}%`}
                             </div>
                         </>
                     )}
                 </div>
+            )}
+
+            {selected && interactive && panelPos && typeof document !== 'undefined' && createPortal(
+                <div
+                    data-graphic-editor
+                    style={{
+                        position: 'fixed',
+                        left: panelPos.left,
+                        top: panelPos.top,
+                        width: panelPos.width,
+                        zIndex: 9999,
+                        pointerEvents: 'auto',
+                        background: 'rgba(12,12,16,0.94)',
+                        border: '1px solid rgba(249,115,22,0.35)',
+                        borderRadius: 10,
+                        padding: '10px 12px 12px',
+                        boxShadow: '0 12px 32px rgba(0,0,0,0.45)',
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                >
+                    <div style={{ fontSize: 10, color: '#fdba74', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
+                        Плашка
+                    </div>
+                    <label style={{ display: 'block', fontSize: 10, color: '#a1a1aa', marginBottom: 3 }}>Заголовок</label>
+                    <input
+                        id="graphic-plate-headline"
+                        value={headlineDraft}
+                        onChange={(e) => setHeadlineDraft(e.target.value)}
+                        onBlur={() => commitCopy(headlineDraft, keyDraft)}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                commitCopy(headlineDraft, keyDraft);
+                                (e.target as HTMLInputElement).blur();
+                            }
+                        }}
+                        style={{
+                            width: '100%',
+                            marginBottom: 8,
+                            background: '#18181b',
+                            border: '1px solid rgba(255,255,255,0.12)',
+                            borderRadius: 6,
+                            color: '#fafafa',
+                            fontSize: 13,
+                            padding: '6px 8px',
+                            outline: 'none',
+                        }}
+                    />
+                    <label style={{ display: 'block', fontSize: 10, color: '#a1a1aa', marginBottom: 3 }}>Ключ</label>
+                    <input
+                        value={keyDraft}
+                        onChange={(e) => setKeyDraft(e.target.value)}
+                        onBlur={() => commitCopy(headlineDraft, keyDraft)}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                commitCopy(headlineDraft, keyDraft);
+                                (e.target as HTMLInputElement).blur();
+                            }
+                        }}
+                        style={{
+                            width: '100%',
+                            marginBottom: 10,
+                            background: '#18181b',
+                            border: '1px solid rgba(255,255,255,0.12)',
+                            borderRadius: 6,
+                            color: '#FACC15',
+                            fontSize: 13,
+                            padding: '6px 8px',
+                            outline: 'none',
+                        }}
+                    />
+                    <div style={{ display: 'flex', gap: 10 }}>
+                        <label style={{ flex: 1, fontSize: 10, color: '#a1a1aa' }}>
+                            Ширина {Math.round(scaleX * 100)}%
+                            <input
+                                type="range"
+                                min={25}
+                                max={280}
+                                value={Math.round(scaleX * 100)}
+                                onChange={(e) => onTransformChange?.({
+                                    offsetX,
+                                    offsetY,
+                                    scaleX: Number(e.target.value) / 100,
+                                    scaleY,
+                                })}
+                                style={{ width: '100%', accentColor: '#F97316' }}
+                            />
+                        </label>
+                        <label style={{ flex: 1, fontSize: 10, color: '#a1a1aa' }}>
+                            Высота {Math.round(scaleY * 100)}%
+                            <input
+                                type="range"
+                                min={25}
+                                max={280}
+                                value={Math.round(scaleY * 100)}
+                                onChange={(e) => onTransformChange?.({
+                                    offsetX,
+                                    offsetY,
+                                    scaleX,
+                                    scaleY: Number(e.target.value) / 100,
+                                })}
+                                style={{ width: '100%', accentColor: '#F97316' }}
+                            />
+                        </label>
+                    </div>
+                </div>,
+                document.body
             )}
         </div>
     );

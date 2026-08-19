@@ -2,16 +2,16 @@ import os
 import json
 from typing import Dict, Any, List, Optional
 from app.services.ai_service import client
-from app.services.template_service import get_template
+from app.services.template_service import get_template, get_default_template_id
 
-async def get_audio_recommendation(file_id: str, template_id: str = "promotional") -> Dict[str, Any]:
+async def get_audio_recommendation(file_id: str, template_id: str = "instagram_reels") -> Dict[str, Any]:
     """
     Analyzes video visual metadata and speech transcript to recommend:
     1. BGM prompt for Stable Audio 2.5 (tailored to template genre tags and video mood).
     2. Event trigger map for SFX (e.g., video_hard_cut at scene transition points).
     """
     # 1. Load template config
-    tpl = get_template(template_id) or get_template("promotional")
+    tpl = get_template(template_id) or get_template(get_default_template_id())
     
     genre_tags = ["ambient", "lofi", "beats"]
     sfx_map = []

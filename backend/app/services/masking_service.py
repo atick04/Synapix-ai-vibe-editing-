@@ -5,9 +5,9 @@ import json
 import glob
 from PIL import Image
 
-def generate_speaker_mask_video(video_path: str) -> str:
+def generate_speaker_mask_video(video_path: str, preferred_file_id: str = None, allow_generate: bool = True) -> str:
     """
-    Extracts frames from video, runs rembg to isolate the speaker,
+    Extracts frames from video, runs rembg (or RVM) to isolate the speaker,
     saves the alpha channel (mask) for each frame, and compiles
     a grayscale mask video file (black = background, white = subject).
     """
@@ -21,9 +21,61 @@ def generate_speaker_mask_video(video_path: str) -> str:
     file_id = os.path.splitext(os.path.basename(video_path))[0]
     output_mask_path = os.path.join(base_dir, f"{file_id}_mask.mp4").replace("\\", "/")
 
+    # Prefer project-level cached masks (from live RVM preview) — never burn minutes regenerating.
+    project_ids = []
+    if preferred_file_id:
+        project_ids.append(preferred_file_id)
+    import re
+    m = re.match(r"^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", file_id, re.I)
+    if m:
+        project_ids.append(m.group(1))
+    for pid in project_ids:
+        for cand in (
+            os.path.join(base_dir, f"{pid}_rvm_mask.mp4").replace("\\", "/"),
+            os.path.join(base_dir, f"{pid}_mask.mp4").replace("\\", "/"),
+        ):
+            if os.path.exists(cand) and os.path.getsize(cand) > 0:
+                print(f"[Masking Service] ✅ Reusing cached mask {cand}")
+                return cand
+
     # If already generated and valid, return it
     if os.path.exists(output_mask_path) and os.path.getsize(output_mask_path) > 0:
         return output_mask_path
+
+    if not allow_generate:
+        print("[Masking Service] No cached mask and generation disabled (fast export).")
+        return None
+
+    # Prefer RVM grayscale matte (same engine as preview) when available
+    try:
+        from app.services.rotoscope_service import remove_background_rvm
+        alpha_marker = os.path.join(base_dir, f"{file_id}_rvm_alpha.webm").replace("\\", "/")
+        print(f"[Masking Service] Trying RVM mask for behind_text…")
+        remove_background_rvm(video_path, alpha_marker, bg_color="transparent")
+        # RVM writes sibling *_rvm_mask.mp4 or a .mask_only pointer
+        candidates = [
+            os.path.join(base_dir, f"{file_id}_rvm_mask.mp4").replace("\\", "/"),
+            alpha_marker.replace("_rvm_alpha.webm", "_rvm_mask.mp4"),
+            os.path.splitext(alpha_marker)[0] + "_mask.mp4",
+        ]
+        if os.path.exists(alpha_marker + ".mask_only"):
+            try:
+                with open(alpha_marker + ".mask_only", "r", encoding="utf-8") as f:
+                    candidates.insert(0, f.read().strip().replace("\\", "/"))
+            except OSError:
+                pass
+        for cand in candidates:
+            if cand and os.path.exists(cand) and os.path.getsize(cand) > 0:
+                try:
+                    import shutil
+                    shutil.copy2(cand, output_mask_path)
+                    print(f"[Masking Service] ✅ Using RVM mask → {output_mask_path}")
+                    return output_mask_path
+                except Exception as e:
+                    print(f"[Masking Service] RVM mask copy failed: {e}")
+                    return cand
+    except Exception as e:
+        print(f"[Masking Service] RVM path unavailable ({e}); falling back to rembg")
 
     # Get video properties (fps)
     cmd = [
@@ -144,8 +196,19 @@ def apply_speaker_masking(sub_free_path: str, subtitled_path: str, mask_edit: di
     sub_free_path = os.path.abspath(sub_free_path).replace("\\", "/")
     subtitled_path = os.path.abspath(subtitled_path).replace("\\", "/")
     
-    # 1. Run masking service to get the grayscale mask video
-    mask_path = generate_speaker_mask_video(sub_free_path)
+    # 1. Prefer explicit cached mask from edit, else look up / optionally generate
+    mask_path = mask_edit.get("mask_path")
+    if mask_path and os.path.exists(mask_path):
+        mask_path = os.path.abspath(mask_path).replace("\\", "/")
+        print(f"[Masking] Using provided mask: {mask_path}")
+    else:
+        preferred = mask_edit.get("source_file_id")
+        allow_gen = bool(mask_edit.get("allow_generate", False))
+        mask_path = generate_speaker_mask_video(
+            sub_free_path,
+            preferred_file_id=preferred,
+            allow_generate=allow_gen,
+        )
     if not mask_path or not os.path.exists(mask_path):
         print("[Masking] Failed to generate speaker mask video. Skipping effect.")
         return False
@@ -187,9 +250,16 @@ def apply_speaker_masking(sub_free_path: str, subtitled_path: str, mask_edit: di
     try:
         res = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if os.path.exists(temp_out):
-            if os.path.exists(subtitled_path):
-                os.remove(subtitled_path)
-            shutil.move(temp_out, subtitled_path)
+            try:
+                from app.services.video_service import safe_replace
+                safe_replace(temp_out, subtitled_path)
+            except Exception:
+                if os.path.exists(subtitled_path):
+                    try:
+                        os.remove(subtitled_path)
+                    except OSError:
+                        pass
+                shutil.move(temp_out, subtitled_path)
             print("[Masking] Successfully applied speaker masking!")
             return True
     except Exception as e:
@@ -198,6 +268,9 @@ def apply_speaker_masking(sub_free_path: str, subtitled_path: str, mask_edit: di
             err_msg = e.stderr.decode("utf-8", errors="replace")
         print(f"[Masking] FFmpeg masking apply failed: {e}. Stderr: {err_msg}")
         if os.path.exists(temp_out):
-            os.remove(temp_out)
+            try:
+                os.remove(temp_out)
+            except OSError:
+                pass
             
     return False

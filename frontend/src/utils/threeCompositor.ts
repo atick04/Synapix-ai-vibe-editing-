@@ -114,22 +114,15 @@ export class ThreeCompositor {
   private overlayMaterial: THREE.MeshBasicMaterial;
   private overlayMesh: THREE.Mesh;
 
-  // Particle transition system
-  private particleGeometry: THREE.BufferGeometry;
-  private particleMaterial: THREE.PointsMaterial;
-  private particleSystem: THREE.Points;
-  private particleTime = 0;
-  private isTransitionActive = false;
-
   // 3D Motion Graphics Overlay
   private scene3d: THREE.Scene;
   private camera3d: THREE.PerspectiveCamera;
   private activeStyle: string | null = null;
   private mesh3d: THREE.Object3D | null = null;
-  private points3d: THREE.Points | null = null;
   private gridHelper3d: THREE.GridHelper | null = null;
   private speakerMesh: THREE.Mesh | null = null;
   private speakerMaterial: THREE.ShaderMaterial | null = null;
+  private activeSignature = "";
 
   constructor(canvas: HTMLCanvasElement, video: HTMLVideoElement, overlayCanvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -194,47 +187,7 @@ export class ThreeCompositor {
     this.overlayMesh = new THREE.Mesh(geometry, this.overlayMaterial);
     this.scene.add(this.overlayMesh);
 
-    // 5. Setup 3D Particle system for transitions
-    const particleCount = 200;
-    const positions = new Float32Array(particleCount * 3);
-    const velocities = new Float32Array(particleCount * 3);
-    const colors = new Float32Array(particleCount * 3);
-
-    for (let i = 0; i < particleCount; i++) {
-      positions[i * 3] = (Math.random() - 0.5) * 2.0;
-      positions[i * 3 + 1] = (Math.random() - 0.5) * 2.0;
-      positions[i * 3 + 2] = 0.1;
-
-      velocities[i * 3] = (Math.random() - 0.5) * 1.5;
-      velocities[i * 3 + 1] = (Math.random() - 0.5) * 1.5;
-      velocities[i * 3 + 2] = 0.0;
-
-      // Premium gold / cyan particles
-      const isGold = Math.random() > 0.5;
-      colors[i * 3] = isGold ? 1.0 : 0.0;
-      colors[i * 3 + 1] = isGold ? 0.8 : 0.8;
-      colors[i * 3 + 2] = isGold ? 0.1 : 1.0;
-    }
-
-    this.particleGeometry = new THREE.BufferGeometry();
-    this.particleGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    this.particleGeometry.setAttribute('velocity', new THREE.BufferAttribute(velocities, 3));
-    this.particleGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
-    this.particleMaterial = new THREE.PointsMaterial({
-      size: 0.04,
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.0,
-      blending: THREE.AdditiveBlending,
-      depthTest: false,
-      depthWrite: false,
-    });
-
-    this.particleSystem = new THREE.Points(this.particleGeometry, this.particleMaterial);
-    this.scene.add(this.particleSystem);
-
-    // 6. Setup 3D Overlay Scene & Camera
+    // 5. Setup 3D Overlay Scene & Camera
     this.scene3d = new THREE.Scene();
     this.camera3d = new THREE.PerspectiveCamera(60, canvas.width / canvas.height, 0.1, 1000);
 
@@ -252,22 +205,6 @@ export class ThreeCompositor {
     this.camera3d.aspect = width / height;
     this.camera3d.updateProjectionMatrix();
   }
-
-  // Trigger particle transition burst
-  public triggerTransition() {
-    this.isTransitionActive = true;
-    this.particleTime = 0;
-    this.particleMaterial.opacity = 0.8;
-
-    const positions = this.particleGeometry.attributes.position.array as Float32Array;
-    for (let i = 0; i < positions.length / 3; i++) {
-      positions[i * 3] = (Math.random() - 0.5) * 0.5;
-      positions[i * 3 + 1] = (Math.random() - 0.5) * 0.5;
-    }
-    this.particleGeometry.attributes.position.needsUpdate = true;
-  }
-
-  private activeSignature = "";
 
   // Manage 3D Mesh initialization and animation based on style
   private update3dScene(activeMG: any, frame: number, isYoutubeLong: boolean, settings: ThreeCompositorSettings) {
@@ -317,31 +254,13 @@ export class ThreeCompositor {
         (this.gridHelper3d.material as THREE.Material).opacity = 0.4;
         this.scene3d.add(this.gridHelper3d);
 
-      } else if (style === 'liquid') {
-        this.camera3d.position.set(0, 3, 5);
-        this.camera3d.lookAt(0, 0, 0);
-
-        const particleCount = 400;
-        const positions = new Float32Array(particleCount * 3);
-        const geometry = new THREE.BufferGeometry();
-
-        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        const material = new THREE.PointsMaterial({
-          color: accentColor,
-          size: 0.08,
-          transparent: true,
-          opacity: 0.8,
-        });
-
-        this.points3d = new THREE.Points(geometry, material);
-        this.scene3d.add(this.points3d);
-
       } else if (style === 'custom') {
-        const actualGeom = (geometryType === 'particles') ? 'dna'
-                         : (geometryType === 'torus_knot') ? 'torusKnot'
+        const actualGeom = (geometryType === 'torus_knot') ? 'torusKnot'
                          : (geometryType === 'chroma_spheres') ? 'sphere'
                          : (geometryType === 'fluid') ? 'tunnel'
-                         : geometryType;
+                         : (geometryType === 'particles' || geometryType === 'dna' || geometryType === 'points')
+                           ? 'torusKnot'
+                           : geometryType;
 
         // Camera setup based on geometry type
         if (actualGeom === 'tunnel') {
@@ -365,19 +284,6 @@ export class ThreeCompositor {
           geometry = new THREE.TorusGeometry(0.8, 0.25, 12, 48);
         } else if (actualGeom === 'torusKnot') {
           geometry = new THREE.TorusKnotGeometry(0.8, 0.28, 100, 16);
-        } else if (actualGeom === 'dna') {
-          const count = activeMG.particle_count || 400;
-          const positions = new Float32Array(count * 3);
-          for (let i = 0; i < count; i++) {
-            const t = (i / count) * Math.PI * 6; // 3 turns
-            const helix = i % 2 === 0 ? 1 : -1;
-            const r = 0.5;
-            positions[i * 3] = Math.cos(t) * r * helix;
-            positions[i * 3 + 1] = (i / count - 0.5) * 3.0; // Y axis
-            positions[i * 3 + 2] = Math.sin(t) * r * helix;
-          }
-          geometry = new THREE.BufferGeometry();
-          geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         } else if (actualGeom === 'tunnel') {
           geometry = new THREE.CylinderGeometry(1.0, 1.0, 15, 16, 20, true);
         } else if (actualGeom === 'grid') {
@@ -418,14 +324,6 @@ export class ThreeCompositor {
             depthWrite: false,
             blending: THREE.AdditiveBlending
           });
-        } else if (materialType === 'points' || geometryType === 'dna' || geometryType === 'particles') {
-          material = new THREE.PointsMaterial({
-            color: accentColor,
-            size: activeMG.particle_size || 0.07,
-            transparent: true,
-            opacity: 0.8,
-            blending: THREE.AdditiveBlending
-          });
         } else if (materialType === 'glossy_metal') {
           material = new THREE.MeshStandardMaterial({
             color: accentColor,
@@ -459,10 +357,7 @@ export class ThreeCompositor {
         }
 
         // 3. Add Mesh
-        if (actualGeom === 'dna' || materialType === 'points') {
-          this.points3d = new THREE.Points(geometry, material);
-          this.scene3d.add(this.points3d);
-        } else if (actualGeom !== 'grid') {
+        if (actualGeom !== 'grid') {
           this.mesh3d = new THREE.Mesh(geometry, material);
           if (actualGeom === 'tunnel') {
             this.mesh3d.rotation.x = Math.PI / 2;
@@ -491,31 +386,13 @@ export class ThreeCompositor {
       this.mesh3d.rotation.y = animFrame * 0.03;
       this.mesh3d.rotation.x = animFrame * 0.015;
       this.camera3d.position.x = Math.sin(animFrame * 0.01) * 1.5;
-    } else if (style === 'liquid' && this.points3d) {
-      const geometry = this.points3d.geometry;
-      const positions = geometry.attributes.position.array as Float32Array;
-      const size = 20;
-      let idx = 0;
-      for (let x = 0; x < size; x++) {
-        for (let z = 0; z < size; z++) {
-          const posX = (x - size / 2) * 0.35;
-          const posZ = (z - size / 2) * 0.35;
-          const posY = Math.sin(posX * 0.8 + animFrame * 0.08) * Math.cos(posZ * 0.8 + animFrame * 0.08) * 0.5;
-          positions[idx++] = posX;
-          positions[idx++] = posY;
-          positions[idx++] = posZ;
-        }
-      }
-      geometry.attributes.position.needsUpdate = true;
-      this.camera3d.position.x = Math.sin(animFrame * 0.01) * 5;
-      this.camera3d.position.z = Math.cos(animFrame * 0.01) * 5;
-      this.camera3d.lookAt(0, 0.2, 0);
     } else if (style === 'custom') {
-      const actualGeom = (geometryType === 'particles') ? 'dna'
-                       : (geometryType === 'torus_knot') ? 'torusKnot'
+      const actualGeom = (geometryType === 'torus_knot') ? 'torusKnot'
                        : (geometryType === 'chroma_spheres') ? 'sphere'
                        : (geometryType === 'fluid') ? 'tunnel'
-                       : geometryType;
+                       : (geometryType === 'particles' || geometryType === 'dna' || geometryType === 'points')
+                         ? 'torusKnot'
+                         : geometryType;
       const animType = activeMG.animation || 'rotate';
 
       if (this.mesh3d) {
@@ -532,22 +409,6 @@ export class ThreeCompositor {
           this.mesh3d.rotation.y = animFrame * 0.01;
         } else if (animType === 'tunnel') {
           this.mesh3d.position.z = (animFrame * 0.08) % 15 - 7.5;
-        }
-      } else if (this.points3d) {
-        if (actualGeom === 'dna') {
-          this.points3d.rotation.y = animFrame * 0.03;
-          const positions = this.points3d.geometry.attributes.position.array as Float32Array;
-          const count = positions.length / 3;
-          for (let i = 0; i < count; i++) {
-            const t = (i / count) * Math.PI * 6;
-            const helix = i % 2 === 0 ? 1 : -1;
-            const r = 0.5 + Math.sin(animFrame * 0.1 + (i / count) * 10) * 0.05;
-            positions[i * 3] = Math.cos(t) * r * helix;
-            positions[i * 3 + 2] = Math.sin(t) * r * helix;
-          }
-          this.points3d.geometry.attributes.position.needsUpdate = true;
-        } else {
-          this.points3d.rotation.y = animFrame * 0.025;
         }
       }
 
@@ -665,12 +526,6 @@ export class ThreeCompositor {
       });
       this.mesh3d = null;
     }
-    if (this.points3d) {
-      this.scene3d.remove(this.points3d);
-      this.points3d.geometry.dispose();
-      (this.points3d.material as THREE.Material).dispose();
-      this.points3d = null;
-    }
     if (this.speakerMesh) {
       this.scene3d.remove(this.speakerMesh);
     }
@@ -684,7 +539,7 @@ export class ThreeCompositor {
   }
 
   // Update loop
-  public render(settings: ThreeCompositorSettings, elapsed: number, showTransition: boolean, activeMG?: any) {
+  public render(settings: ThreeCompositorSettings, elapsed: number, _showTransition: boolean, activeMG?: any) {
     // 1. Update uniforms for color correction
     const targetBrightness = activeMG ? settings.brightness * 0.35 : settings.brightness;
     this.videoMaterial.uniforms.brightness.value = targetBrightness;
@@ -703,31 +558,7 @@ export class ThreeCompositor {
     this.videoTexture.needsUpdate = true;
     this.overlayTexture.needsUpdate = true;
 
-    // 4. Update transition particle physics
-    if (showTransition && !this.isTransitionActive) {
-      this.triggerTransition();
-    }
-
-    if (this.isTransitionActive) {
-      this.particleTime += 0.03;
-      const positions = this.particleGeometry.attributes.position.array as Float32Array;
-      const velocities = this.particleGeometry.attributes.velocity.array as Float32Array;
-
-      for (let i = 0; i < positions.length / 3; i++) {
-        positions[i * 3] += velocities[i * 3] * 0.03;
-        positions[i * 3 + 1] += velocities[i * 3 + 1] * 0.03;
-      }
-      this.particleGeometry.attributes.position.needsUpdate = true;
-
-      // Fade out particles over time
-      this.particleMaterial.opacity = Math.max(0, 0.8 - this.particleTime * 0.9);
-
-      if (this.particleMaterial.opacity <= 0) {
-        this.isTransitionActive = false;
-      }
-    }
-
-    // 5. Draw the main scenes
+    // 4. Draw the main scenes
     const isYoutubeLong = false;
     const effectiveMG = activeMG;
 
@@ -770,8 +601,6 @@ export class ThreeCompositor {
     this.videoMaterial.dispose();
     this.overlayTexture.dispose();
     this.overlayMaterial.dispose();
-    this.particleGeometry.dispose();
-    this.particleMaterial.dispose();
     this.renderer.dispose();
   }
 }

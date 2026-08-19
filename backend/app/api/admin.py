@@ -1,61 +1,76 @@
 import os
 import json
-import uuid
 import shutil
+import threading
 import contextvars
+from contextlib import contextmanager
 from datetime import datetime, timedelta
-from typing import Optional, List
-from pydantic import BaseModel, Field
-from fastapi import APIRouter, HTTPException, Header, Query, Depends, status
+from typing import Optional
+from fastapi import APIRouter, HTTPException, Header, Depends, Request, status
 from app.core.paths import ADMIN_STORE_PATH, UPLOAD_DIR, ensure_data_dirs
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
 STORE_PATH = str(ADMIN_STORE_PATH)
 ADMIN_SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "admin123")
-# Default trial window / budget for closed beta keys
-DEFAULT_TRIAL_DAYS = int(os.getenv("TRIAL_KEY_DAYS", "7"))
-DEFAULT_TRIAL_TOKENS = int(os.getenv("TRIAL_TOKENS_LIMIT", "250000"))
 
 current_access_key_var = contextvars.ContextVar("current_access_key", default=None)
 
-# Pydantic schemas
-class KeyCreateRequest(BaseModel):
-    label: str
-    tokens_limit: int = Field(default_factory=lambda: DEFAULT_TRIAL_TOKENS)
-    days: int = Field(default_factory=lambda: DEFAULT_TRIAL_DAYS, description="Срок действия ключа в днях")
 
-class KeyResponse(BaseModel):
-    id: str
-    label: str
-    created_at: str
-    expires_at: str
-    tokens_limit: int
-    tokens_used: int
-    status: str
+_store_lock = threading.RLock()
 
-# Helper to load and save storage (always on the persistent volume)
-def load_store() -> dict:
+
+def _ensure_store_shape(data: dict) -> dict:
+    data.setdefault("keys", [])
+    data.setdefault("users", [])
+    data.setdefault("projects", [])
+    data.setdefault("sessions", [])
+    data.setdefault("email_codes", [])
+    data.setdefault("webhook_events", [])
+    return data
+
+def _empty_store() -> dict:
+    return {"keys": [], "users": [], "projects": [], "sessions": [], "email_codes": [], "webhook_events": []}
+
+
+def _read_store() -> dict:
     ensure_data_dirs()
     if not os.path.exists(STORE_PATH):
-        initial_data = {
-            "keys": [],
-            "users": []
-        }
-        with open(STORE_PATH, "w", encoding="utf-8") as f:
-            json.dump(initial_data, f, indent=2, ensure_ascii=False)
+        initial_data = _empty_store()
+        _write_store(initial_data)
         return initial_data
-    
     try:
         with open(STORE_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+            return _ensure_store_shape(json.load(f))
     except Exception:
-        return {"keys": [], "users": []}
+        return _empty_store()
+
+
+def _write_store(data: dict):
+    ensure_data_dirs()
+    payload = json.dumps(_ensure_store_shape(data), indent=2, ensure_ascii=False)
+    tmp_path = f"{STORE_PATH}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.write(payload)
+    os.replace(tmp_path, STORE_PATH)
+
+
+def load_store() -> dict:
+    with _store_lock:
+        return _read_store()
+
 
 def save_store(data: dict):
-    ensure_data_dirs()
-    with open(STORE_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    with _store_lock:
+        _write_store(data)
+
+
+@contextmanager
+def store_edit():
+    with _store_lock:
+        data = _read_store()
+        yield data
+        _write_store(data)
 
 # Admin Auth Dependency
 async def verify_admin_token(x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token")):
@@ -66,96 +81,14 @@ async def verify_admin_token(x_admin_token: Optional[str] = Header(None, alias="
         )
     return x_admin_token
 
-# User Access Key Verification Dependency
 async def validate_user_access_key(
-    x_access_key: Optional[str] = Header(None, alias="X-Access-Key"),
-    x_user_login: Optional[str] = Header(None, alias="X-User-Login")
+    request: Request,
+    authorization: Optional[str] = Header(None),
 ):
-    if not x_access_key or not x_user_login:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="access_key_required"
-        )
-    
-    import urllib.parse
-    x_user_login = urllib.parse.unquote(x_user_login)
-    
-    store = load_store()
-    
-    # Find the key
-    key_entry = next((k for k in store["keys"] if k["id"] == x_access_key), None)
-    if not key_entry:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="access_key_invalid"
-        )
-    
-    if key_entry["status"] != "active":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"access_key_{key_entry['status']}"
-        )
-    
-    # Check expiration date
-    try:
-        expires_at = datetime.fromisoformat(key_entry["expires_at"])
-        if datetime.utcnow() > expires_at:
-            key_entry["status"] = "expired"
-            save_store(store)
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="access_key_expired"
-            )
-    except ValueError:
-        pass
-    
-    # Check token limits if applicable
-    if key_entry["tokens_limit"] > 0 and key_entry["tokens_used"] >= key_entry["tokens_limit"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="access_key_limit_reached"
-        )
+    from app.auth.deps import resolve_current_user
+    from app.auth.config import SESSION_COOKIE_NAME
 
-    # Register/Update user last seen
-    now_str = datetime.utcnow().isoformat()
-    user_entry = next((u for u in store["users"] if u["login"] == x_user_login), None)
-    if not user_entry:
-        user_entry = {
-            "login": x_user_login,
-            "key_id": x_access_key,
-            "registered_at": now_str,
-            "last_seen_at": now_str
-        }
-        store["users"].append(user_entry)
-    else:
-        user_entry["last_seen_at"] = now_str
-        user_entry["key_id"] = x_access_key  # update key association in case they changed it
-    
-    save_store(store)
-    current_access_key_var.set(x_access_key)
-    return key_entry
-
-# PUBLIC ENDPOINT: Validate User Access Key and Login
-@router.get("/validate-key")
-async def validate_key_endpoint(
-    key: str = Query(...),
-    login: str = Query(...)
-):
-    try:
-        await validate_user_access_key(x_access_key=key, x_user_login=login)
-        store = load_store()
-        key_entry = next((k for k in store["keys"] if k["id"] == key), None)
-        return {
-            "valid": True,
-            "expires_at": key_entry["expires_at"] if key_entry else "",
-            "tokens_used": key_entry["tokens_used"] if key_entry else 0,
-            "tokens_limit": key_entry["tokens_limit"] if key_entry else 0
-        }
-    except HTTPException as e:
-        return {
-            "valid": False,
-            "reason": e.detail
-        }
+    return resolve_current_user(authorization, request.cookies.get(SESSION_COOKIE_NAME))
 
 # PROTECTED: Get Admin Dashboard Stats
 @router.get("/stats")
@@ -179,18 +112,24 @@ async def get_admin_stats(admin_token: str = Depends(verify_admin_token)):
         except ValueError:
             pass
             
-        # Find associated key label
-        key_entry = next((k for k in store["keys"] if k["id"] == u["key_id"]), None)
-        key_label = key_entry["label"] if key_entry else "Неизвестный ключ"
+        auth_kind = u.get("auth") or ("google" if u.get("google_sub") else "password")
+        auth_label = "Google" if auth_kind == "google" else "Email"
+        tokens_used = int(u.get("tokens_used") or 0)
         
         users_with_status.append({
-            "login": u["login"],
-            "key_label": key_label,
-            "tokens_used": key_entry["tokens_used"] if key_entry else 0,
-            "tokens_limit": key_entry["tokens_limit"] if key_entry else 0,
-            "registered_at": u["registered_at"],
-            "last_seen_at": u["last_seen_at"],
-            "status": status_str
+            "id": u.get("id"),
+            "login": u.get("email") or u.get("login") or "",
+            "name": u.get("name") or "",
+            "auth": auth_kind,
+            "key_label": auth_label,
+            "tokens_used": tokens_used,
+            "tokens_limit": 0,
+            "registered_at": u.get("registered_at"),
+            "last_seen_at": u.get("last_seen_at"),
+            "status": status_str,
+            "plan": u.get("plan") or "free",
+            "plan_status": u.get("plan_status") or "none",
+            "projects": len([p for p in store.get("projects") or [] if p.get("owner_id") == u.get("id")]),
         })
         
     # Disk Usage
@@ -230,51 +169,5 @@ async def get_admin_stats(admin_token: str = Depends(verify_admin_token)):
         "disk_used_pct": disk_used_pct,
         "active_projects": project_count,
         "media_library_size_mb": total_size_mb,
-        "active_keys": len([k for k in store["keys"] if k["status"] == "active"]),
         "users": users_with_status
     }
-
-# PROTECTED: Get all Access Keys
-@router.get("/keys", response_model=List[KeyResponse])
-async def get_access_keys(admin_token: str = Depends(verify_admin_token)):
-    store = load_store()
-    return store["keys"]
-
-# PROTECTED: Create 7-day Access Key
-@router.post("/keys", response_model=KeyResponse)
-async def create_access_key(req: KeyCreateRequest, admin_token: str = Depends(verify_admin_token)):
-    store = load_store()
-    
-    # Generate unique vibe- prefixed key (default = closed-beta trial window)
-    new_id = f"vibe-{uuid.uuid4().hex[:16]}"
-    days = max(1, min(int(req.days or DEFAULT_TRIAL_DAYS), 90))
-    tokens = max(1000, int(req.tokens_limit or DEFAULT_TRIAL_TOKENS))
-    now_str = datetime.utcnow().isoformat()
-    expires_str = (datetime.utcnow() + timedelta(days=days)).isoformat()
-    
-    new_key = {
-        "id": new_id,
-        "label": req.label,
-        "created_at": now_str,
-        "expires_at": expires_str,
-        "tokens_limit": tokens,
-        "tokens_used": 0,
-        "status": "active",
-        "trial_days": days,
-    }
-    
-    store["keys"].append(new_key)
-    save_store(store)
-    return new_key
-
-# PROTECTED: Revoke/Delete Access Key
-@router.delete("/keys/{key_id}")
-async def revoke_access_key(key_id: str, admin_token: str = Depends(verify_admin_token)):
-    store = load_store()
-    key_entry = next((k for k in store["keys"] if k["id"] == key_id), None)
-    if not key_entry:
-        raise HTTPException(status_code=404, detail="Ключ не найден")
-        
-    key_entry["status"] = "revoked"
-    save_store(store)
-    return {"message": "Ключ успешно отозван", "key_id": key_id}

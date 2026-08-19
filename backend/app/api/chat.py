@@ -28,7 +28,7 @@ class ChatRequest(BaseModel):
     template_id: Optional[str] = None
     active_edits: Optional[list] = None
     focused_item: Optional[dict] = None
-    target_format: str = "auto"
+    target_format: str = "9:16"
     brand_id: Optional[str] = None
 
 
@@ -111,13 +111,39 @@ def process_render_task(file_id: str, edits: list, edl: dict = None, font: str =
             log_progress(file_id, f"🎨 Применён ПРЕМИУМ-ШАБЛОН: {tpl.name}. Переопределение стилей на {font} ({font_size}pt).")
 
     output_path = os.path.join("uploads", f"{file_id}_rendered.mp4")
+    import uuid
+    from app.services.video_service import safe_replace
+    tmp_out = os.path.join("uploads", f"{file_id}_rendered.exporting.{uuid.uuid4().hex[:8]}.mp4")
     log_progress(file_id, f"🔥 Запущен процесс рендеринга видео со шрифтом {font} (FFmpeg)...")
-    print(f"[RenderTask] Calling render_video: input={video_file}, output={output_path}, edits={len(edits)}, brand_id={brand_id}")
-    success = render_video(video_file, output_path, transcript_data, edits, edl, font, font_size, use_outline, font_color, template_id=template_id, brand_id=brand_id)
+    print(f"[RenderTask] Calling render_video: input={video_file}, output={tmp_out}, edits={len(edits)}, brand_id={brand_id}")
+    success = render_video(video_file, tmp_out, transcript_data, edits, edl, font, font_size, use_outline, font_color, template_id=template_id, brand_id=brand_id)
     print(f"[RenderTask] render_video returned: success={success}")
+
+    if success and os.path.exists(tmp_out):
+        try:
+            safe_replace(tmp_out, output_path)
+        except PermissionError as e:
+            print(f"[RenderTask] safe_replace failed: {e}")
+            success = False
+            log_progress(
+                file_id,
+                "❌ Не удалось заменить готовый файл — закройте превью в редакторе и повторите.",
+            )
+            try:
+                os.remove(tmp_out)
+            except OSError:
+                pass
+    elif os.path.exists(tmp_out):
+        try:
+            os.remove(tmp_out)
+        except OSError:
+            pass
     
     if os.path.exists(lock_path):
-        os.remove(lock_path)
+        try:
+            os.remove(lock_path)
+        except OSError:
+            pass
     
     if success:
         log_progress(file_id, "✅ Видео успешно смонтировано и сохранено!")
@@ -338,7 +364,13 @@ def _parse_json_blocks(text: str) -> list:
 
 
 @router.post("")
-async def chat_with_director(request: ChatRequest, background_tasks: BackgroundTasks, _key=Depends(validate_user_access_key)):
+async def chat_with_director(request: ChatRequest, background_tasks: BackgroundTasks, user=Depends(validate_user_access_key)):
+    from app.auth.deps import assert_project_access
+    from app.billing.entitlements import assert_can_use_ai, claim_free_project
+    assert_project_access(request.file_id, user)
+    assert_can_use_ai(user, request.file_id)
+    if request.force_edits is None and request.edl is None:
+        claim_free_project(user, request.file_id)
     import asyncio
     async def stream_response():
         # --- PHASE 0: Bypass LLM if force_edits is provided ---
@@ -737,19 +769,35 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
                             yield json.dumps({"type": "log", "message": f"🔊 Звук для сцены: {s_asset['name']}"}) + "\n"
                             yield json.dumps({"type": "reasoning", "step": f"🔊 [Инструмент] Звуковой эффект: '{sq}' -> {s_asset['name']}", "status": "done"}) + "\n"
 
-                # add_broll: resolve to a Three.js composition
-                if edit.get("action") == "add_broll" and "query" in edit and not edit.get("broll_url"):
-                    from app.services.pexels_service import resolve_broll_url
-                    duration = float(edit.get("duration", 4.0))
-                    broll_link = resolve_broll_url(edit["query"], duration, aspect_ratio=graph_aspect_ratio)
-                    if broll_link:
-                        edit["broll_url"] = broll_link
-                        yield json.dumps({"type": "log", "message": f"📹 Найден B-roll на Pexels по теме '{edit['query']}'"}) + "\n"
-                        yield json.dumps({"type": "reasoning", "step": f"📹 [Инструмент] Поиск B-roll по запросу '{edit['query']}': найдено видео Pexels", "status": "done"}) + "\n"
-                    else:
-                        edit["broll_url"] = "remotion_three_js_dynamic"
-                        yield json.dumps({"type": "log", "message": f"🎨 Инициализирована 3D-графика Three.js/Remotion для '{edit['query']}'"}) + "\n"
-                        yield json.dumps({"type": "reasoning", "step": f"🎨 [Инструмент] Инициализация 3D-графики по теме '{edit['query']}': готово", "status": "done"}) + "\n"
+                # add_broll: user library first, then Pexels
+                if edit.get("action") == "add_broll" and not edit.get("resolved_path") and not edit.get("broll_url"):
+                    from app.api.video import resolve_user_broll
+                    used_broll = [
+                        e.get("resolved_path") for e in all_edits
+                        if e.get("action") == "add_broll" and e.get("resolved_path")
+                    ]
+                    clip = resolve_user_broll(
+                        request.file_id,
+                        query=edit.get("query"),
+                        asset_id=edit.get("asset_id"),
+                        used_paths=used_broll,
+                    )
+                    if clip and clip.get("path"):
+                        edit["resolved_path"] = clip["path"]
+                        edit["asset_id"] = clip.get("id")
+                        edit["media_type"] = clip.get("media_type")
+                        edit["source"] = "user"
+                        yield json.dumps({"type": "log", "message": f"📹 Свой B-roll: {clip.get('filename') or clip.get('id')}"}) + "\n"
+                    elif edit.get("query"):
+                        from app.services.pexels_service import resolve_broll_url
+                        duration = float(edit.get("duration", 4.0))
+                        broll_link = resolve_broll_url(edit["query"], duration, aspect_ratio=graph_aspect_ratio)
+                        if broll_link:
+                            edit["broll_url"] = broll_link
+                            yield json.dumps({"type": "log", "message": f"📹 Найден B-roll на Pexels по теме '{edit['query']}'"}) + "\n"
+                        else:
+                            edit["broll_url"] = "remotion_three_js_dynamic"
+                            yield json.dumps({"type": "log", "message": f"🎨 3D-заглушка для '{edit['query']}'"}) + "\n"
 
             # ── Real-Time Preview Mode ─────────────────────────────────────
             # All edits are applied in real-time in the browser via SandboxPlayer.
@@ -912,7 +960,11 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
     return StreamingResponse(stream_response(), media_type="application/x-ndjson")
 
 @router.post("/render")
-async def direct_render_from_ui(request: RenderStyleRequest, background_tasks: BackgroundTasks, _key=Depends(validate_user_access_key)):
+async def direct_render_from_ui(request: RenderStyleRequest, background_tasks: BackgroundTasks, user=Depends(validate_user_access_key)):
+    from app.auth.deps import assert_project_access
+    from app.billing.entitlements import assert_can_use_ai
+    assert_project_access(request.file_id, user)
+    assert_can_use_ai(user, request.file_id)
     """Directly re-render via UI without LLM stream"""
     background_tasks.add_task(process_render_task, request.file_id, request.edits or [], request.edl, request.font, request.font_size, request.use_outline, request.font_color, request.template_id, False, request.brand_id)
     return {"status": "rendering started"}

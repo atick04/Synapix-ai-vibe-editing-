@@ -23,23 +23,27 @@ class CutClipArgs(BaseModel):
     end_time: float = Field(description="Время окончания вырезаемого фрагмента в секундах")
 
 class AddBrollArgs(BaseModel):
-    start_time: float = Field(description="Начало отображения стокового видео в секундах")
-    end_time: float = Field(description="Конец отображения стокового видео в секундах")
-    query: str = Field(description="Английский поисковый запрос стока Pexels (например: 'cyberpunk city neon')")
+    start_time: float = Field(description="Начало отображения B-roll в секундах")
+    end_time: float = Field(description="Конец отображения B-roll в секундах")
+    query: str = Field(description="Имя своего файла или английский запрос стока. Если пользователь загрузил клипы — пиши имя файла или asset_id, не Pexels.")
+    asset_id: Optional[str] = Field(
+        default=None,
+        description="ID клипа из медиатеки пользователя (например additional_uuid). Если задан — берём свой файл, не сток."
+    )
 
 class CreateSceneArgs(BaseModel):
     start_time: float = Field(description="Таймкод начала сцены в секундах")
-    duration: float = Field(description="Длительность сцены в секундах")
-    scene_template: Optional[str] = Field(default=None, description="Шаблон композиции сцены: 'comparison', 'vertical_stack', 'timeline', 'concept_explainer'")
+    duration: float = Field(description="Длительность сцены в секундах. Overlay: 2–4с. Fullscreen TITLE: 2–4с (макс 5с).")
+    scene_template: Optional[str] = Field(default=None, description="Шаблон: 'abstract' — слово + геометрия вокруг лица без плашки (дефолт Odysser). 'stat_card'/'headline' — стеклянная плашка для цифры/имени. 'kinetic_title' — fullscreen TITLE. Не process_steps / bento.")
     mood: str = Field(default="neutral", description="Настроение сцены (например: 'analytical', 'energetic', 'dramatic', 'cozy') для подбора Apple-style палитры")
     energy: float = Field(default=0.5, description="Уровень энергии от 0.0 до 1.0")
-    entities: Optional[List[Dict[str, Any]]] = Field(default=None, description="Список сущностей сцены. Каждая сущность должна включать: id (e.g. 'e1'), type ('headline', 'stat_card', 'icon', 'loading_bar'), text (текст на кириллице), icon (emoji-иконка). Если опустить — движок сгенерирует элементы на основе concept_prompt!")
-    relations: Optional[List[Dict[str, str]]] = Field(default=None, description="Связи между сущностями для рисования стрелок (список объектов с полями from, to, type)")
+    entities: Optional[List[Dict[str, Any]]] = Field(default=None, description="Максимум 2 текстовых сущности: headline + ключ (stat или короткая фраза) и опционально icon. Не списки и не сетки.")
+    relations: Optional[List[Dict[str, str]]] = Field(default=None, description="Не используй на overlay: стрелки перегружают. Оставь пустым, кроме редкого split.")
     style_profile: Optional[Dict[str, Any]] = Field(default=None, description="Профиль стилей: 'font_family' (кириллические шрифты: 'Inter', 'Montserrat', 'Rubik', 'Manrope', 'Unbounded', 'Comfortaa', 'JetBrains Mono', 'Playfair Display'), 'bg_color' (полупрозрачный фон Apple-glass, например 'rgba(20,20,25,0.65)'), 'border_color' ('rgba(255,255,255,0.15)'), 'color_accent' (цвет полосы загрузки/акцентов, например '#0A84FF')")
-    concept_prompt: Optional[str] = Field(default=None, description="Краткое текстовое описание концепта или идеи сцены (например: 'почему спать 8 часов важно'). Если указано, движок автоматически сгенерирует элементы, иконки, связи и композицию самостоятельно через Graphics LLM!")
+    concept_prompt: Optional[str] = Field(default=None, description="Overlay abstract: 'ФРАЗА | ключ'. Plate: 'ЗАГОЛОВОК | 80%'. Fullscreen: 2–5 слов тайтла. Без абзацев и списков.")
     layout: Optional[str] = Field(
         default=None,
-        description="Композиция talking-head: 'overlay' (плашка поверх спикера, лицо видно), 'fullscreen' / 'full_broll' (графический B-roll на весь экран на время мысли), 'split' (лицо сверху / графика снизу). Для тезисов/законов — overlay; для объяснения идеи 2–5с — fullscreen."
+        description="ОБЯЗАТЕЛЬНО. 'overlay' — акцент поверх лица (abstract по умолчанию, плашка только для цифры). 'fullscreen' — TITLE на весь кадр. 'split' — лицо сверху / графика снизу."
     )
     mode: Optional[str] = Field(
         default=None,
@@ -64,11 +68,25 @@ class KineticTypographyArgs(BaseModel):
     x: Optional[float] = Field(default=None, description="Горизонтальное положение текста/субтитров на экране в процентах (0-100). Пример: 50 для центра, 20 для левого края, 80 для правого.")
     y: Optional[float] = Field(default=None, description="Вертикальное положение текста/субтитров на экране в процентах (0-100). Пример: 50 для центра, 15 для верха, 85 для низа.")
     behind_speaker: Optional[bool] = Field(default=False, description="Если True — переносит весь текст/субтитры речи на задний план за спикера с помощью ротоскопинга RVM.")
+    subtitle_preset: Optional[str] = Field(
+        default=None,
+        description="Пак в духе DaVinci Resolve Text+: 'resolve_stacked' (стек + жёлтый скрипт), 'resolve_dropcap' (розовая буквица + капс с видео-заливкой), 'resolve_classic' (толстая обводка), 'resolve_boxed' (плашка), 'resolve_cinema' (тень), 'resolve_neon', 'resolve_karaoke', 'resolve_bar' (линия снизу), 'resolve_pill', 'resolve_minimal'."
+    )
 
 
 class SelectBgmArgs(BaseModel):
     asset_query: str = Field(description="Запрос для поиска фоновой музыки в библиотеке (например: 'lofi', 'trap', 'acoustic')")
     volume: float = Field(default=-22, description="Громкость фоновой дорожки в dB")
+
+class DesignSoundArgs(BaseModel):
+    mood: Optional[str] = Field(
+        default=None,
+        description="Краткое настроение кровати (например: 'calm lofi', 'reels energy'). Таймкоды не указывай — агент читает таймлайн сам."
+    )
+    skip_bgm: bool = Field(
+        default=False,
+        description="True — не ставить новую кровать, только SFX и ducking на уже существующий BGM."
+    )
 
 class AudioDuckingArgs(BaseModel):
     duck_points: List[Dict[str, Any]] = Field(description="Точки понижения громкости на звуковых акцентах")
@@ -356,8 +374,37 @@ def add_broll(timeline: TimelineState, memory: ProductionMemory, args: Dict[str,
     dur = float(memory.session.get("duration", 99999.0))
     start = max(0.0, min(float(args["start_time"]), dur - 0.5))
     end = max(start + 0.5, min(float(args["end_time"]), dur))
+    if end - start > 3.5:
+        end = start + 3.5
+    if end - start < 1.5:
+        end = min(dur, start + 1.5)
     query = args["query"]
     layout = args.get("layout", "full")
+    file_id = memory.session.get("project_id")
+    used = [e.get("resolved_path") for e in timeline.edits if e.get("action") == "add_broll"]
+    clip = None
+    if file_id:
+        from app.api.video import resolve_user_broll
+        clip = resolve_user_broll(
+            file_id,
+            query=query,
+            asset_id=args.get("asset_id"),
+            used_paths=used,
+        )
+    if clip:
+        edit = timeline.add_broll(
+            start,
+            end,
+            query or clip.get("filename") or "user broll",
+            layout=layout,
+            resolved_path=clip.get("path"),
+            asset_id=clip.get("id"),
+            media_type=clip.get("media_type"),
+            source="user",
+        )
+        label = clip.get("filename") or clip.get("id")
+        event_bus.emit("tool_completed", {"tool": "add_broll", "message": f"Вставлен свой B-roll «{label}» на {start:.1f}–{end:.1f}s"})
+        return f"Вставлен свой B-roll «{label}» на {start:.1f}–{end:.1f}s"
     timeline.add_broll(start, end, query, layout=layout)
     event_bus.emit("tool_completed", {"tool": "add_broll", "message": f"Вставлен B-roll '{query}' на {start:.1f} - {end:.1f}s"})
     return f"Успешно вставлен B-roll по теме '{query}' на {start:.1f} - {end:.1f}s"
@@ -365,24 +412,37 @@ def add_broll(timeline: TimelineState, memory: ProductionMemory, args: Dict[str,
 async def create_scene(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
     start = args["start_time"]
     duration = args["duration"]
-    layout = args.get("layout") or "overlay"
+    layout = args.get("layout") or args.get("mode") or "overlay"
+    if layout in ("fullscreen", "cover", "full", "full_broll"):
+        duration = max(2.0, min(float(duration), 5.0))
+        if not args.get("scene_template"):
+            args["scene_template"] = "kinetic_title"
+    else:
+        duration = max(1.5, min(float(duration), 4.5))
     concept_prompt = args.get("concept_prompt")
-    aspect_ratio = memory.session.get("aspect_ratio") or memory.session.get("video_format") or "16:9"
+    aspect_ratio = memory.session.get("aspect_ratio") or memory.session.get("video_format") or "9:16"
     for edit in timeline.edits:
         if edit.get("action") == "change_format":
             aspect_ratio = edit.get("format", aspect_ratio)
 
 
-    # If no concept_prompt, try to construct one from entities
+    # If no concept_prompt, try to construct one from entities — headline | key only
     if not concept_prompt and args.get("entities"):
         ents = args["entities"]
         headline = next((e for e in ents if e.get("type") == "headline"), None)
-        h_text = headline.get("text", "") if headline else ""
-        other_texts = [e.get("text", "") for e in ents if e.get("type") != "headline"]
-        concept_prompt = f"Заголовок: {h_text}. Сущности: {', '.join(other_texts)}"
+        key_ent = next(
+            (e for e in ents if e.get("type") in ("stat_card", "stat", "key", "metric") and e is not headline),
+            None,
+        )
+        if not key_ent:
+            others = [e for e in ents if e is not headline and (e.get("text") or "").strip()]
+            key_ent = others[0] if others else None
+        h_text = ((headline or {}).get("text") or (ents[0].get("text") if ents else "") or "").strip()
+        k_text = ((key_ent or {}).get("text") or "").strip()
+        concept_prompt = f"{h_text} | {k_text}".strip(" |") if k_text else h_text
 
     if not concept_prompt:
-        concept_prompt = "Визуальное оформление и презентация ключевой темы видео"
+        concept_prompt = "КЛЮЧЕВОЕ"
 
     # Find visual context for the current frame
     visual_scenes = memory.session.get("visual_scenes", [])
@@ -394,24 +454,24 @@ async def create_scene(timeline: TimelineState, memory: ProductionMemory, args: 
         current_scene_info = f"В этот момент в кадре: '{scene_desc}'. Рекомендованная безопасная зона для размещения графики: '{safe_zone}'."
         logger.info(f"📹 VLM Context for create_scene at {start}s: {current_scene_info}")
 
-    # Enrich concept_prompt with transcript context + mood for better graphics (G2 fix)
+    # Transcript is context for the designer, not copy to dump on the plate
     transcript_data = memory.session.get("transcript_data", {})
     mood = memory.get_style_profile().get("mood", "") if hasattr(memory, "get_style_profile") else ""
     transcript_snippet = ""
     if transcript_data:
         words = transcript_data.get("words", []) or []
-        # Grab words spoken within ±5 seconds of the scene start
         nearby_words = [
             w.get("word", w.get("text", "")) for w in words
             if abs(float(w.get("start", 0)) - start) <= 5.0
         ]
         if nearby_words:
-            transcript_snippet = " ".join(nearby_words[:20]).strip()
-    
-    if transcript_snippet:
-        concept_prompt = f"{concept_prompt}. Контекст речи: «{transcript_snippet}»"
-    if mood:
-        concept_prompt = f"{concept_prompt}. Настроение: {mood}"
+            transcript_snippet = " ".join(nearby_words[:12]).strip()
+    if current_scene_info and transcript_snippet:
+        current_scene_info = f"{current_scene_info} Речь рядом: «{transcript_snippet}»."
+    elif transcript_snippet:
+        current_scene_info = f"Речь рядом: «{transcript_snippet}»."
+    if mood and current_scene_info:
+        current_scene_info = f"{current_scene_info} Настроение: {mood}."
     
     mode = args.get("mode") or args.get("scene_mode")
     if not mode:
@@ -474,6 +534,8 @@ async def create_scene(timeline: TimelineState, memory: ProductionMemory, args: 
         visual_frame_context=current_scene_info,
         mode=mode,
         activity_step=activity_step,
+        scene_template=args.get("scene_template"),
+        look=memory.get_content_look() if hasattr(memory, "get_content_look") else None,
     )
     html_content = graphics_res.get("html_content", "")
     explanation = graphics_res.get("explanation", "Анимационная сцена сгенерирована ИИ.")
@@ -525,6 +587,7 @@ def build_kinetic_typography(timeline: TimelineState, memory: ProductionMemory, 
     x = args.get("x")
     y = args.get("y")
     behind_speaker = args.get("behind_speaker")
+    subtitle_preset = args.get("subtitle_preset")
     if position == "behind_speaker":
         behind_speaker = True
 
@@ -547,7 +610,8 @@ def build_kinetic_typography(timeline: TimelineState, memory: ProductionMemory, 
         active_scale=active_scale,
         x=x,
         y=y,
-        behind_speaker=behind_speaker
+        behind_speaker=behind_speaker,
+        subtitle_preset=subtitle_preset,
     )
 
     
@@ -588,6 +652,11 @@ def select_bgm(timeline: TimelineState, memory: ProductionMemory, args: Dict[str
     event_bus.emit("soundtrack_selected", {"soundtrack": query, "message": f"Выбран саундтрек '{query}' ({vol}dB)"})
     return f"Успешно добавлен саундтрек '{query}' с уровнем громкости {vol}дБ"
 
+async def design_sound(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
+    """One-pass sound designer: bed + sparse SFX + ducking metadata."""
+    from app.workflows.sound_designer import run_sound_design
+    return await run_sound_design(timeline, memory, args)
+
 def create_zoom(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
     dur = float(memory.session.get("duration", 99999.0))
     start = max(0.0, min(float(args["start_time"]), dur - 0.5))
@@ -596,7 +665,11 @@ def create_zoom(timeline: TimelineState, memory: ProductionMemory, args: Dict[st
     if end - start < 1.0:
         end = min(start + 1.4, dur)
     z_type = args.get("type", "zoom_in")
-    intensity = float(args.get("intensity", 1.14) or 1.14)
+    if args.get("intensity") is None:
+        look = memory.get_content_look() if hasattr(memory, "get_content_look") else {}
+        intensity = float((look.get("montage") or {}).get("zoom_intensity") or 1.12)
+    else:
+        intensity = float(args.get("intensity") or 1.14)
     intensity = max(1.06, min(1.28, intensity))
     
     # Check spacing density gate in production memory
@@ -617,7 +690,10 @@ def apply_color_grade(timeline: TimelineState, memory: ProductionMemory, args: D
     end = args.get("end_time")
     end = float(end) if end is not None else dur
     end = max(start + 0.1, min(end, dur))
-    preset = (args.get("preset") or "cinema").strip().lower()
+    preset = (args.get("preset") or "").strip().lower()
+    if not preset:
+        look = memory.get_content_look() if hasattr(memory, "get_content_look") else {}
+        preset = str((look.get("montage") or {}).get("lut") or "cinema").strip().lower()
     allowed = {"cinema", "warm", "cold", "vibrant", "teal_orange", "cyberpunk", "vintage", "monochrome"}
     if preset not in allowed:
         preset = "cinema"
@@ -1034,6 +1110,10 @@ _LOCAL_RUNNERS = {
         "schema": SelectBgmArgs,
         "runner": select_bgm
     },
+    "design_sound": {
+        "schema": DesignSoundArgs,
+        "runner": design_sound
+    },
     "create_zoom": {
         "schema": ZoomArgs,
         "runner": create_zoom
@@ -1056,7 +1136,7 @@ _LOCAL_RUNNERS = {
     },
     "change_format": {
         "schema": ChangeFormatArgs,
-        "runner": lambda t, m, a: t.edits.append({"action": "change_format", "format": a["format"]}) or event_bus.emit("tool_completed", {"tool": "change_format", "message": f"Изменен формат видео на {a['format']}"}) or f"Формат видео изменен на {a['format']}"
+        "runner": lambda t, m, a: t.edits.append({"action": "change_format", "format": "9:16"}) or event_bus.emit("tool_completed", {"tool": "change_format", "message": "Формат зафиксирован: Instagram Reels 9:16"}) or "Формат видео: Instagram Reels 9:16"
     },
     "stitch_video_clip": {
         "schema": StitchVideoClipArgs,
@@ -1110,16 +1190,17 @@ def add_motion_preset(timeline: TimelineState, memory: ProductionMemory, args: D
 
 _TOOL_DESCRIPTIONS = {
     "cut_clip": "Вырезает тишину, паузы или неудачные дубли из видео в указанном временном диапазоне.",
-    "add_broll": "Добавляет релевантное стоковое видео (B-roll) поверх основной дорожки.",
+    "add_broll": "Накладывает B-roll: сначала свои загруженные клипы (asset_id), иначе сток по query.",
     "create_scene": "Создает семантическую структуру визуальной сцены (инфографики), описывая сущности (entities), их роли и связи (relations) между ними.",
     "build_kinetic_typography": "Настраивает стилистику, шрифт, размер, цвет и анимацию кинетических субтитров.",
-    "select_bgm": "Выбирает фоновый саундтрек из каталога и настраивает уровень его громкости.",
+    "select_bgm": "Выбирает фоновый саундтрек из каталога и настраивает уровень его громкости. Только точечно («добавь музыку»). Для полного автомонтажа используй design_sound.",
+    "design_sound": "Один проход саунд-дизайна в конце автомонтажа: кровать BGM на весь ролик, редкие SFX на склейки/плашки/TITLE/сток (не на зумы) и ducking под голос. Не указывай таймкоды — агент читает таймлайн. Не вызывай вместе с пачкой build_transition.",
     "create_zoom": "Создает наезды или отдаления камеры для расстановки акцентов и удержания внимания.",
     "apply_color_grade": "Накладывает цветокор (cinema/warm/cold/vibrant…) на весь ролик или отрезок.",
     "build_transition": "Вставляет звуковой и визуальный переход (whoosh, glitch, film) на склейках.",
     "apply_topic_transitions": "Автоматически находит смены темы в речи спикера по транскрипту и ставит монтажные переходы (whoosh/glitch/film) на эти таймкоды.",
     "modify_clip": "Изменяет параметры (начало, конец, громкость, текст, поисковый запрос) или полностью удаляет (delete=True) конкретный выделенный клип на таймлайне.",
-    "change_format": "Обрезает оригинальное видео в нужный формат (9:16 для TikTok, 16:9 для YouTube).",
+    "change_format": "Всегда обрезает видео в Instagram Reels 9:16 (единственный формат продукта).",
     "stitch_video_clip": "Склеивает (добавляет) фрагмент из загруженного дополнительного видеоролика в проект.",
     "search_and_add_music": "Ищет в стоковой библиотеке фоновую музыку по текстовому запросу, скачивает её на сервер и накладывает на таймлайн проекта.",
     "search_and_add_sticker": "Ищет в стоковой библиотеке графический стикер или эмодзи, скачивает его на сервер и накладывает поверх видеоряда в указанные координаты.",

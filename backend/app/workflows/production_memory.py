@@ -30,14 +30,35 @@ class ProductionMemory:
         """Retrieve the cloned style profile if available."""
         return self.session.get("cloned_style")
 
+    def get_beat_sheet(self) -> Dict[str, Any]:
+        sheet = self.session.get("beat_sheet")
+        if isinstance(sheet, dict) and sheet.get("beats"):
+            return sheet
+        return {"beats": [], "duration": 0.0}
+
+    def get_content_look(self) -> Dict[str, Any]:
+        look = self.session.get("content_look")
+        if isinstance(look, dict) and look.get("family"):
+            return look
+        from app.services.content_look import default_look
+        return default_look()
+
     def get_style_profile(self) -> Dict[str, Any]:
         """Retrieve unified style preferences."""
+        look = self.get_content_look()
+        palette = look.get("palette") or {}
+        montage = look.get("montage") or {}
         return {
             "creative_goal": self.session.get("creative_goal", "Сделать вовлекающий и динамичный контент"),
             "style_profile": self.session.get("style_profile", "auto"),
-            "graphics_template": self.session.get("visual_identity", {}).get("graphics_template", "concept_explainer"),
-            "font_family": self.session.get("visual_identity", {}).get("font_family", "Montserrat-ExtraBold"),
-            "dominant_color": self.session.get("visual_identity", {}).get("dominant_color", "White")
+            "graphics_template": self.session.get("visual_identity", {}).get("graphics_template", "optical_cut"),
+            "font_family": self.session.get("visual_identity", {}).get("font_family", "Unbounded"),
+            "dominant_color": self.session.get("visual_identity", {}).get("dominant_color") or palette.get("accent", "White"),
+            "content_look": look.get("family"),
+            "look_accent": palette.get("accent"),
+            "look_lut": montage.get("lut"),
+            "subtitle_preset": montage.get("subtitle_preset"),
+            "graphic_density": montage.get("graphic_density"),
         }
 
     def record_transition(self, transition_type: str):

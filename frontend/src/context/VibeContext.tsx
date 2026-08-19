@@ -22,8 +22,8 @@ export const VIBE_THEMES: Record<string, VibeConfig> = {
       damping: 22,
     },
     threeJsEnv: {
-      geometryType: "particles", // Beautiful particles
-      materialStyle: "points",
+      geometryType: "grid",
+      materialStyle: "matte",
       lightIntensity: 1.5,
       cameraMotion: "orbit",
     },

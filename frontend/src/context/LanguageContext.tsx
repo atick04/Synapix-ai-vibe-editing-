@@ -7,20 +7,20 @@ export type Language = 'en' | 'ru';
 export const translations = {
   en: {
     // Header
-    heroTitlePrefix: "Create your ",
-    heroTitleHighlight: "masterpiece",
-    heroSubtitle: "Upload source materials — ",
-    heroSubtitleBold: "Cinematic AI",
-    heroSubtitleSuffix: " handles routine editing.",
-    engineVersion: "Synapix Engine 2.0",
+    heroTitlePrefix: "Auto-edit ",
+    heroTitleHighlight: "Instagram Reels",
+    heroSubtitle: "Upload a talking-head clip — ",
+    heroSubtitleBold: "AI Reels Editor",
+    heroSubtitleSuffix: " cuts, captions, zooms & sound for Instagram.",
+    engineVersion: "Synapix Reels Engine",
     
     // Tips
     aiTipTitle: "AI Insight",
     tips: [
-      "The more details in your video, the better the AI can tailor the edit.",
-      "Upload sources with clear audio for crisp auto-subtitles.",
-      "AI automatically removes silence and bad takes, saving you hours.",
-      "Switch aspect ratios instantly for any social media platform."
+      "Best results: vertical talking-head, clear voice, 15–60 seconds.",
+      "Clear audio = sharper auto-captions for Reels.",
+      "AI removes silence and filler so the Reel stays punchy.",
+      "Output is locked to Instagram Reels 9:16."
     ],
 
     // Recent Projects
@@ -34,40 +34,35 @@ export const translations = {
     uploadingText: "Synthesizing and analyzing video...",
     fileReady: "Media file ready for processing",
     waitingFile: "Waiting for video file...",
-    startEngine: "Start AI Engine",
+    startEngine: "Make Instagram Reel",
     initializing: "Initializing...",
 
     // How it works
     howItWorks: "How it works",
     step1Title: "Upload",
-    step1Desc: "Drag & drop source footage. All major formats supported.",
+    step1Desc: "Drop your talking-head clip for Instagram Reels.",
     step2Title: "Deep Analysis",
-    step2Desc: "Neural models detect speech, emotional pacing, and cut silence.",
-    step3Title: "Editing Magic",
-    step3Desc: "Request edits via text chat and export your final cut.",
+    step2Desc: "AI detects speech peaks, cuts silence, plans retention beats.",
+    step3Title: "Reels Montage",
+    step3Desc: "Captions, zooms, B-roll and sound — export a ready Reel.",
 
     // Formats
     formatActive: "Active",
     formatPreview: "Preview",
     formatTitles: {
-      "YouTube Long": "YouTube Long",
-      "YouTube Shorts": "YouTube Shorts",
-      "Reels / TikTok": "Reels / TikTok",
-      "SaaS Demo": "SaaS Demo",
-      "Подкаст": "Podcast",
-      "Обучающее видео": "Tutorial"
+      "Instagram Reels": "Instagram Reels"
     },
 
     // Chat Sidebar & Agent UI
-    assistantTitle: "Synapix AI • Assistant",
-    assistantIntro: "I will edit your talking head video: add custom 3D graphics, kinetic typography, music, and zooms.",
-    welcomeMessage: "Hi! I'm Synapix AI — your editing director. Tell me what to do with this video: subtitles, B-roll, graphics, music, zooms, or a full cut. Or tap a quick start below.",
+    assistantTitle: "Synapix • Reels Director",
+    assistantIntro: "I auto-edit talking-head clips into Instagram Reels: captions, zooms, B-roll, music and SFX.",
+    welcomeMessage: "Hi! I'm your Instagram Reels director. Ask for a full Reel montage, or captions / zooms / sound. Everything is 9:16 for Instagram.",
     quickStart: "Quick Start:",
     quickPrompts: [
-      "Edit talking head video for Shorts",
-      "Add custom 3D graphic scenes",
-      "Apply energetic soundtrack and auto-zooms",
-      "Configure kinetic lettering subtitles"
+      "Full Instagram Reels montage",
+      "Kinetic captions for Reels",
+      "Add music + zooms on accents",
+      "Hook graphic in the first 2 seconds"
     ],
     processing: "Processing...",
     working: "Working...",
@@ -85,20 +80,20 @@ export const translations = {
   },
   ru: {
     // Header
-    heroTitlePrefix: "Создайте свой ",
-    heroTitleHighlight: "шедевр",
-    heroSubtitle: "Загрузите материалы, а ",
-    heroSubtitleBold: "Cinematic AI",
-    heroSubtitleSuffix: " сделает рутинный монтаж.",
-    engineVersion: "Synapix Engine 2.0",
+    heroTitlePrefix: "Автомонтаж ",
+    heroTitleHighlight: "Instagram Reels",
+    heroSubtitle: "Загрузи talking-head — ",
+    heroSubtitleBold: "ИИ для Reels",
+    heroSubtitleSuffix: " сделает нарезку, субтитры, зумы и звук под Instagram.",
+    engineVersion: "Synapix Reels Engine",
 
     // Tips
     aiTipTitle: "Совет от ИИ",
     tips: [
-      "Чем больше деталей в видео, тем лучше ИИ сможет сделать монтаж.",
-      "Загружайте исходники с качественным звуком — это улучшит генерацию субтитров.",
-      "ИИ автоматически вырезает тишину и неудачные дубли, экономя ваши часы.",
-      "В редакторе вы сможете быстро поменять соотношение сторон под нужную платформу."
+      "Лучший результат: вертикальная говорящая голова, чистый голос, 15–60 сек.",
+      "Чистый звук = точные субтитры для Reels.",
+      "ИИ вырезает паузы и воду, чтобы Reel оставался динамичным.",
+      "Формат зафиксирован: Instagram Reels 9:16."
     ],
 
     // Recent Projects
@@ -112,40 +107,35 @@ export const translations = {
     uploadingText: "Синтез и анализ видео...",
     fileReady: "Медиафайл готов к обработке",
     waitingFile: "Ожидание файла...",
-    startEngine: "Запустить AI Engine",
+    startEngine: "Сделать Instagram Reel",
     initializing: "Инициализация...",
 
     // How it works
     howItWorks: "Как это работает?",
     step1Title: "Загрузка",
-    step1Desc: "Перетащите исходник. Поддерживаются любые форматы.",
+    step1Desc: "Загрузи talking-head клип для Instagram Reels.",
     step2Title: "Глубокий анализ",
-    step2Desc: "Нейросеть распознает речь, эмоции и вырежет тишину.",
-    step3Title: "Магия монтажа",
-    step3Desc: "Внесите правки текстом в чате и скачайте шедевр.",
+    step2Desc: "ИИ находит акценты речи, режет паузы, планирует удержание.",
+    step3Title: "Монтаж Reels",
+    step3Desc: "Субтитры, зумы, B-roll и звук — экспорт готового Reel.",
 
     // Formats
     formatActive: "Активен",
     formatPreview: "Превью",
     formatTitles: {
-      "YouTube Long": "YouTube Long",
-      "YouTube Shorts": "YouTube Shorts",
-      "Reels / TikTok": "Reels / TikTok",
-      "SaaS Demo": "SaaS Demo",
-      "Подкаст": "Подкаст",
-      "Обучающее видео": "Обучающее видео"
+      "Instagram Reels": "Instagram Reels"
     },
 
     // Chat Sidebar & Agent UI
-    assistantTitle: "Synapix AI • Ассистент",
-    assistantIntro: "Я помогу смонтировать ролик говорящей головы: добавлю кастомную 3D-графику, кинетическую типографику, музыку и зумы.",
-    welcomeMessage: "Привет! Я Synapix AI — твой режиссёр монтажа. Напиши, что сделать с этим видео: субтитры, B-roll, графика, музыка, зумы или полный монтаж. Или выбери быстрый старт ниже.",
+    assistantTitle: "Synapix • Режиссёр Reels",
+    assistantIntro: "Монтирую talking-head в Instagram Reels: субтитры, зумы, B-roll, музыка и SFX.",
+    welcomeMessage: "Привет! Я режиссёр Instagram Reels. Попроси полный монтаж Reel или субтитры / зумы / звук. Всё только 9:16 под Instagram.",
     quickStart: "Быстрый старт:",
     quickPrompts: [
-      "Смонтировать говорящую голову под Shorts",
-      "Добавить кастомные графические перебивки",
-      "Наложить энергичный саундтрек и зумы",
-      "Настроить кинетический леттеринг"
+      "Полный монтаж Instagram Reels",
+      "Кинетические субтитры для Reels",
+      "Музыка + зумы на акцентах",
+      "Хук-графика в первые 2 секунды"
     ],
     processing: "Обработка...",
     working: "Работает...",

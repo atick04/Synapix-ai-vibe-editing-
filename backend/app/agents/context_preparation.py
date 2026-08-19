@@ -127,6 +127,7 @@ async def prepare_context_node(state: VideoEditingState) -> VideoEditingState:
             print(f"Error Loading transcript: {e}")
 
     # 2. Visual Context
+    scenes = []
     if os.path.exists(visual_path):
         try:
             with open(visual_path, "r", encoding="utf-8") as f:
@@ -134,7 +135,67 @@ async def prepare_context_node(state: VideoEditingState) -> VideoEditingState:
             session["visual_scenes"] = scenes
             visual_context_text = format_visual_context(scenes)
         except Exception:
-            pass
+            scenes = []
+
+    look_path = os.path.join("uploads", f"{file_id}_look.json")
+    try:
+        from app.services.content_look import load_look, infer_content_look, save_look, transcript_blob
+        from app.workflows.production_session import save_session
+
+        look = load_look(look_path)
+        if not look:
+            video_guess = os.path.join("uploads", f"{file_id}.mp4")
+            look = infer_content_look(
+                video_path=video_guess if os.path.exists(video_guess) else "",
+                scenes=scenes,
+                transcript=transcript_blob({"text": transcript_text}),
+            )
+            save_look(look_path, look)
+        session["content_look"] = look
+        save_session(file_id, session)
+    except Exception as look_err:
+        print(f"[PrepareContext] content look failed: {look_err}")
+
+    try:
+        from app.services.beat_sheet import build_beat_sheet
+        from app.workflows.production_session import save_session
+
+        transcript_data = {}
+        if os.path.exists(transcript_path):
+            with open(transcript_path, "r", encoding="utf-8") as f:
+                transcript_data = json.load(f)
+        hook_arc = session.get("narrative_arc") or {}
+        extra_clips = 0
+        lib_guess = os.path.join("uploads", f"{file_id}_media_library.json")
+        if os.path.exists(lib_guess):
+            try:
+                with open(lib_guess, "r", encoding="utf-8") as f:
+                    extra_clips = sum(
+                        1 for item in json.load(f)
+                        if str(item.get("id") or "").startswith("additional_")
+                    )
+            except Exception:
+                extra_clips = 0
+        words = transcript_data.get("words") or []
+        dur = float(session.get("duration") or 0.0)
+        if not dur and words:
+            dur = float(words[-1].get("end") or 0.0)
+        sheet = build_beat_sheet(
+            transcript_data,
+            hook=hook_arc.get("hook") or "",
+            hook_start=float(hook_arc.get("hook_start") or 0.0),
+            hook_end=float(hook_arc.get("hook_end") or 0.0),
+            look=session.get("content_look") or {},
+            topic_boundaries=topic_boundaries,
+            duration=dur,
+            has_user_broll=extra_clips > 0,
+        )
+        session["beat_sheet"] = sheet
+        session["transcript_data"] = transcript_data
+        save_session(file_id, session)
+        print(f"[PrepareContext] Beat sheet: {len(sheet.get('beats') or [])} beats")
+    except Exception as beat_err:
+        print(f"[PrepareContext] beat sheet failed: {beat_err}")
 
     # ── Aspect Ratio & Resolution Detection ──
     width, height = 1080, 1920  # Default vertical
@@ -189,6 +250,7 @@ async def prepare_context_node(state: VideoEditingState) -> VideoEditingState:
     ReasoningManager.complete_analysis(
         f"Анализ завершен. Загружен транскрипт, обнаружено {len(auto_cuts)} пауз для удаления "
         f"и {len(topic_boundaries)} смен темы для переходов. "
+        f"Beat sheet: {len((session.get('beat_sheet') or {}).get('beats') or [])} битов. "
         f"Параметры видео: {aspect_ratio} ({width}x{height})."
     )
 

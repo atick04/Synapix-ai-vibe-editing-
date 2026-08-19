@@ -2,8 +2,9 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { getApiUrl } from "@/utils/api";
-import AccessKeyModal from "@/components/AccessKeyModal";
+import { apiFetch, getApiUrl } from "@/utils/api";
+import AuthGate from "@/components/AuthGate";
+import { useAuth } from "@/context/AuthContext";
 import Background3D, { Background3DRef } from "@/components/Background3D";
 import { useLanguage } from "@/context/LanguageContext";
 import { 
@@ -31,36 +32,24 @@ interface RecentProject {
   date: string;
 }
 
-const FORMAT_CARDS = [
-  { titleKey: "YouTube Long", defaultTitle: "YouTube Long", ratio: "16:9", src: "/formats/youtube-long.png" },
-  { titleKey: "YouTube Shorts", defaultTitle: "YouTube Shorts", ratio: "9:16", src: "/formats/youtube-shorts.png" },
-  { titleKey: "Reels / TikTok", defaultTitle: "Reels / TikTok", ratio: "9:16", src: "/formats/reels-tiktok.png" },
-  { titleKey: "SaaS Demo", defaultTitle: "SaaS Demo", ratio: "16:9", src: "/formats/saas-demo.png" },
-  { titleKey: "Подкаст", defaultTitle: "Podcast", ratio: "16:9", src: "/formats/podcast.png" },
-  { titleKey: "Обучающее видео", defaultTitle: "Tutorial", ratio: "16:9", src: "/formats/training.png" },
-];
-
 const PRODUCT_TAGLINES = {
   en: [
-    "Create Your Vibe",
-    "AI-Powered Motion & Cinematic Video Editing",
-    "Drop Your Clips & Let AI Compose the Story",
-    "Instant Smart B-Roll & High-Impact Cuts",
-    "Export High-Resolution Motion Graphics",
-    "Transform Creative Ideas into Visual Masterpieces",
+    "AI Auto-Editor for Instagram Reels",
+    "Talking-Head → Ready Reel in One Click",
+    "Captions, Zooms, B-Roll & Sound — Built for Reels",
+    "Vertical 9:16 Only. Pro Retention Montage.",
   ],
   ru: [
-    "Создай Свой Вайб",
-    "ИИ-Монтаж и Кинематографичный Видеодизайн",
-    "Загрузи Клипы и ИИ Создаст Готовый Сюжет",
-    "Мгновенный Авто-B-Roll и Динамичные Склейки",
-    "Экспорт Графики и Видео Высокого Разрешения",
-    "Превращай Идеи в Визуальные Шедевры",
+    "ИИ-автомонтажёр для Instagram Reels",
+    "Говорящая голова → готовый Reels в один клик",
+    "Субтитры, зумы, B-roll и звук — под Reels",
+    "Только вертикаль 9:16. Монтаж на удержание.",
   ],
 };
 
 export default function Dashboard() {
   const { lang, setLang, t } = useLanguage();
+  const { user, ready: authReady, logout } = useAuth();
   const bg3dRef = useRef<Background3DRef>(null);
   const audioInputRef = useRef<HTMLInputElement>(null);
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
@@ -83,74 +72,39 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [isAudioPlaying, lang]);
 
-  const [accessKeyReady, setAccessKeyReady] = useState(false);
   const [isMounted, setIsMounted] = useState(false);
-  const [accessKeyError, setAccessKeyError] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [currentTipIndex, setCurrentTipIndex] = useState(0);
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
-  const [selectedFormat, setSelectedFormat] = useState<string>("YouTube Long");
   const router = useRouter();
 
   useEffect(() => {
       setIsMounted(true);
-      const savedKey = localStorage.getItem('vibe_access_key');
-      const savedLogin = localStorage.getItem('vibe_user_login');
-      if (savedKey) {
-          setAccessKeyReady(true);
-      }
-      const API_URL = getApiUrl();
-
-      if (savedKey && savedLogin) {
-          // Validate key immediately on mount
-          const validateOnMount = async () => {
-              try {
-                  const res = await fetch(`${API_URL}/api/admin/validate-key?key=${encodeURIComponent(savedKey)}&login=${encodeURIComponent(savedLogin)}`);
-                  const data = await res.json();
-                  if (data.valid) {
-                      setAccessKeyReady(true);
-                  } else {
-                      handleAuthError(data.reason || 'access_key_invalid');
-                  }
-              } catch (err) {
-                  setAccessKeyReady(true);
-              }
-          };
-          validateOnMount();
-      }
-      try {
-        const stored = localStorage.getItem("vibe_recent_projects");
-        if (stored) {
-          setRecentProjects(JSON.parse(stored));
-        }
-      } catch (e) {
-        console.error(e);
-      }
   }, []);
 
-  // Periodic check to detect token expiration while the dashboard is open
   useEffect(() => {
-      if (!accessKeyReady) return;
-      const API_URL = getApiUrl();
-      const interval = setInterval(async () => {
-          const savedKey = localStorage.getItem('vibe_access_key');
-          const savedLogin = localStorage.getItem('vibe_user_login');
-          if (savedKey && savedLogin) {
-              try {
-                  const res = await fetch(`${API_URL}/api/admin/validate-key?key=${encodeURIComponent(savedKey)}&login=${encodeURIComponent(savedLogin)}`);
-                  const data = await res.json();
-                  if (!data.valid) {
-                      handleAuthError(data.reason || 'access_key_invalid');
-                  }
-              } catch (err) {
-                  // Ignore network error to avoid false positives
-              }
-          }
-      }, 30000); // Check every 30 seconds
-      return () => clearInterval(interval);
-  }, [accessKeyReady]);
+      if (!user) {
+        try {
+          const stored = localStorage.getItem("vibe_recent_projects");
+          if (stored) setRecentProjects(JSON.parse(stored));
+        } catch { /* ignore */ }
+        return;
+      }
+      apiFetch("/api/auth/projects")
+        .then((r) => r.ok ? r.json() : { projects: [] })
+        .then((data) => {
+          const projects = (data.projects || []).map((p: any) => ({
+            id: p.id,
+            filename: p.filename || p.id,
+            date: p.updated_at || p.created_at || new Date().toISOString(),
+          }));
+          setRecentProjects(projects);
+          try { localStorage.setItem("vibe_recent_projects", JSON.stringify(projects)); } catch { /* ignore */ }
+        })
+        .catch(() => {});
+  }, [user]);
 
   useEffect(() => {
     const tipCount = t?.tips?.length || 1;
@@ -160,26 +114,8 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [t?.tips?.length]);
 
-  const handleAccessKeySuccess = (login: string, key: string) => {
-      setAccessKeyError('');
-      setAccessKeyReady(true);
-  };
-
-  const handleAuthError = (detail: string) => {
-    localStorage.removeItem('vibe_access_key');
-    localStorage.removeItem('vibe_user_login');
-    
-    const reasons: Record<string, string> = {
-      access_key_required: 'Доступ отклонен: Требуется ключ доступа.',
-      access_key_invalid: 'Доступ отклонен: Неверный ключ или логин.',
-      access_key_expired: 'Доступ отклонен: Срок действия ключа истёк.',
-      access_key_revoked: 'Доступ отклонен: Ключ был отозван администратором.',
-      access_key_limit_reached: 'Доступ отклонен: Исчерпан лимит токенов.',
-    };
-    
-    const errorMsg = reasons[detail] || 'Доступ отклонен. Проверьте данные для входа.';
-    setAccessKeyError(errorMsg);
-    setAccessKeyReady(false);
+  const handleAuthError = () => {
+    logout();
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -207,21 +143,14 @@ export default function Dashboard() {
     const API_URL = getApiUrl();
 
     try {
-      const accessKey = localStorage.getItem('vibe_access_key') || '';
-      const accessLogin = localStorage.getItem('vibe_user_login') || '';
-
-      const response = await fetch(`${API_URL}/api/video/upload`, {
+      const response = await apiFetch("/api/video/upload", {
         method: "POST",
-        headers: {
-          "X-Access-Key": accessKey,
-          "X-User-Login": encodeURIComponent(accessLogin),
-        },
         body: formData,
       });
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         if (response.status === 403) {
-          handleAuthError(errorData.detail || 'access_key_invalid');
+          handleAuthError();
           return;
         }
         throw new Error("upload failed");
@@ -242,19 +171,11 @@ export default function Dashboard() {
         console.error(e);
       }
 
-      const formatMap: Record<string, string> = {
-        "YouTube Long": "youtube_long",
-        "YouTube Shorts": "tutorial",
-        "Reels / TikTok": "coaching",
-        "SaaS Demo": "saas",
-        "Подкаст": "aesthetic_cursive",
-        "Обучающее видео": "educational"
-      };
-      const templateId = formatMap[selectedFormat] || "youtube_long";
+      const templateId = "instagram_reels";
       router.push(`/editor/${data.file_id}?filename=${data.filename}&template=${templateId}`);
     } catch (error: any) {
       console.error("Upload failed", error);
-      if (!localStorage.getItem('vibe_access_key')) {
+      if (!user) {
         // Auth redirect already occurred inside handleAuthError
         return;
       }
@@ -362,7 +283,7 @@ export default function Dashboard() {
         <div className="absolute top-[35%] -right-[10%] w-[550px] h-[550px] rounded-full bg-gradient-to-tr from-sky-400/10 via-cyan-300/5 to-transparent blur-[130px] mix-blend-screen" />
       </div>
 
-      {isMounted && !accessKeyReady && <AccessKeyModal onSuccess={handleAccessKeySuccess} initialError={accessKeyError} />}
+      {isMounted && authReady && !user && <AuthGate />}
       
       <main className={`w-full h-full p-4 lg:p-6 xl:px-12 flex flex-col mx-auto max-w-[2500px] transition-all duration-1000 ease-in-out ${
         isAudioPlaying ? "opacity-0 pointer-events-none scale-95" : "opacity-100 pointer-events-auto scale-100"
@@ -627,49 +548,6 @@ export default function Dashboard() {
                     <p className="text-[11.5px] text-neutral-400 leading-relaxed relative z-10">{t.step3Desc}</p>
                   </div>
                 </div>
-              </div>
-
-              {/* Formats row */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3 shrink-0 pt-0.5">
-                {FORMAT_CARDS.map((card, idx) => {
-                  const isActive = selectedFormat === card.titleKey;
-                  const displayTitle = (t.formatTitles as any)[card.titleKey] || card.defaultTitle;
-
-                  return (
-                    <div 
-                      key={idx} 
-                      onClick={() => setSelectedFormat(card.titleKey)}
-                      className={`flex flex-col liquid-glass-card rounded-[16px] overflow-hidden group cursor-pointer ${
-                        isActive 
-                          ? "border-sky-400 shadow-[0_0_20px_rgba(56,189,248,0.25)] scale-[1.01]" 
-                          : "border-white/5 hover:border-white/20"
-                      }`}
-                    >
-                      <div className="w-full aspect-[4/3] bg-neutral-900/80 relative overflow-hidden flex items-center justify-center">
-                        <img 
-                          src={card.src} 
-                          alt={displayTitle} 
-                          className="w-full h-full object-cover opacity-0 group-hover:scale-105 transition-all duration-500" 
-                          onLoad={(e) => { e.currentTarget.style.opacity = '1'; }}
-                          onError={(e) => { e.currentTarget.style.display = 'none'; }} 
-                        />
-                        {isActive ? (
-                          <div className="absolute top-2 right-2 px-2 py-0.5 liquid-glass-pill text-white text-[9.5px] font-bold tracking-wider uppercase z-20 shadow-sm border-sky-400/40">
-                            {t.formatActive}
-                          </div>
-                        ) : (
-                          <div className="absolute text-[10.5px] text-neutral-500 font-medium">{t.formatPreview}</div>
-                        )}
-                      </div>
-                      <div className="p-3 flex flex-col gap-0.5">
-                        <span className={`text-[12.5px] font-semibold tracking-tight whitespace-nowrap overflow-hidden text-ellipsis transition-colors ${
-                          isActive ? "text-sky-400" : "text-neutral-200"
-                        }`}>{displayTitle}</span>
-                        <span className="text-[11px] text-neutral-500">{card.ratio}</span>
-                      </div>
-                    </div>
-                  );
-                })}
               </div>
 
             </div>

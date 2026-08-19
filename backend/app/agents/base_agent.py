@@ -95,26 +95,27 @@ def record_raw_tokens(tokens: int):
         return
     try:
         import json, os
-        from app.api.admin import current_access_key_var
-        
-        store_path = os.path.join("uploads", "admin_store.json")
-        if not os.path.exists(store_path):
-            return
+        from app.api.admin import current_access_key_var, load_store, save_store
+        from app.auth.deps import current_user_id_var
 
+        store = load_store()
+        changed = False
+        user_id = current_user_id_var.get()
+        if user_id:
+            for user in store.get("users", []):
+                if user.get("id") == user_id:
+                    user["tokens_used"] = int(user.get("tokens_used") or 0) + tokens
+                    changed = True
+                    break
         active_key_id = current_access_key_var.get()
-        if not active_key_id:
-            return
-
-        with open(store_path, "r", encoding="utf-8") as f:
-            store = json.load(f)
-
-        for key in store.get("keys", []):
-            if key.get("id") == active_key_id:
-                key["tokens_used"] = key.get("tokens_used", 0) + tokens
-                break
-
-        with open(store_path, "w", encoding="utf-8") as f:
-            json.dump(store, f, indent=2, ensure_ascii=False)
+        if active_key_id:
+            for key in store.get("keys", []):
+                if key.get("id") == active_key_id:
+                    key["tokens_used"] = int(key.get("tokens_used") or 0) + tokens
+                    changed = True
+                    break
+        if changed:
+            save_store(store)
     except Exception as e:
         print(f"Token tracking error: {e}")
 
@@ -148,3 +149,8 @@ async def invoke_graphics_llm(system_prompt: str, user_message: str):
     ])
     _record_token_usage(system_prompt + user_message, response.content, getattr(response, 'response_metadata', {}))
     return response
+
+
+async def invoke_sound_llm(system_prompt: str, user_message: str):
+    """Light LLM for sound-design mood / skip choices (same model as graphics)."""
+    return await invoke_graphics_llm(system_prompt, user_message)

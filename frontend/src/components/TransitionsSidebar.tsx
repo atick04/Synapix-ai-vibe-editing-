@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { getApiUrl } from "@/utils/api";
+import { apiFetch } from "@/utils/api";
 
 interface TopicBoundary {
   time: number;
@@ -62,8 +62,7 @@ export default function TransitionsSidebar({
     setIsDetecting(true);
     setDetectError("");
     try {
-      const API_URL = getApiUrl();
-      const res = await fetch(`${API_URL}/api/video/${fileId}/topic_transitions`, {
+      const res = await apiFetch(`/api/video/${fileId}/topic_transitions`, {
         method: "POST",
       });
       if (!res.ok) {

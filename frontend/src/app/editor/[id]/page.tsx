@@ -1,7 +1,10 @@
 "use client";
 
 import { use, useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { getApiUrl } from "@/utils/api";
+import { apiFetch, getApiUrl } from "@/utils/api";
+import AuthGate from "@/components/AuthGate";
+import PaywallModal from "@/components/PaywallModal";
+import { useAuth } from "@/context/AuthContext";
 import { useRouter, useSearchParams } from "next/navigation";
 import TimelineEditor from "@/components/TimelineEditor";
 import VideoTimeline from "@/components/VideoTimeline";
@@ -9,7 +12,6 @@ import ExportModal from "@/components/ExportModal";
 import ChatSidebar from "@/components/ChatSidebar";
 import ReferencesSidebar from "@/components/ReferencesSidebar";
 import SandboxPlayer from "@/components/SandboxPlayer";
-import AccessKeyModal from "@/components/AccessKeyModal";
 import MaskingSidebar from "@/components/MaskingSidebar";
 import TextSidebar from "@/components/TextSidebar";
 import GraphicsSidebar from "@/components/GraphicsSidebar";
@@ -22,6 +24,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     const resolvedParams = use(params);
     const { id } = resolvedParams;
     const { t } = useLanguage();
+    const { user, ready: authReady, logout } = useAuth();
     const searchParams = useSearchParams();
     const filenameParam = searchParams.get('filename');
     const [filename, setFilename] = useState<string | null>(null);
@@ -105,92 +108,27 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     const chatContainerRef = useRef<HTMLDivElement>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
     const [showExportModal, setShowExportModal] = useState(false);
+    const [showPaywall, setShowPaywall] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
     const hyperframesEdits = activeEdits.filter(e => e.action === 'canvas_overlay' || e.action === 'hyperframes_html' || e.action === 'add_hyperframes_graphics');
 
-    // Access key auth
-    const [accessKeyReady, setAccessKeyReady] = useState(false);
     const [isMounted, setIsMounted] = useState(false);
-    const [accessLogin, setAccessLogin] = useState('');
-    const [accessKey, setAccessKey] = useState('');
-    const [accessKeyError, setAccessKeyError] = useState('');
+    const [projectForbidden, setProjectForbidden] = useState(false);
 
     useEffect(() => {
         setIsMounted(true);
-        const savedKey = localStorage.getItem('vibe_access_key');
-        const savedLogin = localStorage.getItem('vibe_user_login');
-        if (savedKey) {
-            setAccessKeyReady(true);
-        }
-        if (savedKey && savedLogin) {
-            setAccessKey(savedKey);
-            setAccessLogin(savedLogin);
-            
-            // Validate key immediately on mount
-            const validateOnMount = async () => {
-                try {
-                    const res = await fetch(`${API_URL}/api/admin/validate-key?key=${encodeURIComponent(savedKey)}&login=${encodeURIComponent(savedLogin)}`);
-                    const data = await res.json();
-                    if (data.valid) {
-                        setAccessKeyReady(true);
-                    } else {
-                        handleAuthError(data.reason || 'access_key_invalid');
-                    }
-                } catch (err) {
-                    setAccessKeyReady(true);
-                }
-            };
-            validateOnMount();
-        }
-    }, [API_URL]);
+    }, []);
 
-    const handleAccessKeySuccess = (login: string, key: string) => {
-        setAccessLogin(login);
-        setAccessKey(key);
-        setAccessKeyError('');
-        setAccessKeyReady(true);
+    const handleAuthError = () => {
+        logout();
     };
 
-    const handleAuthError = (detail: string) => {
-        localStorage.removeItem('vibe_access_key');
-        localStorage.removeItem('vibe_user_login');
-        
-        const reasons: Record<string, string> = {
-            access_key_required: 'Доступ отклонен: Требуется ключ доступа.',
-            access_key_invalid: 'Доступ отклонен: Неверный ключ или логин.',
-            access_key_expired: 'Доступ отклонен: Срок действия ключа истёк.',
-            access_key_revoked: 'Доступ отклонен: Ключ был отозван администратором.',
-            access_key_limit_reached: 'Доступ отклонен: Исчерпан лимит токенов.',
-        };
-        
-        const errorMsg = reasons[detail] || 'Доступ отклонен. Проверьте данные для входа.';
-        setAccessKeyError(errorMsg);
-        setAccessKeyReady(false);
-    };
-
-    // Periodic check to detect token expiration while the editor is open
     useEffect(() => {
-        if (!accessKeyReady) return;
-        const interval = setInterval(async () => {
-            const savedKey = localStorage.getItem('vibe_access_key');
-            const savedLogin = localStorage.getItem('vibe_user_login');
-            if (savedKey && savedLogin) {
-                try {
-                    const res = await fetch(`${API_URL}/api/admin/validate-key?key=${encodeURIComponent(savedKey)}&login=${encodeURIComponent(savedLogin)}`);
-                    const data = await res.json();
-                    if (!data.valid) {
-                        handleAuthError(data.reason || 'access_key_invalid');
-                    }
-                } catch (err) {
-                    // Ignore network error to avoid false positives
-                }
-            }
-        }, 30000); // Check every 30 seconds
-        return () => clearInterval(interval);
-    }, [accessKeyReady, API_URL]);
+        if (user?.id) setBrandId(user.id);
+    }, [user?.id]);
     
     // Manual Format Control
-    const [targetFormat, setTargetFormat] = useState<'auto' | '16:9' | '9:16'>('auto');
+    const [targetFormat, setTargetFormat] = useState<'auto' | '16:9' | '9:16'>('9:16');
 
     // Brand custom assets
     const [brandId, setBrandId] = useState<string>("default");
@@ -353,44 +291,18 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             }
         }
 
-        // 6. G1-Graphic-
+        // 6. G1-Graphic-${rawEditIndex}
         if (focusedClipId.startsWith("G1-Graphic-")) {
-            const parts = focusedClipId.split('-');
-            const gIdx = parseInt(parts[parts.length - 1], 10);
-            const graphicClips: any[] = [];
-            activeEdits.forEach((e, idx) => {
-                const isGraphic = e.action === "canvas_overlay" || e.action === "hyperframes_html" ||
-                                  e.action === 'add_hyperframes_graphics' || e.action === 'add_motion_graphic' ||
-                                  e.action === 'add_dynamic_graphic' || e.action === 'add_text_overlay';
-                if (!isGraphic) return;
-                let start = e.start != null ? e.start : 0;
-                let end = e.end != null ? e.end : start + 3;
-                let label = "graphics";
-                if (e.action === 'add_motion_graphic') label = `motion (${e.style || 'style'})`;
-                else if (e.action === 'add_dynamic_graphic') label = `dynamic (${e.elements?.length || 0} el)`;
-                else if (e.action === 'add_text_overlay') label = `text: "${e.text || ''}"`;
-                else if (e.action === 'add_hyperframes_graphics') label = "canvas graphic";
-                else if (e.action === 'canvas_overlay' || e.action === 'hyperframes_html') {
-                    label = e.style ? `graphics (${e.style})` : "graphics";
-                }
-                graphicClips.push({
-                    start,
-                    end,
-                    id: e.id || `${e.action}-${idx}`,
-                    label,
-                    rawIndex: idx
-                });
-            });
-
-            const targetClip = graphicClips[gIdx];
-            if (targetClip) {
+            const rawIdx = parseInt(focusedClipId.replace("G1-Graphic-", ""), 10);
+            if (Number.isFinite(rawIdx) && activeEdits[rawIdx]) {
+                const target = activeEdits[rawIdx];
                 return {
                     id: focusedClipId,
                     type: 'graphics',
-                    label: `✨ Graphic: ${targetClip.label}`,
-                    start: targetClip.start,
-                    end: targetClip.end,
-                    editIndex: targetClip.rawIndex
+                    label: `✨ Graphic: ${target.action}`,
+                    start: target.start != null ? target.start : 0,
+                    end: target.end != null ? target.end : ((target.start || 0) + 3),
+                    editIndex: rawIdx
                 };
             }
         }
@@ -580,13 +492,15 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
 
     // Template states
     const [templates, setTemplates] = useState<any[]>([]);
-    const [selectedTemplate, setSelectedTemplate] = useState<string>("");
+    const [selectedTemplate, setSelectedTemplate] = useState<string>("instagram_reels");
     const [showTemplatesDrawer, setShowTemplatesDrawer] = useState<boolean>(false);
     const templateParam = searchParams.get('template');
 
     useEffect(() => {
         if (templateParam) {
             setSelectedTemplate(templateParam);
+        } else {
+            setSelectedTemplate("instagram_reels");
         }
     }, [templateParam]);
     
@@ -705,6 +619,10 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     const activeLetterSpacing = overrideForChunk?.letter_spacing !== undefined ? overrideForChunk?.letter_spacing : subEdit?.letter_spacing;
                     const activeLineSpacing = overrideForChunk?.line_spacing !== undefined ? overrideForChunk?.line_spacing : subEdit?.line_spacing;
                     const activeAnimation = overrideForChunk?.animation_style || subEdit?.animation_style || "pop";
+                    const activePreset = overrideForChunk?.subtitle_preset || subEdit?.subtitle_preset;
+                    const activeLook = overrideForChunk?.caption_look || subEdit?.caption_look;
+                    const activeBoxColor = overrideForChunk?.box_color || subEdit?.box_color;
+                    const activeOutlineWidth = overrideForChunk?.outline_width ?? subEdit?.outline_width;
 
                     if (overrideForChunk) {
                         if (overrideForChunk.deleted) return;
@@ -737,7 +655,11 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                             active_scale: activeActiveScale,
                             letter_spacing: activeLetterSpacing,
                             line_spacing: activeLineSpacing,
-                            animation_style: activeAnimation
+                            animation_style: activeAnimation,
+                            subtitle_preset: activePreset,
+                            caption_look: activeLook,
+                            box_color: activeBoxColor,
+                            outline_width: activeOutlineWidth
                         });
                     } else {
                         const text = chunk.words.map((w: any) => w.word).join(' ');
@@ -768,7 +690,11 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                             active_scale: activeActiveScale,
                             letter_spacing: activeLetterSpacing,
                             line_spacing: activeLineSpacing,
-                            animation_style: activeAnimation
+                            animation_style: activeAnimation,
+                            subtitle_preset: activePreset,
+                            caption_look: activeLook,
+                            box_color: activeBoxColor,
+                            outline_width: activeOutlineWidth
                         });
                     }
                 });
@@ -812,6 +738,10 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             line_spacing: subEdit?.line_spacing,
             width: subEdit?.width,
             height: subEdit?.height,
+            subtitle_preset: subEdit?.subtitle_preset,
+            caption_look: subEdit?.caption_look,
+            box_color: subEdit?.box_color,
+            outline_width: subEdit?.outline_width,
         };
     }, [activeEdits, templates, selectedTemplate]);
 
@@ -980,15 +910,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         }
 
         let cancelled = false;
-        const authHeaders = () => {
-            const accessKey = localStorage.getItem("vibe_access_key") || "";
-            const accessLogin = localStorage.getItem("vibe_user_login") || "";
-            return {
-                "Content-Type": "application/json",
-                "X-Access-Key": accessKey,
-                "X-User-Login": encodeURIComponent(accessLogin),
-            };
-        };
+        const rotoAuth = () => ({ "Content-Type": "application/json" });
 
         const applyResult = (data: { filename?: string; mode?: string; mask_filename?: string; alpha_filename?: string }) => {
             if (!data.filename && !data.mask_filename) return;
@@ -1021,9 +943,9 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         const run = async () => {
             setRotoProcessing(true);
             try {
-                const startRes = await fetch(`${API_URL}/api/video/${id}/roto_preview`, {
+                const startRes = await apiFetch(`/api/video/${id}/roto_preview`, {
                     method: "POST",
-                    headers: authHeaders(),
+                    headers: rotoAuth(),
                     body: JSON.stringify(rotoRequest),
                 });
                 if (!startRes.ok) {
@@ -1040,9 +962,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                 // Full-HD RVM can take 15–40 min on CPU — keep polling (was 6 min and gave up)
                 for (let i = 0; i < 1200 && !cancelled; i++) {
                     await new Promise((r) => setTimeout(r, i < 120 ? 2000 : 3000));
-                    const st = await fetch(`${API_URL}/api/video/${id}/roto_status`, {
-                        headers: authHeaders(),
-                    });
+                    const st = await apiFetch(`/api/video/${id}/roto_status`);
                     if (!st.ok) continue;
                     const data = await st.json();
                     if (data.status === "ready" && (data.filename || data.mask_filename)) {
@@ -1075,18 +995,9 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         if (rotoProcessing) return;
 
         let cancelled = false;
-        const authHeaders = () => {
-            const accessKey = localStorage.getItem("vibe_access_key") || "";
-            const accessLogin = localStorage.getItem("vibe_user_login") || "";
-            return {
-                "X-Access-Key": accessKey,
-                "X-User-Login": encodeURIComponent(accessLogin),
-            };
-        };
-
         const check = async () => {
             try {
-                const st = await fetch(`${API_URL}/api/video/${id}/roto_status`, { headers: authHeaders() });
+                const st = await apiFetch(`/api/video/${id}/roto_status`);
                 if (!st.ok || cancelled) return;
                 const data = await st.json();
                 if (data.status !== "ready" || (!data.filename && !data.mask_filename)) return;
@@ -1164,7 +1075,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
 
     // Load templates
     useEffect(() => {
-        fetch(`${API_URL}/api/templates`)
+        apiFetch("/api/templates")
             .then(res => res.json())
             .then(data => setTemplates(data || []))
             .catch(err => console.error("Failed to load templates", err));
@@ -1179,7 +1090,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             try {
                 const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
                 audioCtx = new AudioContextClass();
-                const response = await fetch(currentVideo);
+                const response = await fetch(currentVideo, { credentials: "include" });
                 const arrayBuffer = await response.arrayBuffer();
                 const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
                 if (!active) {
@@ -1232,12 +1143,12 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         const generateFromMp3 = async () => {
             const mp3Url = `${API_URL}/uploads/${id}.mp3`;
             try {
-                const head = await fetch(mp3Url, { method: "HEAD" });
+                const head = await fetch(mp3Url, { method: "HEAD", credentials: "include" });
                 if (!head.ok || !active) return;
                 const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
                 if (!AudioContextClass) return;
                 audioCtx = new AudioContextClass();
-                const response = await fetch(mp3Url);
+                const response = await fetch(mp3Url, { credentials: "include" });
                 const arrayBuffer = await response.arrayBuffer();
                 const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
                 if (!active) return;
@@ -1305,10 +1216,10 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
 
     // Poll for logs and rendering status
     useEffect(() => {
-        if (!id) return;
+        if (!id || !user) return;
         const fetchStatus = async () => {
             try {
-                const res = await fetch(`${API_URL}/api/video/${id}/status`);
+                const res = await apiFetch(`/api/video/${id}/status`);
                 const data = await res.json();
                 if (data.logs) setLogs(data.logs);
                 if (data.status === "ready") {
@@ -1330,10 +1241,10 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
 
     // Poll for transcript
     useEffect(() => {
-        if (!id || transcript) return;
+        if (!id || !user || transcript) return;
         const fetchTranscript = async () => {
             try {
-                const res = await fetch(`${API_URL}/api/video/${id}/transcript`);
+                const res = await apiFetch(`/api/video/${id}/transcript`);
                 const data = await res.json();
                 if (data.status !== "processing") setTranscript(data);
             } catch (e) { }
@@ -1345,10 +1256,16 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
 
     // Fetch project media library
     useEffect(() => {
-        if (!id) return;
+        if (!id || !user) return;
         const fetchMediaLibrary = async () => {
             try {
-                const res = await fetch(`${API_URL}/api/video/${id}/media_library`);
+                const res = await apiFetch(`/api/video/${id}/media_library`);
+                if (res.status === 403) {
+                    const err = await res.json().catch(() => ({}));
+                    if (err.detail === "project_forbidden") setProjectForbidden(true);
+                    else handleAuthError();
+                    return;
+                }
                 const data = await res.json();
                 if (Array.isArray(data)) {
                     setMediaLibrary(data);
@@ -1358,7 +1275,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             }
         };
         fetchMediaLibrary();
-    }, [id, API_URL]);
+    }, [id, API_URL, user]);
 
     // After reload, URL/localStorage may hold the original upload name (e.g. reeelas.mov → reeelas.mp4)
     // while the server stores {projectId}.mp4 — heal filename from media library.
@@ -1634,13 +1551,10 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             const controller = new AbortController();
             abortControllerRef.current = controller;
 
-            const currentAccessKey = typeof window !== 'undefined' ? localStorage.getItem('vibe_access_key') || '' : '';
-            const currentAccessLogin = typeof window !== 'undefined' ? localStorage.getItem('vibe_user_login') || '' : '';
-
-            const response = await fetch(`${API_URL}/api/chat`, {
+            const response = await apiFetch("/api/chat", {
                 method: "POST",
                 signal: controller.signal,
-                headers: { "Content-Type": "application/json", "X-Access-Key": currentAccessKey, "X-User-Login": encodeURIComponent(currentAccessLogin) },
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ 
                     file_id: id, 
                     message: textToSend, 
@@ -1652,14 +1566,17 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     active_edits: activeEdits,
                     template_id: selectedTemplate || null,
                     target_format: targetFormat,
-                    focused_item: focusedItem || null
+                    focused_item: focusedItem || null,
+                    brand_id: brandId || user?.id || null
                 })
             });
 
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));
-                if (response.status === 403) {
-                    handleAuthError(errorData.detail || 'access_key_invalid');
+                if (response.status === 402 || errorData.detail === "free_reel_used") {
+                    setShowPaywall(true);
+                } else if (response.status === 403) {
+                    handleAuthError();
                 } else {
                     setChat(prev => [...prev, { role: "system", text: `❌ Ошибка сервера: ${response.status}` }]);
                 }
@@ -1870,26 +1787,23 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         try {
             setIsRendering(true);
             setChat((prev: any) => [...prev, { role: "system", text: `🎬 Launching render...` }]);
-            const currentAccessKey = typeof window !== 'undefined' ? localStorage.getItem('vibe_access_key') || '' : '';
-            const currentAccessLogin = typeof window !== 'undefined' ? localStorage.getItem('vibe_user_login') || '' : '';
-
-            const response = await fetch(`${API_URL}/api/chat/render`, {
+            const response = await apiFetch("/api/chat/render", {
                 method: "POST",
-                headers: { "Content-Type": "application/json", "X-Access-Key": currentAccessKey, "X-User-Login": encodeURIComponent(currentAccessLogin) },
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ 
                     file_id: id, font: fontStyle, font_size: fontSize, font_color: fontColor,
                     use_outline: useOutline, position: "center",
                     edits: activeEdits.length > 0 ? activeEdits : null,
                     edl: multiTrackEdl, 
                     template_id: selectedTemplate || null,
-                    brand_id: null
+                    brand_id: brandId || user?.id || null
                 })
             });
 
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));
                 if (response.status === 403) {
-                    handleAuthError(errorData.detail || 'access_key_invalid');
+                    handleAuthError();
                 } else {
                     setChat(prev => [...prev, { role: "system", text: `❌ Ошибка рендера: ${response.status}` }]);
                 }
@@ -1903,7 +1817,19 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
 
     return (
         <div className="h-screen w-full bg-[#111111] text-neutral-200 flex flex-col font-sans overflow-hidden">
-            {isMounted && !accessKeyReady && <AccessKeyModal onSuccess={handleAccessKeySuccess} initialError={accessKeyError} />}
+            {isMounted && authReady && !user && <AuthGate />}
+            <PaywallModal open={showPaywall} onClose={() => setShowPaywall(false)} />
+            {projectForbidden && user && (
+                <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70">
+                    <div className="rounded-2xl border border-white/10 bg-neutral-900 px-8 py-6 text-center max-w-sm">
+                        <p className="text-white font-semibold mb-2">Это не ваш проект</p>
+                        <p className="text-sm text-white/50 mb-4">Ролик принадлежит другому аккаунту.</p>
+                        <button type="button" onClick={() => router.push("/")} className="px-4 py-2 rounded-xl bg-white text-black text-sm font-semibold">
+                            На главную
+                        </button>
+                    </div>
+                </div>
+            )}
             
             {/* ── Top Navigation Bar ── */}
             <header className="h-[56px] flex items-center px-6 justify-between z-20 shrink-0 select-none bg-[#1C1C1E] border-b border-white/5">
@@ -1960,28 +1886,10 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     <button
                         onClick={() => setShowExportModal(true)}
                         disabled={isExporting}
-                        className="flex items-center gap-2 px-4 py-1.5 rounded text-sm font-semibold text-black bg-orange-500 hover:bg-orange-400 transition-colors shadow-[0_0_15px_rgba(249,115,22,0.3)]"
+                        className="flex items-center gap-2 px-4 py-1.5 rounded text-sm font-semibold text-black bg-sky-400 hover:bg-sky-300 transition-colors shadow-[0_0_15px_rgba(56,189,248,0.3)]"
                     >
                         {isExporting ? "Экспорт..." : "Экспорт"}
                     </button>
-
-                    {/* Format Toggle UI */}
-                    <div className="flex items-center gap-1 bg-[#2C2C2E] rounded p-1 border border-white/5">
-                        <select 
-                            value={targetFormat} 
-                            onChange={(e) => setTargetFormat(e.target.value as any)}
-                            className="bg-transparent text-sm text-neutral-200 outline-none cursor-pointer pl-1 pr-4 appearance-none"
-                            style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23ffffff'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E\")", backgroundPosition: "right 0.2rem center", backgroundRepeat: "no-repeat", backgroundSize: "1em" }}
-                        >
-                            <option value="auto" className="bg-[#2C2C2E]">Auto</option>
-                            <option value="16:9" className="bg-[#2C2C2E]">16:9</option>
-                            <option value="9:16" className="bg-[#2C2C2E]">9:16</option>
-                        </select>
-                    </div>
-
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-500 to-purple-500 border border-white/20 overflow-hidden">
-                        <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Felix" alt="User" className="w-full h-full object-cover" />
-                    </div>
                 </div>
             </header>
 
@@ -1997,6 +1905,10 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     useOutline={useOutline}
                     selectedTemplate={selectedTemplate}
                     onClose={() => setShowExportModal(false)}
+                    onPaywall={() => {
+                        setShowExportModal(false);
+                        setShowPaywall(true);
+                    }}
                     onStatusChange={(status) => setIsExporting(status)}
                     brandId={brandId}
                 />
@@ -2032,6 +1944,8 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                                     transcript={transcript}
                                     subtitleConfig={sandboxSubtitleConfig}
                                     focusedClipId={focusedClipId}
+                                    onFocusedClipChange={setFocusedClipId}
+                                    sourceEdits={activeEdits}
                                     onUpdateEdit={handleUpdateEditByIndex}
                                     onUpdateSubtitleGlobal={handleUpdateSubtitleGlobal}
                                     onUpdateSubtitleGlobalMultiple={handleUpdateSubtitleGlobalMultiple}
@@ -2055,36 +1969,6 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                                     </div>
                                 )}
                             </VibeProvider>
-                        </div>
-
-                        {/* Quick Actions Row */}
-                        <div className="flex items-center justify-center gap-2 mb-1 z-20">
-                            {[
-                                { icon: "✨", label: "Auto Edit", primary: true, prompt: "Сделай авто-монтаж ролика: добавь музыку, динамичные зумы, переходы и субтитры" },
-                                { icon: "🎨", label: "Графика", prompt: "Добавь красивую 3D инфографику (A-roll) по смыслу видео на ключевых моментах с Three.js и Remotion" },
-                                { icon: "🎬", label: "B-roll", prompt: "Добавь стоковые видео-перебивки B-roll по теме видео на ключевых моментах" },
-                                { icon: "📝", label: "Субтитры", prompt: "Настрой стиль субтитров (крупный шрифт Montserrat, тени, караоке-анимация pop)" },
-                                { icon: "🎵", label: "Музыка", prompt: "Подбери фоновую музыку под настроение ролика" },
-                                { icon: "⚡", label: "Улучшить", prompt: "Проведи критический аудит ролика и добавь недостающие зумы или перебивки" },
-                            ].map((btn, i) => (
-                                <button 
-                                    key={i}
-                                    onClick={() => handleSend(btn.prompt)}
-                                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-medium transition-colors border ${
-                                        btn.primary 
-                                            ? "bg-[#2A1D15] text-orange-500 border-orange-500/30 hover:bg-[#36251A]" 
-                                            : "bg-[#1C1C1E] text-neutral-300 border-white/5 hover:bg-[#2C2C2E]"
-                                    }`}
-                                >
-                                    <span>{btn.icon}</span>
-                                    {btn.label}
-                                </button>
-                            ))}
-                            <button className="flex items-center justify-center w-9 h-9 rounded-xl bg-[#1C1C1E] border border-white/5 hover:bg-[#2C2C2E] text-neutral-400 transition-colors">
-                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h.01M12 12h.01M19 12h.01M6 12a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0z" />
-                                </svg>
-                            </button>
                         </div>
 
                         {/* Statically fixed timeline panel */}
@@ -2238,6 +2122,9 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                                 useOutline={useOutline}
                                 setUseOutline={setUseOutline}
                                 onClose={() => setIsTextOpen(false)}
+                                activePreset={activeEdits.find((e: any) => e.action === 'add_subtitles')?.subtitle_preset}
+                                onApplyPreset={(fields) => handleUpdateSubtitleGlobalMultiple(fields)}
+                                onStyleFieldChange={(field, value) => handleUpdateSubtitleGlobal(field, value)}
                             />
                         </div>
                     </div>

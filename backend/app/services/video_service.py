@@ -3,8 +3,253 @@ import os
 import json
 import subprocess
 import argparse
+import time
 from typing import Optional, List, Dict, Any
 from app.services.pexels_service import download_broll
+
+
+def safe_replace(src: str, dst: str, retries: int = 10, delay: float = 0.4) -> None:
+    """Replace dst with src, retrying on Windows lock errors (WinError 5 / 32).
+
+    Browser/video players often keep ``*_rendered.mp4`` open, so a direct
+    overwrite fails. Renaming the locked file aside usually works; then we
+    move the new file into place.
+    """
+    last_err: Optional[BaseException] = None
+    for attempt in range(retries):
+        try:
+            if os.path.exists(dst):
+                aside = f"{dst}.prev.{os.getpid()}.{attempt}"
+                try:
+                    os.replace(dst, aside)
+                except OSError:
+                    # Locked for rename too — wait and retry full replace
+                    aside = None
+                else:
+                    try:
+                        os.replace(src, dst)
+                        try:
+                            os.remove(aside)
+                        except OSError:
+                            pass
+                        return
+                    except OSError as e:
+                        last_err = e
+                        # Roll rename back if we moved dst aside but failed to place src
+                        try:
+                            if aside and os.path.exists(aside) and not os.path.exists(dst):
+                                os.replace(aside, dst)
+                        except OSError:
+                            pass
+                        time.sleep(delay * (attempt + 1))
+                        continue
+            os.replace(src, dst)
+            return
+        except OSError as e:
+            last_err = e
+            winerr = getattr(e, "winerror", None)
+            if winerr not in (5, 32) and not isinstance(e, PermissionError):
+                # Non-lock errors: still retry a couple times on Windows sharing
+                if attempt >= 2:
+                    raise
+            time.sleep(delay * (attempt + 1))
+    raise PermissionError(
+        f"Access denied replacing locked file '{dst}' (close the video preview and retry). "
+        f"Last error: {last_err}"
+    ) from last_err
+
+
+# ASS Fontname must match the TTF *family* name (libass), not the filename.
+_ASS_FONT_ALIASES = {
+    "montserrat-extrabold": "Montserrat",
+    "montserrat-bold": "Montserrat",
+    "montserrat-semibold": "Montserrat",
+    "montserrat-medium": "Montserrat",
+    "montserrat": "Montserrat",
+    "inter_24pt-bold": "Inter",
+    "inter-bold": "Inter",
+    "inter": "Inter",
+    "unbounded-bold": "Unbounded",
+    "unbounded": "Unbounded",
+    "rubik-bold": "Rubik",
+    "rubik": "Rubik",
+    "manrope-bold": "Manrope",
+    "manrope": "Manrope",
+    "oswald-bold": "Oswald",
+    "oswald": "Oswald",
+    "comfortaa-bold": "Comfortaa",
+    "comfortaa": "Comfortaa",
+    "bebasneue-regular": "Bebas Neue",
+    "bebasneue": "Bebas Neue",
+    "bebas-neue": "Bebas Neue",
+    "impact": "Impact",
+    "arial": "Arial",
+    "marckscript": "Marck Script",
+    "marckscript-regular": "Marck Script",
+    "marck-script": "Marck Script",
+    "lobster": "Lobster",
+    "lobster-regular": "Lobster",
+}
+
+
+def resolve_ass_font_name(font: Optional[str]) -> str:
+    """Map UI/template font ids (often filenames) to ASS Fontname / family."""
+    if not font:
+        return "Montserrat"
+    name = str(font).strip()
+    if "," in name:
+        name = name.split(",")[0].strip()
+    name = name.replace(".ttf", "").replace(".otf", "").strip()
+    key = name.lower().replace(" ", "").replace("_", "-")
+    # also try with hyphen preserved from original
+    key2 = name.lower().replace(" ", "-")
+    return _ASS_FONT_ALIASES.get(key) or _ASS_FONT_ALIASES.get(key2) or name.replace("-", " ")
+
+
+def _normalize_overlay_text(s: str) -> str:
+    import re
+    s = re.sub(r"<[^>]+>", " ", s or "")
+    s = re.sub(r"[^\wа-яА-ЯёЁ]+", " ", s, flags=re.UNICODE)
+    return " ".join(s.lower().split())
+
+
+def _ass_escape(text: str) -> str:
+    return (text or "").replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}")
+
+
+def _write_dropcap_ass_events(
+    f,
+    words: list,
+    start: float,
+    end: float,
+    *,
+    script_font: str,
+    body_font: str,
+    font_size_val: int,
+    accent_col_ass: str,
+    main_col_ass: str,
+    custom_x,
+    custom_y,
+    anim: str,
+):
+    from app.services.resolve_subtitle_pack import split_dropcap_layout
+
+    layout = split_dropcap_layout(words)
+    if not layout.get("drop") and not layout.get("lines"):
+        return []
+
+    body_fs = max(42, int(font_size_val * 0.88))
+    drop_fs = int(body_fs * 3.05)
+    flourish_fs = int(body_fs * 1.35)
+    line_h = int(body_fs * 1.08)
+    drop_w = int(drop_fs * 0.58)
+    extra_lines = max(0, len(layout.get("lines") or []) - 2)
+    block_h = int(drop_fs * 0.9 + extra_lines * line_h + (flourish_fs * 0.25 if layout.get("flourish") else 0))
+    block_w = drop_w + int(body_fs * 7.2)
+
+    if custom_x is not None:
+        cx = int((float(custom_x) / 100.0) * 1080)
+        cy = int(((float(custom_y) if custom_y is not None else 78.0) / 100.0) * 1920)
+        origin_x = max(40, cx - block_w // 2)
+        origin_y = max(80, cy - block_h // 2)
+    else:
+        origin_x = 90
+        origin_y = max(80, 1920 - 220 - block_h)
+
+    start_str = format_ass_time(start)
+    end_str = format_ass_time(end)
+    body_x = origin_x + int(drop_fs * 0.48)
+    glow = "\\blur5\\bord0\\shad0"
+
+    drop = _ass_escape(layout.get("drop") or "")
+    accent_events: list[str] = []
+    if drop:
+        accent_events.append(
+            f"Dialogue: 2,{start_str},{end_str},Premium,,0,0,0,,"
+            f"{{\\an7\\pos({origin_x},{origin_y})\\fn{script_font}\\fs{drop_fs}\\c{accent_col_ass}{glow}}}{anim}{drop}\n"
+        )
+
+    for i, line in enumerate(layout.get("lines") or []):
+        text = _ass_escape(" ".join(line))
+        if not text:
+            continue
+        is_under = i >= 2
+        lx = origin_x if is_under else body_x
+        ly = origin_y + int(drop_fs * 0.78) if is_under else origin_y + int(drop_fs * 0.16) + i * line_h
+        f.write(
+            f"Dialogue: 0,{start_str},{end_str},Premium,,0,0,0,,"
+            f"{{\\an7\\pos({lx},{ly})\\fn{body_font}\\fs{body_fs}\\b1\\c&H00FFFFFF&\\bord0\\shad0}}{anim}{text}\n"
+        )
+
+    flourish = _ass_escape(layout.get("flourish") or "")
+    if flourish:
+        fx = origin_x + int(drop_fs * 0.55)
+        fy = origin_y + int(drop_fs * 0.62)
+        accent_events.append(
+            f"Dialogue: 1,{start_str},{end_str},Premium,,0,0,0,,"
+            f"{{\\an7\\pos({fx},{fy})\\fn{script_font}\\fs{flourish_fs}\\c{accent_col_ass}\\frz8{glow}}}{anim}{flourish}\n"
+        )
+    return accent_events
+
+
+def _flush_dropcap_accent_ass(body_path: str, header: str, events: list) -> None:
+    if not events:
+        return
+    accent_path = (
+        body_path[:-4] + "_accent.ass"
+        if body_path.lower().endswith(".ass")
+        else body_path + "_accent.ass"
+    )
+    with open(accent_path, "w", encoding="utf-8") as af:
+        af.write(header)
+        af.writelines(events)
+
+
+def graphic_ass_mute_windows(edits: Optional[List[Dict[str, Any]]] = None) -> List[tuple]:
+    """Time windows where Remotion/HTML kinetic text should suppress ASS karaoke.
+
+    Prevents double-drawing the same phrase (gold HTML card + white ASS outline).
+    """
+    GRAPHIC_ACTIONS = (
+        "hyperframes_html",
+        "canvas_overlay",
+        "add_hyperframes_graphics",
+        "add_motion_graphic",
+        "add_dynamic_graphic",
+    )
+    windows: List[tuple] = []
+    for e in edits or []:
+        if e.get("action") not in GRAPHIC_ACTIONS:
+            continue
+        start = float(e.get("start", 0) or 0)
+        end = float(e.get("end", start + 3) or (start + 3))
+        if end <= start:
+            continue
+        html = e.get("html_content") or e.get("html") or ""
+        text = e.get("text") or e.get("title") or e.get("subtext") or ""
+        blob = _normalize_overlay_text(f"{text} {html}")
+        # Only mute when the graphic actually carries readable copy
+        if len(blob) < 4:
+            continue
+        windows.append((start, end, blob))
+    return windows
+
+
+def resolve_fonts_dir() -> Optional[str]:
+    """Locate backend/fonts regardless of process cwd."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.abspath("fonts"),
+        os.path.abspath(os.path.join(here, "..", "..", "fonts")),
+        os.path.abspath(os.path.join(here, "..", "..", "..", "fonts")),
+    ]
+    for c in candidates:
+        if os.path.isdir(c) and any(
+            f.lower().endswith((".ttf", ".otf")) for f in os.listdir(c)
+        ):
+            return c
+    return None
+
 
 def format_ass_time(seconds: float) -> str:
     hours = int(seconds // 3600)
@@ -12,6 +257,107 @@ def format_ass_time(seconds: float) -> str:
     secs = int(seconds % 60)
     cents = int((seconds - int(seconds)) * 100)
     return f"{hours}:{minutes:02d}:{secs:02d}.{cents:02d}"
+
+
+def remap_source_to_project(t: float, cuts: Optional[List[Dict[str, Any]]] = None) -> float:
+    """Map a source-timeline timestamp onto the post-cut (project) timeline."""
+    if not cuts:
+        return max(0.0, float(t))
+    cuts_sorted = sorted(cuts, key=lambda c: float(c.get("start", 0)))
+    shift = 0.0
+    t = float(t)
+    for cut in cuts_sorted:
+        cs = float(cut.get("start", 0))
+        ce = float(cut.get("end", 0))
+        if cs >= t:
+            break
+        shift += max(0.0, min(ce, t) - cs)
+    return max(0.0, t - shift)
+
+
+def segment_survives_cuts(start: float, end: float, cuts: Optional[List[Dict[str, Any]]] = None) -> bool:
+    """True if any part of [start, end] remains after applying cut_out regions."""
+    ps = remap_source_to_project(start, cuts)
+    pe = remap_source_to_project(end, cuts)
+    return pe > ps + 0.02
+
+
+def projectize_edit_times(edit: Dict[str, Any], cuts: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """Return a shallow copy of edit with start/end remapped to project time."""
+    out = dict(edit)
+    if "start" in out and out["start"] is not None:
+        out["start"] = remap_source_to_project(float(out["start"]), cuts)
+    if "end" in out and out["end"] is not None:
+        out["end"] = remap_source_to_project(float(out["end"]), cuts)
+    return out
+
+
+def _looks_like_bgm_edit(ae: Dict[str, Any]) -> bool:
+    if ae.get("is_bgm"):
+        return True
+    query = (ae.get("asset_query") or "").lower()
+    if any(k in query for k in ("sfx", "whoosh", "click", "impact", "swipe", "glitch", "riser")):
+        return False
+    start = float(ae.get("start", -1) or -1)
+    end = ae.get("end")
+    return start == 0.0 and (end is None or float(end) > 8.0)
+
+
+def _speech_duck_enable(
+    transcript_data: Optional[dict],
+    cuts: Optional[List[Dict[str, Any]]] = None,
+    max_len: int = 7000,
+) -> Optional[str]:
+    """FFmpeg volume enable= expr covering speech windows in project time."""
+    if not transcript_data:
+        return None
+    raw = []
+    for w in (transcript_data.get("words") or []):
+        s, e = w.get("start"), w.get("end")
+        if s is None or e is None:
+            continue
+        raw.append((float(s), float(e)))
+    if not raw:
+        for seg in (transcript_data.get("segments") or []):
+            s, e = seg.get("start"), seg.get("end")
+            if s is None or e is None:
+                continue
+            raw.append((float(s), float(e)))
+    windows = []
+    for s, e in raw:
+        if e <= s:
+            continue
+        if not segment_survives_cuts(s, e, cuts):
+            continue
+        ps = remap_source_to_project(s, cuts)
+        pe = remap_source_to_project(e, cuts)
+        if pe - ps >= 0.08:
+            windows.append((ps, pe))
+    if not windows:
+        return None
+    windows.sort()
+    merged = [windows[0]]
+    for s, e in windows[1:]:
+        if s - merged[-1][1] <= 0.35:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+    parts = [f"between(t,{s:.3f},{e:.3f})" for s, e in merged]
+    expr = "+".join(parts)
+    if len(expr) > max_len:
+        # Keep the longest windows so the enable string stays valid
+        merged.sort(key=lambda w: w[1] - w[0], reverse=True)
+        parts = []
+        expr = ""
+        for s, e in merged:
+            piece = f"between(t,{s:.3f},{e:.3f})"
+            nxt = piece if not parts else expr + "+" + piece
+            if len(nxt) > max_len:
+                break
+            parts.append(piece)
+            expr = nxt
+    return expr or None
+
 
 def get_animation_tag(style: str) -> str:
     """Return ASS override tags for the given animation preset."""
@@ -33,6 +379,7 @@ def get_animation_tag(style: str) -> str:
         "slide_right": r"{\move(680,1670,540,1670,0,350)\fad(250,50)}",
         # No animation (still karaoke word-highlight via \k tags)
         "karaoke":    "",
+        "weave":      r"{\fscx125\fscy125\alpha&HFF&\t(0,280,\fscx100\fscy100\alpha&H00&)}",
     }
     return styles.get(style, styles["fade"])
 
@@ -46,7 +393,7 @@ def hex_to_ass_color(hex_str: str) -> str:
 def color_to_ass(c: str) -> str:
     if not c:
         return "&H00FFFFFF"
-    c_lower = c.lower()
+    c_lower = c.lower().strip()
     color_map = {
         "white": "&H00FFFFFF",
         "yellow": "&H0000D7FF", # Gold-yellow
@@ -63,6 +410,19 @@ def color_to_ass(c: str) -> str:
         if len(hex_str) == 6:
             r, g, b = hex_str[0:2], hex_str[2:4], hex_str[4:6]
             return f"&H00{b}{g}{r}"
+        if len(hex_str) == 8:
+            aa, r, g, b = hex_str[0:2], hex_str[2:4], hex_str[4:6], hex_str[6:8]
+            return f"&H{aa}{b}{g}{r}"
+    import re
+    rgba = re.match(
+        r"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)",
+        c_lower,
+    )
+    if rgba:
+        r, g, b = int(rgba.group(1)), int(rgba.group(2)), int(rgba.group(3))
+        a = float(rgba.group(4)) if rgba.group(4) is not None else 1.0
+        aa = int((1.0 - max(0.0, min(1.0, a))) * 255)
+        return f"&H{aa:02X}{b:02X}{g:02X}{r:02X}"
     return "&H00FFFFFF"
 
 def opacity_to_ass_alpha(opacity: float) -> str:
@@ -70,11 +430,12 @@ def opacity_to_ass_alpha(opacity: float) -> str:
     alpha = min(255, max(0, alpha))
     return f"{alpha:02X}"
 
-def generate_ass(transcript, filepath, position="center", font="Impact", font_size=110, use_outline=True, font_color="White", cuts=None, animation_style="fade", template_id=None, subtitle_edit=None, brand_id=None):
+def generate_ass(transcript, filepath, position="center", font="Impact", font_size=110, use_outline=True, font_color="White", cuts=None, animation_style="fade", template_id=None, subtitle_edit=None, brand_id=None, mute_windows=None):
     """Generate ASS subtitle file, adjusting timing for cut_out edits and injecting animation tags."""
     from app.services.template_service import get_template
     from app.services.design_skill import DesignSkill
     cuts = sorted(cuts or [], key=lambda c: c.get('start', 0))
+    mute_windows = mute_windows or []
     
     def remap_time(t):
         """Shift time t by the total duration of all cuts that start before t."""
@@ -95,11 +456,29 @@ def generate_ass(transcript, filepath, position="center", font="Impact", font_si
                 return True
         return False
 
+    def muted_by_graphic(start, end, text=""):
+        """Skip ASS when a Remotion/HTML graphic already shows the same words."""
+        tnorm = _normalize_overlay_text(text)
+        for gs, ge, gblob in mute_windows:
+            if start < ge and end > gs:
+                if not tnorm or not gblob:
+                    return True
+                # Fuzzy overlap: shared tokens or substring either way
+                if tnorm in gblob or gblob in tnorm:
+                    return True
+                t_tokens = set(tnorm.split())
+                g_tokens = set(gblob.split())
+                if t_tokens and len(t_tokens & g_tokens) >= max(1, min(2, len(t_tokens))):
+                    return True
+        return False
+
     # Premium Margin and Positioning defaults
-    base_font = font or "Inter"
-    base_font = DesignSkill.validate_font(base_font, brand_id)
-    if "," in base_font:
-        base_font = base_font.split(",")[0].strip()
+    base_font = resolve_ass_font_name(font or "Montserrat")
+    try:
+        validated = DesignSkill.validate_font(base_font, brand_id)
+        base_font = resolve_ass_font_name(validated)
+    except Exception:
+        pass
     font_pairing = None
     font_size_val = font_size or 72
     text_main_color = "#FFFFFF"
@@ -108,6 +487,9 @@ def generate_ass(transcript, filepath, position="center", font="Impact", font_si
     max_words = 3
     shadow_val = 3
     outline_val = 0
+    border_style = 1
+    underline_on = 0
+    outline_col_ass = "&H00000000"
     alignment = 2
     margin_v = 180
     margin_l = 80
@@ -124,8 +506,8 @@ def generate_ass(transcript, filepath, position="center", font="Impact", font_si
             sub = tpl.subtitles
             if sub.font_management:
                 use_aesthetic_styling = True
-                base_font = sub.font_management.base_sans_font.replace("-Medium.ttf", "").replace(".ttf", "")
-                font_pairing = sub.font_management.accent_serif_font.replace("-Italic.ttf", "").replace(".ttf", "").replace("CormorantGaramond", "Cormorant Garamond").replace("MarckScript-Regular", "Marck Script").replace("MarckScript", "Marck Script")
+                base_font = resolve_ass_font_name(sub.font_management.base_sans_font)
+                font_pairing = resolve_ass_font_name(sub.font_management.accent_serif_font) if sub.font_management.accent_serif_font else None
                 font_size_val = sub.font_management.font_size_px
                 
                 if sub.color_palette:
@@ -137,9 +519,40 @@ def generate_ass(transcript, filepath, position="center", font="Impact", font_si
                     max_words = sub.layout.max_words_per_screen
                     shadow_val = int(sub.layout.shadow_blur_px // 2) if sub.layout.shadow_blur_px else 3
 
+    caption_look = None
     if subtitle_edit:
+        preset_id = subtitle_edit.get("subtitle_preset")
+        caption_look = subtitle_edit.get("caption_look")
+        if preset_id or caption_look:
+            from app.services.resolve_subtitle_pack import get_resolve_subtitle_preset
+            pack = get_resolve_subtitle_preset(preset_id)
+            if not caption_look:
+                caption_look = pack.get("look")
+            if not subtitle_edit.get("font"):
+                base_font = resolve_ass_font_name(pack.get("font") or base_font)
+            if not subtitle_edit.get("font_size"):
+                font_size_val = int(pack.get("font_size") or font_size_val)
+            if not subtitle_edit.get("font_color"):
+                text_main_color = pack.get("font_color") or text_main_color
+            if not subtitle_edit.get("accent_color"):
+                text_accent_color = pack.get("accent_color") or text_accent_color
+            if not subtitle_edit.get("text_case"):
+                text_case = pack.get("text_case") or text_case
+            border_style = int(pack.get("border_style") or 1)
+            if pack.get("outline_px") is not None:
+                outline_val = int(pack["outline_px"])
+            if pack.get("underline"):
+                underline_on = 1
+            if pack.get("box_color"):
+                outline_col_ass = color_to_ass(pack["box_color"])
+            if pack.get("outline_color"):
+                outline_col_ass = color_to_ass(pack["outline_color"])
+            if not subtitle_edit.get("font_pairing") and pack.get("font_pairing"):
+                font_pairing = resolve_ass_font_name(pack["font_pairing"])
+            if not subtitle_edit.get("max_words") and pack.get("max_words"):
+                max_words = int(pack["max_words"])
         if subtitle_edit.get("font"):
-            base_font = subtitle_edit.get("font")
+            base_font = resolve_ass_font_name(subtitle_edit.get("font"))
         if subtitle_edit.get("font_size"):
             font_size_val = int(subtitle_edit.get("font_size"))
         if subtitle_edit.get("font_color"):
@@ -154,7 +567,7 @@ def generate_ass(transcript, filepath, position="center", font="Impact", font_si
         if subtitle_edit.get("accent_color"):
             text_accent_color = subtitle_edit.get("accent_color")
         if subtitle_edit.get("font_pairing"):
-            font_pairing = subtitle_edit.get("font_pairing")
+            font_pairing = resolve_ass_font_name(subtitle_edit.get("font_pairing"))
         if subtitle_edit.get("inactive_opacity") is not None:
             inactive_opacity = float(subtitle_edit.get("inactive_opacity"))
         if subtitle_edit.get("active_scale") is not None:
@@ -165,12 +578,17 @@ def generate_ass(transcript, filepath, position="center", font="Impact", font_si
             max_words = int(subtitle_edit.get("max_words"))
             
         pos_preset = subtitle_edit.get("position") or position or "bottom"
-        if pos_preset == "top":
-            alignment = 8
-            margin_v = 200
-        elif pos_preset == "center":
+        wants_behind = bool(
+            subtitle_edit.get("behind_speaker")
+            or pos_preset in ("behind_speaker", "behind")
+        )
+        if wants_behind or pos_preset == "center":
+            # Behind-speaker / center kinetic titles sit mid-frame like preview
             alignment = 5
             margin_v = 0
+        elif pos_preset == "top":
+            alignment = 8
+            margin_v = 200
         elif pos_preset == "bottom":
             alignment = 2
             margin_v = 180
@@ -181,16 +599,48 @@ def generate_ass(transcript, filepath, position="center", font="Impact", font_si
             custom_y = float(subtitle_edit.get("y"))
             
         use_outline = subtitle_edit.get("use_outline", use_outline)
-        outline_val = 3 if use_outline else 0
+        look = subtitle_edit.get("caption_look") or caption_look
+        if look in ("boxed", "pill"):
+            border_style = 3
+            outline_val = max(outline_val, 10)
+            box_col = subtitle_edit.get("box_color")
+            if box_col:
+                outline_col_ass = color_to_ass(box_col)
+        elif look == "neon":
+            border_style = 1
+            outline_val = max(outline_val, 2)
+            outline_col_ass = color_to_ass(subtitle_edit.get("accent_color") or text_accent_color)
+        elif look == "bar":
+            underline_on = 1
+            outline_val = 0 if not use_outline else outline_val
+        elif look in ("cinema", "minimal"):
+            outline_val = 0
+        elif look == "dropcap":
+            outline_val = 0
+            shadow_val = 0
+        elif look in ("outline", "karaoke", "stacked") or (look is None and use_outline):
+            if look in ("outline", "karaoke", "stacked"):
+                outline_val = max(outline_val, 4)
+            else:
+                outline_val = 3 if use_outline else outline_val
+        else:
+            outline_val = 3 if use_outline else outline_val
         shadow_val = 3 if subtitle_edit.get("use_shadow", True) else 0
         if subtitle_edit.get("shadow_blur") is not None:
             shadow_val = int(float(subtitle_edit.get("shadow_blur")) / 4.0)
             shadow_val = min(10, max(0, shadow_val))
 
+    print(f"[ASS] Fontname={base_font}, size={font_size_val}, mute_windows={len(mute_windows)}")
     main_col_ass = color_to_ass(text_main_color)
     accent_col_ass = color_to_ass(text_accent_color)
-    outline_col_ass = "&H00000000"
     shadow_col_ass = "&H99000000"
+    ass_look = caption_look
+    if subtitle_edit:
+        ass_look = subtitle_edit.get("caption_look") or caption_look
+    if ass_look == "dropcap":
+        outline_val = 0
+        shadow_val = 0
+        main_col_ass = "&H00FFFFFF"
 
     ass_header = f"""[Script Info]
 ScriptType: v4.00+
@@ -200,7 +650,7 @@ WrapStyle: 1
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Premium,{base_font},{font_size_val},{main_col_ass},{main_col_ass},{outline_col_ass},{shadow_col_ass},1,0,0,0,100,100,0,0,1,{outline_val},{shadow_val},{alignment},{margin_l},{margin_r},{margin_v},1
+Style: Premium,{base_font},{font_size_val},{main_col_ass},{main_col_ass},{outline_col_ass},{shadow_col_ass},1,0,{underline_on},0,100,100,0,0,{border_style},{outline_val},{shadow_val},{alignment},{margin_l},{margin_r},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -209,17 +659,40 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         f.write(ass_header)
         
         anim = get_animation_tag(animation_style)
+        dropcap_accent_events: list[str] = []
         
         words = transcript.get("words", [])
+        script_font = font_pairing or "Marck Script"
+
         if not words:
             segments = transcript.get("segments", [])
             for seg in segments:
                 s, e = seg.get("start", 0.0), seg.get("end", 0.0)
                 if in_cut(s, e):
                     continue
+                text = seg.get('text', '').strip()
+                if muted_by_graphic(s, e, text):
+                    continue
+                if ass_look == "dropcap":
+                    dropcap_accent_events.extend(
+                        _write_dropcap_ass_events(
+                        f,
+                        text.split(),
+                        remap_time(s),
+                        remap_time(e),
+                        script_font=script_font,
+                        body_font=base_font,
+                        font_size_val=font_size_val,
+                        accent_col_ass=accent_col_ass,
+                        main_col_ass=main_col_ass,
+                        custom_x=custom_x,
+                        custom_y=custom_y,
+                        anim=anim,
+                        )
+                    )
+                    continue
                 start = format_ass_time(remap_time(s))
                 end = format_ass_time(remap_time(e))
-                text = seg.get('text', '').strip()
                 if text_case == "UPPER":
                     text = text.upper()
                 elif text_case == "lower":
@@ -227,6 +700,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 elif text_case == "Sentence_Case":
                     text = text.capitalize()
                 f.write(f"Dialogue: 0,{start},{end},Premium,,0,0,0,,{anim}{text}\n")
+            _flush_dropcap_accent_ass(filepath, ass_header, dropcap_accent_events)
             return
 
         # Group words into chunks of max_words, skip cut regions
@@ -246,6 +720,29 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             chunks.append(cur_chunk)
             
         for chunk in chunks:
+            chunk_text = " ".join(w.get("word", "") for w in chunk)
+            chunk_start = chunk[0].get("start", 0.0)
+            chunk_end = chunk[-1].get("end", 0.0)
+            if muted_by_graphic(chunk_start, chunk_end, chunk_text):
+                continue
+            if ass_look == "dropcap":
+                dropcap_accent_events.extend(
+                    _write_dropcap_ass_events(
+                    f,
+                    [w.get("word", "") for w in chunk],
+                    remap_time(chunk_start),
+                    remap_time(chunk_end),
+                    script_font=script_font,
+                    body_font=base_font,
+                    font_size_val=font_size_val,
+                    accent_col_ass=accent_col_ass,
+                    main_col_ass=main_col_ass,
+                    custom_x=custom_x,
+                    custom_y=custom_y,
+                    anim=anim,
+                    )
+                )
+                continue
             # Build Dialogue line for each word being active in the chunk
             for active_i, active_w in enumerate(chunk):
                 w_start = remap_time(active_w.get('start', 0.0))
@@ -312,6 +809,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     pos_tag = f"\\pos({posX},{posY})"
                 
                 f.write(f"Dialogue: 0,{start_str},{end_str},Premium,,0,0,0,,{{{pos_tag}}}{anim}{text_line.strip()}\n")
+        _flush_dropcap_accent_ass(filepath, ass_header, dropcap_accent_events)
 
 def extract_audio(video_path: str, output_audio_path: str) -> str:
     try:
@@ -378,10 +876,11 @@ def apply_zoom(input_path: str, output_path: str, zoom_type: str,
                 f"1+({peak_s}-1)*(1-(on/{frames}-0.55)/0.45))"
             )
 
-        # zoompan needs explicit size; read from probe defaults 1080x1920 fallback applied by caller dims later
+        # zoompan s= must be WxH with an 'x' — colons are option separators
+        # (s=iw:ih breaks parsing: "No option name near 'ih:fps=...'").
         vf = (
             f"zoompan=z='{z_expr}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-            f"d=1:s=iw:ih:fps={fps:.3f},scale=trunc(iw/2)*2:trunc(ih/2)*2"
+            f"d=1:s=iwxih:fps={fps:.3f},scale=trunc(iw/2)*2:trunc(ih/2)*2"
         )
 
         segments = []
@@ -397,7 +896,7 @@ def apply_zoom(input_path: str, output_path: str, zoom_type: str,
             'ffmpeg', '-i', input_path,
             '-ss', str(start), '-to', str(end),
             '-vf', vf,
-            '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26',
             '-c:a', 'aac',
             seg_out, '-y', '-loglevel', 'error'
         ], check=True)
@@ -589,42 +1088,91 @@ def apply_color_corrections(stream, edits, brand_id=None):
         
     return stream
 
-def render_video(input_path: str, output_path: str, transcript_data: dict, edits: list, edl: dict = None, font: str = "Arial", font_size: int = 100, use_outline: bool = True, font_color: str = "White", template_id: str = None, brand_id: str = None):
+def render_video(
+    input_path: str,
+    output_path: str,
+    transcript_data: dict,
+    edits: list,
+    edl: dict = None,
+    font: str = "Arial",
+    font_size: int = 100,
+    use_outline: bool = True,
+    font_color: str = "White",
+    template_id: str = None,
+    brand_id: str = None,
+    export_crf: int = 18,
+    export_preset: str = "fast",
+    export_audio_bitrate: str = "192k",
+    target_width: int = None,
+    target_height: int = None,
+    export_quality: str = "medium",
+    export_profile: dict = None,
+    source_file_id: str = None,
+):
     """Advanced Rendering Pipeline using FFmpeg Concat, ASS overlays, Zoom, Speed, Text and EDL"""
-    # Map all B-roll edits to 3D Remotion + Three.js motion graphics
-    mapped_edits = []
-    for e in edits:
-        if e.get("action") == "add_broll":
-            q = e.get("query", "technology")
-            style = "cinematic"
-            import re
-            if re.search(r"tech|data|code|blueprint|logic|graph", q, re.IGNORECASE):
-                style = "blueprint"
-            elif re.search(r"fluid|flow|energy|liquid|particles", q, re.IGNORECASE):
-                style = "liquid"
-            
-            mapped_edits.append({
-                "action": "add_motion_graphic",
-                "start": e.get("start"),
-                "end": e.get("end"),
-                "style": style,
-                "text": q.upper(),
-                "subtext": "A-ROLL VISUALIZATION",
-                "accent_color": e.get("accent_color") or "#a78bfa",
-                "position": "center"  # Center overlay style
-            })
-        else:
-            mapped_edits.append(e)
-    edits = mapped_edits
+    # Keep real B-roll / graphics edits as-is. Preview and export must share the same timeline semantics:
+    # - Zooms / baked Remotion overlays run on source time BEFORE cuts
+    # - Audio / text / B-roll overlays on the concatenated stream use PROJECT time
+    edits = [dict(e) for e in (edits or [])]
+
+    profile = dict(export_profile or {})
+    remotion_max_frames = int(profile.get("remotion_max_frames", 60))
+    remotion_max_graphics = int(profile.get("remotion_max_graphics", 4))
+    remotion_timeout = int(profile.get("remotion_timeout", 90))
+    enable_masking = bool(profile.get("enable_masking", False))
+    do_loudnorm = bool(profile.get("loudnorm", False))
+    skip_semantic = bool(profile.get("skip_semantic", True))
+    mid_preset = profile.get("mid_preset") or "ultrafast"
+    mid_crf = int(profile.get("mid_crf", 28))
+    print(
+        f"[Render] quality={export_quality} frames≤{remotion_max_frames} "
+        f"graphics≤{remotion_max_graphics} masking={enable_masking} loudnorm={do_loudnorm}"
+    )
 
     ass_path = output_path.replace(".mp4", ".ass")
 
     subtitle_edit = next((e for e in edits if e.get("action") == "add_subtitles"), None)
     has_subtitles = subtitle_edit is not None
+
+    # behind_speaker is preview-first. Export masking is expensive (RVM minutes) —
+    # only enable on high quality AND only if a cached project mask already exists.
+    if subtitle_edit:
+        pos = str(subtitle_edit.get("position") or "")
+        wants_behind = bool(
+            subtitle_edit.get("behind_speaker")
+            or pos in ("behind_speaker", "behind")
+        )
+        if wants_behind and enable_masking:
+            cached_mask = None
+            if source_file_id:
+                for cand in (
+                    os.path.join("uploads", f"{source_file_id}_rvm_mask.mp4"),
+                    os.path.join("uploads", f"{source_file_id}_mask.mp4"),
+                ):
+                    if os.path.exists(cand) and os.path.getsize(cand) > 0:
+                        cached_mask = cand
+                        break
+            if cached_mask:
+                mask_edit = next((e for e in edits if e.get("action") == "speaker_masking"), None)
+                payload = {
+                    "action": "speaker_masking",
+                    "enabled": True,
+                    "effect_type": "behind_text",
+                    "mask_path": cached_mask,
+                }
+                if mask_edit is None:
+                    edits.append(payload)
+                else:
+                    mask_edit.update(payload)
+                print(f"[Rotoscope] behind_speaker → reuse cached mask {cached_mask}")
+            else:
+                print("[Rotoscope] behind_speaker skipped on export (no cached mask — avoid multi-minute RVM)")
+        elif wants_behind:
+            print(f"[Rotoscope] behind_speaker preview-only (quality={export_quality})")
     
     if has_subtitles:
         position = subtitle_edit.get("position", "center")
-        font = subtitle_edit.get("font", font)
+        font = resolve_ass_font_name(subtitle_edit.get("font", font))
         font_size = subtitle_edit.get("font_size", font_size)
         use_outline = subtitle_edit.get("use_outline", use_outline)
         font_color = subtitle_edit.get("font_color", font_color)
@@ -632,15 +1180,32 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
     else:
         position = "center"
         animation_style = "fade"
+        font = resolve_ass_font_name(font)
 
     cuts = [e for e in edits if e.get("action") == "cut_out"]
     zoom_edits = [e for e in edits if e.get("action") == "camera_zoom"]
     speed_edits = [e for e in edits if e.get("action") == "speed_ramp"]
-    text_overlays = [e for e in edits if e.get("action") == "add_text_overlay"]
+    # Skip preview-only / transcript-duplicate overlays — ASS owns karaoke captions
+    text_overlays = []
+    for e in edits:
+        if e.get("action") != "add_text_overlay":
+            continue
+        if e.get("is_subtitle"):
+            continue
+        text_overlays.append(e)
+
+    mute_windows = graphic_ass_mute_windows(edits)
 
     # Generate ASS AFTER parsing cuts so timing can be remapped
     print(f"[ASS] animation_style={animation_style}, position={position}, template_id={template_id}, brand_id={brand_id}")
-    generate_ass(transcript_data, ass_path, position=position, font=font, font_size=font_size, use_outline=use_outline, font_color=font_color, cuts=cuts, animation_style=animation_style, template_id=template_id, subtitle_edit=subtitle_edit, brand_id=brand_id)
+    generate_ass(
+        transcript_data, ass_path,
+        position=position, font=font, font_size=font_size,
+        use_outline=use_outline, font_color=font_color, cuts=cuts,
+        animation_style=animation_style, template_id=template_id,
+        subtitle_edit=subtitle_edit, brand_id=brand_id,
+        mute_windows=mute_windows,
+    )
     safe_ass = ass_path.replace("\\", "/")
 
     print(f"[Render] Step 0: Probing video metadata for {input_path}")
@@ -682,15 +1247,45 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
     height = height if height % 2 == 0 else height - 1
     print(f"[Render] Display dimensions: {width}x{height}, duration={duration:.1f}s")
 
+    # Cap zooms on fast exports — each zoompan re-encodes a segment
+    if export_quality == "fast" and len(zoom_edits) > 2:
+        print(f"[Zoom] Capping {len(zoom_edits)} → 2 zooms for fast export")
+        zoom_edits = zoom_edits[:2]
+    elif export_quality == "medium" and len(zoom_edits) > 4:
+        print(f"[Zoom] Capping {len(zoom_edits)} → 4 zooms for medium export")
+        zoom_edits = zoom_edits[:4]
+
     print(f"[Render] Step 1: Speed ramp edits={len(speed_edits)}")
-    working_path = input_path
+    # CRITICAL: never mutate the original upload. Remotion/zoom/color used to
+    # os.replace() into working_path — when that was input_path, the source
+    # talking-head file was permanently overwritten (black + baked graphics).
+    import shutil as _shutil_work
+    protected_source = os.path.abspath(input_path)
+    working_path = output_path.replace(".mp4", "_worksrc.mp4")
+    if os.path.abspath(working_path) == protected_source:
+        working_path = output_path.replace(".mp4", "_worksrc_safe.mp4")
+    # Fast remux copy when possible (seconds vs multi-second byte copy)
+    remux = subprocess.run(
+        ["ffmpeg", "-y", "-i", input_path, "-c", "copy", working_path, "-loglevel", "error"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120,
+    )
+    if remux.returncode != 0 or not os.path.exists(working_path):
+        _shutil_work.copy2(input_path, working_path)
+    print(f"[Render] Working copy: {working_path} (source protected: {protected_source})")
+
+    def _commit_working(temp_path: str) -> None:
+        """Replace working media without ever touching the original upload."""
+        if os.path.abspath(working_path) == protected_source:
+            raise RuntimeError("Refusing to overwrite protected source video")
+        safe_replace(temp_path, working_path)
+
     if speed_edits:
         speed_tmp = output_path.replace('.mp4', '_speed.mp4')
         for se in speed_edits:
             speed = float(se.get('speed', 1.5))
             ok = apply_speed_ramp(working_path, speed_tmp, se.get('start', 0), se.get('end', duration), speed, duration)
             if ok:
-                working_path = speed_tmp
+                _commit_working(speed_tmp)
                 print(f"[SpeedRamp] Applied {speed}x on [{se.get('start')}-{se.get('end')}]")
 
     # --- Step 1b: Camera zoom (subprocess-based) ---
@@ -706,7 +1301,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 intensity=float(ze.get('intensity', 1.14) or 1.14),
             )
             if ok:
-                working_path = zoom_tmp
+                _commit_working(zoom_tmp)
 
     # --- Step 1a: Rotoscoping / Background Removal (RVM) ---
     roto_edit = next((e for e in edits if e.get("action") == "remove_background"), None)
@@ -839,7 +1434,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
             try:
                 res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
                 if res.returncode == 0 and os.path.exists(color_tmp):
-                    working_path = color_tmp
+                    _commit_working(color_tmp)
                     print("[RenderEngine] ✅ Color correction subprocess applied successfully.")
                 else:
                     print(f"[RenderEngine] Color correction subprocess failed: {res.stderr.decode(errors='replace')}")
@@ -893,13 +1488,8 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 .trim(start=start, end=end)
                 .setpts('PTS-STARTPTS')
             )
-            # Automatic Scale Punch-In (zoom 10%) on odd segments to cover jump-cuts
-            if idx % 2 == 1:
-                zoom_w = (int(1.1 * width) // 2) * 2
-                zoom_h = (int(1.1 * height) // 2) * 2
-                v = v.filter('scale', zoom_w, zoom_h).filter('crop', width, height)
-            else:
-                v = v.filter('scale', width, height)
+            # Keep scale consistent with preview — no random punch on odd segments
+            v = v.filter('scale', width, height)
                 
             v = v.filter('setsar', '1')
             streams_v.append(v)
@@ -931,12 +1521,22 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
         return False
 
     # --- Step 2.5: Mix Audio Assets (select_bgm, SFX, transitions) ---
+    # Concat output uses PROJECT time — remap source timestamps from cut_out edits.
     audio_edits = [e for e in edits if e.get("action") == "add_asset" and e.get("resolved_path")]
     if audio_edits and a_out is not None:
-        print(f"[RenderEngine] Mixing {len(audio_edits)} audio assets onto A1...")
-        mix_inputs = [a_out]
-        
+        print(f"[RenderEngine] Mixing {len(audio_edits)} audio assets onto A1 (project-time remap)...")
+        voice = a_out
+        mix_inputs = [voice]
+        duck_enable = _speech_duck_enable(transcript_data, cuts)
+
         for ae in audio_edits:
+            src_start = float(ae.get("start", 0.0))
+            src_end = float(ae.get("end", src_start + 0.5)) if ae.get("end") is not None else None
+            if src_end is not None and not segment_survives_cuts(src_start, src_end, cuts):
+                print(f"[RenderEngine] Skipping audio entirely inside cut: {ae.get('asset_query') or ae.get('resolved_path')}")
+                continue
+            proj_start = remap_source_to_project(src_start, cuts)
+
             asset_path = ae.get("resolved_path")
             
             # Resolve relative/absolute path safely on Windows
@@ -954,19 +1554,44 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 
             db = ae.get("volume", -20.0)
             vol_factor = 10 ** (db / 20.0)
-            start_time = float(ae.get("start", 0.0))
-            start_ms = int(start_time * 1000)
+            start_ms = int(proj_start * 1000)
+            is_bgm = _looks_like_bgm_edit(ae)
             
             # Load audio stream
-            if ae.get("is_bgm"):
+            if is_bgm:
                 # Loop background music automatically
                 a_stream = ffmpeg.input(asset_path, stream_loop=-1).audio
             else:
                 a_stream = ffmpeg.input(asset_path).audio
                 
-            # Apply volume and delay to start at correct timestamp
+            # Apply volume and delay to start at correct PROJECT timestamp
             a_processed = a_stream.filter('volume', vol_factor).filter('adelay', f"{start_ms}|{start_ms}")
+
+            if is_bgm:
+                duck_db = ae.get("duck_db")
+                if duck_db is None:
+                    duck_db = -14.0
+                duck_factor = 10 ** (float(duck_db) / 20.0)
+                if duck_enable and duck_factor < 0.99:
+                    a_processed = a_processed.filter('volume', duck_factor, enable=duck_enable)
+                    print(f"[RenderEngine] BGM duck {float(duck_db):.0f} dB under speech")
+                elif duck_factor < 0.99:
+                    try:
+                        a_processed = ffmpeg.filter(
+                            [a_processed, voice],
+                            'sidechaincompress',
+                            threshold=0.08,
+                            ratio=8,
+                            attack=80,
+                            release=350,
+                            makeup=1,
+                        )
+                        print("[RenderEngine] BGM sidechain duck (no transcript windows)")
+                    except Exception as duck_err:
+                        print(f"[RenderEngine] BGM duck skipped: {duck_err}")
+
             mix_inputs.append(a_processed)
+            print(f"[RenderEngine] Audio '{ae.get('asset_query') or os.path.basename(asset_path)}' source={src_start:.2f}s → project={proj_start:.2f}s")
             
         if len(mix_inputs) > 1:
             # Mix all streams into one without dropping main volume (normalize=0)
@@ -975,16 +1600,36 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
 
     # --- Step 3: Camera zoom — already handled above via subprocess ---
 
-    # --- Step 4: Text overlays (drawtext) ---
+    # --- Step 4: Text overlays (drawtext) — project time after concat ---
+    # Never burn drawtext for caption-like overlays when ASS karaoke is active.
     if text_overlays:
+        transcript_blob = ""
+        if has_subtitles and transcript_data:
+            words = transcript_data.get("words") or []
+            transcript_blob = _normalize_overlay_text(
+                " ".join(w.get("word", "") for w in words)
+                or " ".join(s.get("text", "") for s in (transcript_data.get("segments") or []))
+            )
         for to in text_overlays:
-            x_pct = to.get('x', 50.0)
-            y_pct = to.get('y', 78.0)
-            w_pct = to.get('width', 82.0)
             raw_text = to.get('text', '')
+            if has_subtitles and transcript_blob:
+                tnorm = _normalize_overlay_text(raw_text)
+                if tnorm and (tnorm in transcript_blob or transcript_blob.find(tnorm) >= 0):
+                    # Same spoken line as ASS — skip drawtext duplicate
+                    print(f"[RenderEngine] Skipping drawtext duplicate of captions: {raw_text[:40]!r}")
+                    continue
+            src_start = float(to.get('start', 0))
+            src_end = float(to.get('end', 3))
+            if not segment_survives_cuts(src_start, src_end, cuts):
+                continue
+            proj_to = projectize_edit_times(to, cuts)
+            x_pct = proj_to.get('x', 50.0)
+            y_pct = proj_to.get('y', 78.0)
+            w_pct = proj_to.get('width', 82.0)
+            raw_text = proj_to.get('text', '')
             
             # Estimate wrapping based on width percentage
-            fontsize = int(to.get('fontsize') or to.get('font_size') or 72)
+            fontsize = int(proj_to.get('fontsize') or proj_to.get('font_size') or 72)
             wrapped_text = raw_text
             if w_pct:
                 max_w_px = (w_pct / 100.0) * width
@@ -1012,10 +1657,10 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
             
             kwargs = build_drawtext_kwargs(
                 text=wrapped_text,
-                start=float(to.get('start', 0)),
-                end=float(to.get('end', 3)),
+                start=float(proj_to.get('start', 0)),
+                end=float(proj_to.get('end', 3)),
                 fontsize=fontsize,
-                color=to.get('font_color') or to.get('color') or 'white',
+                color=proj_to.get('font_color') or proj_to.get('color') or 'white',
                 x=x_expr,
                 y=y_expr
             )
@@ -1023,6 +1668,9 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
 
     # --- Step 4.25: Motion Graphics via Remotion (Premium Quality) ---
     motion_edits = [e for e in edits if e.get("action") == "add_motion_graphic"]
+    if len(motion_edits) > remotion_max_graphics:
+        print(f"[MotionGraphic] Capping {len(motion_edits)} → {remotion_max_graphics}")
+        motion_edits = motion_edits[:remotion_max_graphics]
     if motion_edits:
         for me in motion_edits:
             text = me.get("text", "Info")
@@ -1045,7 +1693,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
             }
             pos_expr = pos_map.get(position, pos_map["top-right"])
             duration_sec = end - start
-            duration_frames = min(89, max(30, int(duration_sec * 30)))  # Cap at 89 (composition is 90 frames)
+            duration_frames = min(89, remotion_max_frames, max(24, int(duration_sec * 24)))
 
             # Remotion dir
             remotion_dir = os.path.abspath(
@@ -1101,7 +1749,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     shell=True,
-                    timeout=120,  # 2 min max per graphic render
+                    timeout=remotion_timeout,
                 )
             except subprocess.TimeoutExpired:
                 print(f"[MotionGraphic] ⏰ Remotion render timed out, skipping")
@@ -1121,7 +1769,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 f"[0:v]trim=0:{start},setpts=PTS-STARTPTS[before];"
                 f"[0:v]trim={start}:{end},setpts=PTS-STARTPTS,boxblur=15:3,eq=brightness=-0.35:contrast=1.0[during];"
                 f"[0:v]trim={end},setpts=PTS-STARTPTS[after];"
-                f"[1:v]scale=1920:1080,format=yuva420p[webm];"
+                f"[1:v]scale={width}:{height},format=yuva420p[webm];"
                 f"[during][webm]overlay=0:0:format=auto[during_out];"
                 f"[before][during_out][after]concat=n=3:v=1:a=0[out]"
             )
@@ -1144,7 +1792,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 print(f"[MotionGraphic] ⏰ FFmpeg overlay timed out, skipping")
                 continue
             if ov_result.returncode == 0 and os.path.exists(overlay_output):
-                os.replace(overlay_output, working_path)
+                _commit_working(overlay_output)
                 print(f"[MotionGraphic] ✅ Overlaid {composition} at {start}s")
             else:
                 print(f"[MotionGraphic] FFmpeg overlay failed: {ov_result.stderr.decode()}")
@@ -1165,7 +1813,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 continue
 
             duration_sec = end - start
-            duration_frames = min(89, max(30, int(duration_sec * 30)))
+            duration_frames = min(89, remotion_max_frames, max(24, int(duration_sec * 24)))
 
             remotion_dir = os.path.abspath(
                 os.path.join(os.path.dirname(__file__), "..", "..", "..", "remotion")
@@ -1197,7 +1845,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 render_result = subprocess.run(
                     render_cmd, cwd=remotion_dir,
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    shell=True, timeout=120,  # 2 min max per graphic render
+                    shell=True, timeout=remotion_timeout,
                 )
             except subprocess.TimeoutExpired:
                 print(f"[DynamicCanvas] ⏰ Remotion render timed out, skipping")
@@ -1223,7 +1871,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 "ffmpeg", "-i", working_path, "-i", overlay_path,
                 "-filter_complex", filter_complex,
                 "-map", "[out]", "-map", "0:a",
-                "-c:v", "libx264", "-c:a", "aac", "-preset", "fast",
+                "-c:v", "libx264", "-c:a", "aac", "-preset", mid_preset, "-crf", str(mid_crf),
                 overlay_output, "-y", "-loglevel", "error",
             ]
             try:
@@ -1232,7 +1880,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 print(f"[DynamicCanvas] ⏰ FFmpeg overlay timed out, skipping")
                 continue
             if ov_result.returncode == 0 and os.path.exists(overlay_output):
-                os.replace(overlay_output, working_path)
+                _commit_working(overlay_output)
                 print(f"[DynamicCanvas] ✅ Overlaid {len(elements)} elements at {start}s")
             else:
                 print(f"[DynamicCanvas] FFmpeg failed: {ov_result.stderr.decode()[:200]}")
@@ -1244,8 +1892,14 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
     # --- Step 4.4: Remotion HTML Canvas & Semantic Scenes ---
     GRAPHIC_HTML_ACTIONS = ("hyperframes_html", "canvas_overlay", "add_hyperframes_graphics", "add_motion_graphic", "add_dynamic_graphic")
     hyperframes_edits = [e for e in edits if e.get("action") in GRAPHIC_HTML_ACTIONS and (e.get("html_content") or e.get("html"))]
+    if len(hyperframes_edits) > remotion_max_graphics:
+        print(f"[Remotion] Capping HTML graphics {len(hyperframes_edits)} → {remotion_max_graphics} for speed")
+        hyperframes_edits = hyperframes_edits[:remotion_max_graphics]
     semantic_edits = [e for e in edits if e.get("action") == "semantic_scene" and e.get("scene_data")]
-    
+    if skip_semantic and semantic_edits:
+        print(f"[Remotion] Skipping {len(semantic_edits)} semantic WebGL scenes (fast/medium export)")
+        semantic_edits = []
+
     if hyperframes_edits or semantic_edits:
         print(f"[Remotion] Found {len(hyperframes_edits)} html injections and {len(semantic_edits)} semantic scenes. Compositing...")
         hyperframes_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'hyperframes_studio'))
@@ -1289,11 +1943,9 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
             oy = float(edit_item.get("offset_y") or 0.0)
             sx = float(edit_item.get("scale_x") or 1.0)
             sy = float(edit_item.get("scale_y") or 1.0)
-            if abs(ox) < 0.05 and abs(oy) < 0.05 and abs(sx - 1.0) < 0.01 and abs(sy - 1.0) < 0.01:
-                return raw
             return (
-                f'<div style="position:absolute;inset:0;transform-origin:center center;'
-                f'transform:translate({ox}%,{oy}%) scale({sx},{sy});'
+                f'<div class="clip-transform" data-plate-sx="{sx}" data-plate-sy="{sy}" '
+                f'style="position:absolute;inset:0;transform:translate({ox}%,{oy}%);'
                 f'pointer-events:none;">{raw}</div>'
             )
 
@@ -1334,10 +1986,6 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
             }}
             """
 
-        # Design canvas must match video aspect (AI authors for 1920x1080 or 1080x1920)
-        design_w, design_h = (1920, 1080) if width >= height else (1080, 1920)
-        scale_factor = min(width / float(design_w), height / float(design_h))
-        
         if combined_html:
             combined_html = re.sub(r'data-width=[\'"]\d+[\'"]', f'data-width="{width}"', combined_html)
             combined_html = re.sub(r'data-height=[\'"]\d+[\'"]', f'data-height="{height}"', combined_html)
@@ -1355,12 +2003,28 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
     <style>
       * {{ margin: 0; padding: 0; box-sizing: border-box; }}
       html, body {{ width: {width}px; height: {height}px; overflow: hidden; background: transparent !important; }}
-      .clip {{ position: absolute; }}
-      #root {{ 
-          width: {design_w}px !important; 
-          height: {design_h}px !important; 
-          transform-origin: top left !important; 
-          transform: scale({scale_factor}) !important; 
+      .clip {{ position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; container-type: size; }}
+      #root {{
+          width: 100% !important;
+          height: 100% !important;
+          position: absolute; inset: 0;
+          overflow: visible !important;
+          container-type: size;
+      }}
+      .clip .glass-card, .clip .card, .clip .plate, .clip [data-plate] {{
+          overflow: visible !important;
+          max-width: 94% !important;
+          max-height: none !important;
+          min-width: max-content;
+          white-space: normal !important;
+      }}
+      .plate-bg {{ position:absolute; inset:0; z-index:0; pointer-events:none; border-radius:inherit; }}
+      .plate-content {{ position:relative; z-index:1; width:max-content; transform:none !important; overflow:visible !important; }}
+      .clip .glass-card *, .clip [data-plate] * {{
+          overflow: visible !important;
+          white-space: normal !important;
+          overflow-wrap: normal !important;
+          word-break: normal !important;
       }}
     </style>
     <script>
@@ -1600,14 +2264,44 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
       function scaleRoot(){{
         const r=document.getElementById('root');
         if(!r)return;
-        const s=Math.min(window.innerWidth/1080,window.innerHeight/1920);
-        r.style.transform='scale('+s+')';
-        const scaledW=1080*s, scaledH=1920*s;
-        r.style.left=((window.innerWidth-scaledW)/2)+'px';
-        r.style.top=((window.innerHeight-scaledH)/2)+'px';
+        r.style.width='100%';
+        r.style.height='100%';
+        r.style.left='0';
+        r.style.top='0';
+        r.style.transform='none';
+        r.style.overflow='visible';
+        r.style.zoom='';
       }}
       window.addEventListener('resize',scaleRoot);
       scaleRoot();
+      (function applyExportPlateBox(){{
+        var wrap = document.querySelector('.clip-transform');
+        var sx = wrap ? parseFloat(wrap.getAttribute('data-plate-sx') || '1') : 1;
+        var sy = wrap ? parseFloat(wrap.getAttribute('data-plate-sy') || '1') : 1;
+        var plate = document.querySelector('[data-plate], .glass-card, .plate, .card');
+        if (!plate) return;
+        if (!plate.querySelector(':scope > .plate-content')) {{
+          var content = document.createElement('div');
+          content.className = 'plate-content';
+          while (plate.firstChild) content.appendChild(plate.firstChild);
+          var bg = document.createElement('div');
+          bg.className = 'plate-bg';
+          var cs = getComputedStyle(plate);
+          bg.style.background = cs.background;
+          bg.style.borderRadius = cs.borderRadius;
+          bg.style.boxShadow = cs.boxShadow;
+          plate.style.background = 'transparent';
+          plate.style.boxShadow = 'none';
+          plate.appendChild(bg);
+          plate.appendChild(content);
+        }}
+        var body = plate.querySelector('.plate-content');
+        var cw = body ? body.offsetWidth : plate.offsetWidth;
+        var ch = body ? body.offsetHeight : plate.offsetHeight;
+        plate.style.setProperty('width', Math.max(cw, cw * sx) + 'px', 'important');
+        plate.style.setProperty('height', Math.max(ch, ch * sy) + 'px', 'important');
+        plate.style.setProperty('overflow', 'visible', 'important');
+      }})();
 
       let isSynced = false;
       window.addEventListener('message', (event) => {{
@@ -1656,7 +2350,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 scene_data = se.get("scene_data", {})
                 
                 duration_sec = end - start
-                duration_frames = min(149, max(30, int(duration_sec * 30)))  # Cap at 149 (composition is 150 frames)
+                duration_frames = min(149, remotion_max_frames, max(24, int(duration_sec * 24)))
                 
                 # Write props JSON (avoids Windows quote-escaping issues)
                 props_file = os.path.join(remotion_dir, "props", f"_render_props_semantic_{idx}.json")
@@ -1694,7 +2388,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         shell=True,
-                        timeout=180,  # 3 min max per render
+                        timeout=remotion_timeout,
                     )
                 except subprocess.TimeoutExpired:
                     print(f"[SemanticRenderer] ⏰ Remotion render timed out for scene {idx}, skipping")
@@ -1722,13 +2416,13 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                         f"[before][during_out][after]concat=n=3:v=1:a=0[outv]"
                     ),
                     "-map", "[outv]", "-map", "0:a",
-                    "-c:v", "libx264", "-c:a", "copy", "-preset", "fast",
+                    "-c:v", "libx264", "-c:a", "copy", "-preset", mid_preset, "-crf", str(mid_crf),
                     temp_out, "-y", "-loglevel", "error"
                 ]
                 
                 blend_res = subprocess.run(blend_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
                 if blend_res.returncode == 0 and os.path.exists(temp_out):
-                    os.replace(temp_out, working_path)
+                    _commit_working(temp_out)
                     print(f"[SemanticRenderer] ✅ Remotion overlay successfully applied for scene {idx} ({start}s-{end}s)")
                 else:
                     print(f"[SemanticRenderer] FFmpeg overlay failed: {blend_res.stderr.decode()}")
@@ -1783,7 +2477,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 html_content = force_python_transparency(html_content)
                 
                 duration_sec = end - start
-                duration_frames = min(299, max(30, int(duration_sec * 30)))  # Cap at 299
+                duration_frames = min(299, remotion_max_frames, max(24, int(duration_sec * 24)))
                 
                 props_file = os.path.join(remotion_dir, "props", f"_render_props_graphics_{idx}.json")
                 os.makedirs(os.path.dirname(props_file), exist_ok=True)
@@ -1818,7 +2512,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         shell=True,
-                        timeout=180,
+                        timeout=remotion_timeout,
                     )
                 except subprocess.TimeoutExpired:
                     print(f"[GraphicsRenderer] ⏰ Remotion render timed out for graphics {idx}, skipping")
@@ -1844,13 +2538,13 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                         f"[before][during_out][after]concat=n=3:v=1:a=0[outv]"
                     ),
                     "-map", "[outv]", "-map", "0:a",
-                    "-c:v", "libx264", "-c:a", "copy", "-preset", "fast",
+                    "-c:v", "libx264", "-c:a", "copy", "-preset", mid_preset, "-crf", str(mid_crf),
                     temp_out, "-y", "-loglevel", "error"
                 ]
                 
                 blend_res = subprocess.run(blend_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
                 if blend_res.returncode == 0 and os.path.exists(temp_out):
-                    os.replace(temp_out, working_path)
+                    _commit_working(temp_out)
                     print(f"[GraphicsRenderer] ✅ Graphics overlay successfully applied for graphics {idx} ({start}s-{end}s)")
                 else:
                     print(f"[GraphicsRenderer] FFmpeg overlay failed: {blend_res.stderr.decode()}")
@@ -1864,13 +2558,21 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                         pass
 
 
-    # --- Step 4.5: B-Roll overlay ---
+    # --- Step 4.5: B-Roll overlay (project time after concat — must match preview) ---
     broll_edits = [e for e in edits if e.get("action") == "add_broll"]
     if broll_edits:
         for broll in broll_edits:
-            start = float(broll.get("start", 0))
-            end = float(broll.get("end", start + 3))
+            src_start = float(broll.get("start", 0))
+            src_end = float(broll.get("end", src_start + 3))
+            if not segment_survives_cuts(src_start, src_end, cuts):
+                print(f"[RenderEngine] Skipping B-roll entirely inside cut [{src_start}-{src_end}]")
+                continue
+            start = remap_source_to_project(src_start, cuts)
+            end = remap_source_to_project(src_end, cuts)
+            if end <= start + 0.05:
+                continue
             duration = end - start
+            print(f"[RenderEngine] B-roll source=[{src_start:.2f}-{src_end:.2f}] → project=[{start:.2f}-{end:.2f}]")
             
             broll_path = broll.get("resolved_path")
             if broll_path:
@@ -1888,7 +2590,13 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 broll_path = download_broll(q, duration)
             if broll_path:
                 print(f"[RenderEngine] Overlaying broll {broll_path} at {start}-{end}s")
-                b_in = ffmpeg.input(broll_path).video
+                is_image = (broll.get("media_type") == "image") or str(broll_path).lower().endswith(
+                    (".jpg", ".jpeg", ".png", ".webp", ".gif")
+                )
+                if is_image:
+                    b_in = ffmpeg.input(broll_path, loop=1, framerate=30, t=max(0.2, duration)).video
+                else:
+                    b_in = ffmpeg.input(broll_path).video
                 # Scale and crop to target resolution, adjust PTS to start at exact timestamp
                 if broll.get("layout") == "split":
                     b_scaled = b_in.filter('scale', width, int(height/2), force_original_aspect_ratio='increase').filter('crop', width, int(height/2)).filter('setpts', f'PTS-STARTPTS+{start}/TB')
@@ -1904,7 +2612,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 if broll.get("layout") == "split":
                     b_scaled = (
                         ffmpeg.input(input_path).video
-                        .filter('trim', start=start, end=end)
+                        .filter('trim', start=src_start, end=src_end)
                         .filter('setpts', 'PTS-STARTPTS')
                         .filter('scale', width, int(height/2), force_original_aspect_ratio='increase')
                         .filter('crop', width, int(height/2))
@@ -1917,7 +2625,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 else:
                     b_scaled = (
                         ffmpeg.input(input_path).video
-                        .filter('trim', start=start, end=end)
+                        .filter('trim', start=src_start, end=src_end)
                         .filter('setpts', 'PTS-STARTPTS')
                         .filter('scale', width, height, force_original_aspect_ratio='increase')
                         .filter('crop', width, height)
@@ -1948,15 +2656,38 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
             return False, f"FFmpeg timed out after {timeout_sec}s"
 
     try:
+        # Optional Instagram Reels target frame (9:16)
+        if target_width and target_height:
+            tw = int(target_width) if int(target_width) % 2 == 0 else int(target_width) - 1
+            th = int(target_height) if int(target_height) % 2 == 0 else int(target_height) - 1
+            v_out = (
+                v_out
+                .filter("scale", tw, th, force_original_aspect_ratio="increase")
+                .filter("crop", tw, th)
+                .filter("setsar", "1")
+            )
+            print(f"[RenderEngine] Scaling export to Reels {tw}x{th}")
+            width, height = tw, th
+
+        encode_kwargs = dict(
+            vcodec="libx264",
+            acodec="aac",
+            preset=export_preset or "fast",
+            crf=int(export_crf) if export_crf is not None else 18,
+            audio_bitrate=export_audio_bitrate or "192k",
+            pix_fmt="yuv420p",
+            movflags="+faststart",
+        )
+
         if has_subtitles and a_out is not None:
             pre_sub_output = output_path.replace('.mp4', '_presub.mp4')
-            out = ffmpeg.output(v_out, a_out, pre_sub_output, vcodec='libx264', acodec='aac', preset='fast')
+            out = ffmpeg.output(v_out, a_out, pre_sub_output, **encode_kwargs)
             ok, err = _run_ffmpeg_with_timeout(out)
             if not ok:
                 print(f"[RenderEngine] Main FFmpeg FAILED: {err[:300]}")
                 return False
         else:
-            out = ffmpeg.output(v_out, a_out, output_path, vcodec='libx264', acodec='aac', preset='fast')
+            out = ffmpeg.output(v_out, a_out, output_path, **encode_kwargs)
             ok, err = _run_ffmpeg_with_timeout(out)
             if not ok:
                 print(f"[RenderEngine] Main FFmpeg FAILED: {err[:300]}")
@@ -1979,13 +2710,16 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                             '-c:a', 'copy', temp_blur
                         ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                         if os.path.exists(temp_blur):
-                            os.replace(temp_blur, output_path)
+                            safe_replace(temp_blur, output_path)
                     
                     from app.services.masking_service import apply_speaker_masking
                     apply_speaker_masking(unblurred_output, output_path, mask_edit, width, height)
                     
                     if os.path.exists(unblurred_output):
-                        os.remove(unblurred_output)
+                        try:
+                            os.remove(unblurred_output)
+                        except OSError:
+                            pass
     except Exception as e:
         print(f"[RenderEngine] Main FFmpeg Exception: {e}")
         return False
@@ -2013,7 +2747,7 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                     '-c:a', 'copy', temp_blur
                 ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 if os.path.exists(temp_blur):
-                    os.replace(temp_blur, pre_sub_output)
+                    safe_replace(temp_blur, pre_sub_output)
         
         temp_dir = tempfile.gettempdir()
         # Use a SIMPLE filename with no colons/spaces/special chars for the filter string
@@ -2022,15 +2756,28 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
         shutil.copy2(ass_path, temp_ass_path)
         
         # Copy fonts dir to temp (no spaces in path)
-        fonts_src = os.path.abspath('fonts')
+        fonts_src = resolve_fonts_dir() or os.path.abspath('fonts')
         temp_fonts = os.path.join(temp_dir, 'montage_fonts')
         if os.path.exists(fonts_src) and not os.path.exists(temp_fonts):
             try:
                 shutil.copytree(fonts_src, temp_fonts)
+                print(f"[Subtitles] Fonts from {fonts_src} → {temp_fonts}")
             except Exception as e:
                 print(f"[Subtitles] Font copy warning: {e}")
         elif not os.path.exists(temp_fonts):
             os.makedirs(temp_fonts, exist_ok=True)
+        elif fonts_src and os.path.isdir(fonts_src):
+            # Ensure latest TTFs exist even if temp dir was created earlier
+            try:
+                for f in os.listdir(fonts_src):
+                    if not f.lower().endswith((".ttf", ".otf")):
+                        continue
+                    src_f = os.path.join(fonts_src, f)
+                    dst_f = os.path.join(temp_fonts, f)
+                    if os.path.isfile(src_f) and not os.path.exists(dst_f):
+                        shutil.copy2(src_f, dst_f)
+            except Exception as e:
+                print(f"[Subtitles] Font sync warning: {e}")
             
         # Copy brand-specific fonts to temp_fonts
         if brand_id:
@@ -2050,28 +2797,61 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
         # This avoids ALL Windows path escaping issues (drive letter colons, spaces).
         # -i and output use absolute paths which FFmpeg handles normally.
         if os.path.exists(temp_fonts):
-            vf_filter = f"ass=filename={simple_ass_name}:fontsdir=montage_fonts"
+            fonts_arg = ":fontsdir=montage_fonts"
         else:
-            vf_filter = f"ass={simple_ass_name}"
-        
+            fonts_arg = ""
+
         abs_presub = os.path.abspath(pre_sub_output)
         abs_output = os.path.abspath(output_path)
-        
-        print(f"[Subtitles] cwd={temp_dir}, filter={vf_filter}")
-        
+        accent_ass_src = (
+            ass_path[:-4] + "_accent.ass"
+            if ass_path.lower().endswith(".ass")
+            else ass_path + "_accent.ass"
+        )
+        use_text_mask = os.path.exists(accent_ass_src) and (
+            (subtitle_edit or {}).get("caption_look") == "dropcap"
+            or (subtitle_edit or {}).get("subtitle_preset") == "resolve_dropcap"
+        )
+
         try:
-            result = subprocess.run(
-                ['ffmpeg', '-i', abs_presub, '-vf', vf_filter,
-                 '-c:a', 'copy', abs_output, '-y', '-loglevel', 'warning'],
-                cwd=temp_dir,
-                stderr=subprocess.PIPE, stdout=subprocess.PIPE,
-                timeout=300,  # 5 min max for subtitle burn-in
-            )
-            
+            if use_text_mask:
+                simple_accent = "montage_sub_accent.ass"
+                shutil.copy2(accent_ass_src, os.path.join(temp_dir, simple_accent))
+                # White glyphs on black, then difference = inverted video inside letters.
+                filter_complex = (
+                    "[0:v]split[base][ink];"
+                    "[ink]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[blk];"
+                    f"[blk]ass=filename={simple_ass_name}{fonts_arg}[mask];"
+                    "[base][mask]blend=all_mode=difference[inv];"
+                    f"[inv]ass=filename={simple_accent}{fonts_arg}[vout]"
+                )
+                print(f"[Subtitles] cwd={temp_dir}, text-mask difference blend")
+                result = subprocess.run(
+                    [
+                        "ffmpeg", "-i", abs_presub,
+                        "-filter_complex", filter_complex,
+                        "-map", "[vout]", "-map", "0:a?",
+                        "-c:a", "copy", abs_output, "-y", "-loglevel", "warning",
+                    ],
+                    cwd=temp_dir,
+                    stderr=subprocess.PIPE, stdout=subprocess.PIPE,
+                    timeout=300,
+                )
+            else:
+                vf_filter = f"ass=filename={simple_ass_name}{fonts_arg}" if fonts_arg else f"ass={simple_ass_name}"
+                print(f"[Subtitles] cwd={temp_dir}, filter={vf_filter}")
+                result = subprocess.run(
+                    ['ffmpeg', '-i', abs_presub, '-vf', vf_filter,
+                     '-c:a', 'copy', abs_output, '-y', '-loglevel', 'warning'],
+                    cwd=temp_dir,
+                    stderr=subprocess.PIPE, stdout=subprocess.PIPE,
+                    timeout=300,
+                )
+
             if result.returncode != 0:
                 err = result.stderr.decode('utf-8', errors='replace')
                 print(f"[Subtitles] FAILED (code {result.returncode}): {err}")
-                shutil.move(abs_presub, abs_output)
+                safe_replace(abs_presub, abs_output)
             else:
                 # Apply speaker masking overlay
                 if is_masking_enabled and pre_sub_unblurred and os.path.exists(pre_sub_unblurred):
@@ -2080,23 +2860,29 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 
                 # Cleanup presub files
                 if os.path.exists(abs_presub):
-                    os.remove(abs_presub)
+                    try:
+                        os.remove(abs_presub)
+                    except OSError:
+                        pass
                 if pre_sub_unblurred and os.path.exists(pre_sub_unblurred):
                     try:
                         os.remove(pre_sub_unblurred)
-                    except:
+                    except OSError:
                         pass
                 print(f"[Subtitles] SUCCESS")
         except Exception as e:
             print(f"[Subtitles] Exception: {e}")
             if os.path.exists(abs_presub):
-                shutil.move(abs_presub, abs_output)
+                try:
+                    safe_replace(abs_presub, abs_output)
+                except OSError as move_err:
+                    print(f"[Subtitles] Fallback move failed: {move_err}")
         
         return True
     
     # --- Step 7: Audio normalization (loudnorm) ---
     # Equalizes volume: makes quiet parts louder, loud parts softer
-    if os.path.exists(output_path):
+    if do_loudnorm and os.path.exists(output_path):
         print("[Audio] Applying loudnorm normalization...")
         norm_output = output_path.replace('.mp4', '_norm.mp4')
         try:
@@ -2109,17 +2895,23 @@ def render_video(input_path: str, output_path: str, transcript_data: dict, edits
                 timeout=300,
             )
             if norm_result.returncode == 0 and os.path.exists(norm_output):
-                os.replace(norm_output, output_path)
+                safe_replace(norm_output, output_path)
                 print("[Audio] ✅ Loudnorm normalization applied successfully")
             else:
                 err = norm_result.stderr.decode('utf-8', errors='replace')
                 print(f"[Audio] Normalization failed (non-critical): {err[:200]}")
                 if os.path.exists(norm_output):
-                    os.remove(norm_output)
+                    try:
+                        os.remove(norm_output)
+                    except OSError:
+                        pass
         except Exception as e:
             print(f"[Audio] Normalization exception (non-critical): {e}")
             if os.path.exists(norm_output):
-                os.remove(norm_output)
+                try:
+                    os.remove(norm_output)
+                except OSError:
+                    pass
     
     return True
 

@@ -8,19 +8,13 @@ const BACKEND_URL = (
   'http://localhost:8001'
 ).replace(/\/$/, '');
 
-interface Key {
-  id: string;
-  label: string;
-  created_at: string;
-  expires_at: string;
-  tokens_limit: number;
-  tokens_used: number;
-  status: string;
-}
-
 interface User {
+  id?: string;
   login: string;
+  name?: string;
   key_label: string;
+  plan?: string;
+  plan_status?: string;
   tokens_used: number;
   tokens_limit: number;
   registered_at: string;
@@ -36,7 +30,6 @@ interface Stats {
   disk_used_pct: number;
   active_projects: number;
   media_library_size_mb: number;
-  active_keys: number;
   users: User[];
 }
 
@@ -81,24 +74,15 @@ export default function AdminPage() {
   const [authed, setAuthed] = useState(false);
   const [authError, setAuthError] = useState('');
   const [stats, setStats] = useState<Stats | null>(null);
-  const [keys, setKeys] = useState<Key[]>([]);
-  const [newLabel, setNewLabel] = useState('');
-  const [newLimit, setNewLimit] = useState(100000);
-  const [loading, setLoading] = useState(false);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'keys' | 'users'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'users'>('dashboard');
 
   const headers = { 'X-Admin-Token': token };
 
   const fetchData = useCallback(async () => {
     if (!token) return;
     try {
-      const [statsRes, keysRes] = await Promise.all([
-        fetch(`${BACKEND_URL}/api/admin/stats`, { headers }),
-        fetch(`${BACKEND_URL}/api/admin/keys`,  { headers }),
-      ]);
+      const statsRes = await fetch(`${BACKEND_URL}/api/admin/stats`, { headers, credentials: "include" });
       if (statsRes.ok) setStats(await statsRes.json());
-      if (keysRes.ok) setKeys(await keysRes.json());
     } catch { /* ignore */ }
   }, [token]);
 
@@ -112,39 +96,12 @@ export default function AdminPage() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
-    const res = await fetch(`${BACKEND_URL}/api/admin/stats`, { headers: { 'X-Admin-Token': token } });
+    const res = await fetch(`${BACKEND_URL}/api/admin/stats`, { headers: { 'X-Admin-Token': token }, credentials: "include" });
     if (res.ok) {
       setAuthed(true);
       setStats(await res.json());
     } else {
       setAuthError('Неверный пароль администратора.');
-    }
-  };
-
-  const handleCreateKey = async () => {
-    if (!newLabel.trim()) return;
-    setLoading(true);
-    try {
-      const res = await fetch(`${BACKEND_URL}/api/admin/keys`, {
-        method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label: newLabel, tokens_limit: newLimit, days: 7 }),
-      });
-      if (res.ok) {
-        const created = await res.json();
-        setKeys(prev => [created, ...prev]);
-        setNewLabel('');
-        setCopiedId(created.id);
-        navigator.clipboard.writeText(created.id).catch(() => {});
-        setTimeout(() => setCopiedId(null), 4000);
-      }
-    } finally { setLoading(false); }
-  };
-
-  const handleRevoke = async (keyId: string) => {
-    if (!confirm('Отозвать ключ?')) return;
-    const res = await fetch(`${BACKEND_URL}/api/admin/keys/${keyId}`, { method: 'DELETE', headers });
-    if (res.ok) {
-      setKeys(prev => prev.map(k => k.id === keyId ? { ...k, status: 'revoked' } : k));
     }
   };
 
@@ -236,9 +193,9 @@ export default function AdminPage() {
           <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.3)', marginLeft: 4 }}>Synapix</span>
         </div>
         <div style={{ display: 'flex', gap: 4 }}>
-          {(['dashboard', 'keys', 'users'] as const).map(t => (
+          {(['dashboard', 'users'] as const).map(t => (
             <button key={t} style={tabStyle(t)} onClick={() => setActiveTab(t)}>
-              {{ dashboard: '📊 Дашборд', keys: '🔑 Ключи', users: '👥 Пользователи' }[t]}
+              {{ dashboard: 'Дашборд', users: 'Пользователи' }[t]}
             </button>
           ))}
         </div>
@@ -255,7 +212,7 @@ export default function AdminPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 32 }}>
               <StatCard label="Всего пользователей" value={stats.total_users} gradient="linear-gradient(135deg,#7C3AED,#3B82F6)" />
               <StatCard label="Онлайн сейчас" value={stats.online_users} sub="за последние 5 мин" gradient="linear-gradient(135deg,#10B981,#06B6D4)" />
-              <StatCard label="Активных ключей" value={stats.active_keys} gradient="linear-gradient(135deg,#F59E0B,#EF4444)" />
+              <StatCard label="Проектов" value={stats.active_projects} gradient="linear-gradient(135deg,#F59E0B,#EF4444)" />
               <StatCard label="Медиа-библиотека" value={`${stats.media_library_size_mb} MB`} sub={`${stats.active_projects} проектов`} gradient="linear-gradient(135deg,#EC4899,#8B5CF6)" />
             </div>
 
@@ -276,112 +233,6 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* ─── KEYS TAB ─── */}
-        {activeTab === 'keys' && (
-          <div>
-            {/* Create Key */}
-            <div style={{
-              background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)',
-              borderRadius: 14, padding: '20px 24px', marginBottom: 24,
-            }}>
-              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>Создать новый ключ доступа (7 дней)</div>
-              <div style={{ display: 'flex', gap: 12 }}>
-                <input
-                  id="new-key-label"
-                  value={newLabel}
-                  onChange={e => setNewLabel(e.target.value)}
-                  placeholder="Метка (напр. «Клиент Анна»)"
-                  style={{
-                    flex: 1, padding: '10px 14px', background: 'rgba(255,255,255,0.06)',
-                    border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10,
-                    color: '#fff', fontSize: 14, outline: 'none',
-                  }}
-                />
-                <input
-                  id="new-key-limit"
-                  type="number"
-                  value={newLimit}
-                  onChange={e => setNewLimit(parseInt(e.target.value) || 1000)}
-                  style={{
-                    width: 120, padding: '10px 14px', background: 'rgba(255,255,255,0.06)',
-                    border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10,
-                    color: '#fff', fontSize: 14, outline: 'none',
-                  }}
-                  placeholder="Лимит токенов"
-                />
-                <button
-                  id="create-key-btn"
-                  onClick={handleCreateKey}
-                  disabled={loading}
-                  style={{
-                    padding: '10px 20px', background: 'linear-gradient(135deg,#7C3AED,#3B82F6)',
-                    border: 'none', borderRadius: 10, color: '#fff', fontSize: 14,
-                    fontWeight: 600, cursor: 'pointer', opacity: loading ? 0.6 : 1,
-                  }}
-                >{loading ? 'Создаём...' : '+ Создать'}</button>
-              </div>
-              {copiedId && (
-                <div style={{
-                  marginTop: 12, padding: '10px 14px', borderRadius: 10,
-                  background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.2)',
-                  color: '#34D399', fontSize: 13,
-                  display: 'flex', alignItems: 'center', gap: 8,
-                }}>
-                  ✓ Ключ создан и скопирован:
-                  <code style={{ fontFamily: 'monospace', color: '#6EE7B7' }}>{copiedId}</code>
-                </div>
-              )}
-            </div>
-
-            {/* Keys Table */}
-            <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 14, overflow: 'hidden' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead>
-                  <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
-                    {['Метка', 'ID ключа', 'Токены', 'Истекает', 'Статус', ''].map(h => (
-                      <th key={h} style={{ padding: '12px 16px', textAlign: 'left', color: 'rgba(255,255,255,0.4)', fontWeight: 500 }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {keys.map(k => (
-                    <tr key={k.id} style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-                      <td style={{ padding: '12px 16px', fontWeight: 600 }}>{k.label}</td>
-                      <td style={{ padding: '12px 16px' }}>
-                        <code
-                          onClick={() => { navigator.clipboard.writeText(k.id).catch(() => {}); setCopiedId(k.id); setTimeout(() => setCopiedId(null), 2000); }}
-                          style={{ fontFamily: 'monospace', fontSize: 12, color: '#A78BFA', cursor: 'pointer' }}
-                          title="Нажмите, чтобы скопировать"
-                        >{k.id}</code>
-                      </td>
-                      <td style={{ padding: '12px 16px' }}>
-                        <span style={{ color: k.tokens_used > k.tokens_limit * 0.8 ? '#FCA5A5' : '#9CA3AF' }}>
-                          {k.tokens_used.toLocaleString()} / {k.tokens_limit.toLocaleString()}
-                        </span>
-                        <div style={{ marginTop: 4, height: 3, background: 'rgba(255,255,255,0.08)', borderRadius: 99 }}>
-                          <div style={{ height: '100%', borderRadius: 99, width: `${Math.min((k.tokens_used / k.tokens_limit) * 100, 100)}%`, background: 'linear-gradient(90deg,#7C3AED,#3B82F6)' }} />
-                        </div>
-                      </td>
-                      <td style={{ padding: '12px 16px', color: 'rgba(255,255,255,0.5)' }}>{fmtDate(k.expires_at)}</td>
-                      <td style={{ padding: '12px 16px' }}><Badge status={k.status} /></td>
-                      <td style={{ padding: '12px 16px' }}>
-                        {k.status === 'active' && (
-                          <button onClick={() => handleRevoke(k.id)} style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.1)', color: '#F87171', fontSize: 12, cursor: 'pointer' }}>
-                            Отозвать
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                  {keys.length === 0 && (
-                    <tr><td colSpan={6} style={{ padding: 32, textAlign: 'center', color: 'rgba(255,255,255,0.25)' }}>Ключей пока нет. Создайте первый!</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
         {/* ─── USERS TAB ─── */}
         {activeTab === 'users' && (
           <div>
@@ -393,25 +244,26 @@ export default function AdminPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
-                    {['Логин', 'Ключ', 'Токены', 'Зарегистрирован', 'Последний визит', 'Статус'].map(h => (
+                    {['Аккаунт', 'Способ входа', 'План', 'Токены', 'Зарегистрирован', 'Последний визит', 'Статус'].map(h => (
                       <th key={h} style={{ padding: '12px 16px', textAlign: 'left', color: 'rgba(255,255,255,0.4)', fontWeight: 500 }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {(stats?.users ?? []).map(u => (
-                    <tr key={u.login} style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                    <tr key={u.id || u.login} style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
                       <td style={{ padding: '12px 16px', fontWeight: 600, color: u.status === 'online' ? '#34D399' : '#fff' }}>
                         {u.status === 'online' && <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: '#34D399', marginRight: 6 }} />}
-                        {u.login}
+                        {u.name ? `${u.name} · ${u.login}` : u.login}
                       </td>
                       <td style={{ padding: '12px 16px', color: 'rgba(255,255,255,0.5)' }}>{u.key_label}</td>
+                      <td style={{ padding: '12px 16px', color: 'rgba(255,255,255,0.5)' }}>{u.plan_status && u.plan_status !== 'none' ? `${u.plan || 'pro'} · ${u.plan_status}` : 'free'}</td>
                       <td style={{ padding: '12px 16px' }}>
-                        <span style={{ color: u.tokens_used > u.tokens_limit * 0.8 ? '#FCA5A5' : '#9CA3AF' }}>
-                          {u.tokens_used.toLocaleString()} / {u.tokens_limit.toLocaleString()}
+                        <span style={{ color: u.tokens_limit > 0 && u.tokens_used > u.tokens_limit * 0.8 ? '#FCA5A5' : '#9CA3AF' }}>
+                          {u.tokens_limit > 0 ? `${u.tokens_used.toLocaleString()} / ${u.tokens_limit.toLocaleString()}` : u.tokens_used.toLocaleString()}
                         </span>
                         <div style={{ marginTop: 4, height: 3, background: 'rgba(255,255,255,0.08)', borderRadius: 99 }}>
-                          <div style={{ height: '100%', borderRadius: 99, width: `${Math.min((u.tokens_used / u.tokens_limit) * 100, 100)}%`, background: 'linear-gradient(90deg,#7C3AED,#3B82F6)' }} />
+                          <div style={{ height: '100%', borderRadius: 99, width: `${u.tokens_limit > 0 ? Math.min((u.tokens_used / u.tokens_limit) * 100, 100) : 0}%`, background: 'linear-gradient(90deg,#7C3AED,#3B82F6)' }} />
                         </div>
                       </td>
                       <td style={{ padding: '12px 16px', color: 'rgba(255,255,255,0.4)' }}>{fmtDate(u.registered_at)}</td>
@@ -420,7 +272,7 @@ export default function AdminPage() {
                     </tr>
                   ))}
                   {(!stats?.users || stats.users.length === 0) && (
-                    <tr><td colSpan={6} style={{ padding: 32, textAlign: 'center', color: 'rgba(255,255,255,0.25)' }}>Нет зарегистрированных пользователей</td></tr>
+                    <tr><td colSpan={7} style={{ padding: 32, textAlign: 'center', color: 'rgba(255,255,255,0.25)' }}>Нет зарегистрированных пользователей</td></tr>
                   )}
                 </tbody>
               </table>

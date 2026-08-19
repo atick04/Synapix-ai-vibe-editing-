@@ -38,7 +38,7 @@ export const ThreeComposition: React.FC<Props> = ({
         global: { fontFamily: "'Outfit', 'Inter', sans-serif", backgroundColor: "transparent", pacingMultiplier: 1.1 },
         palette: { primary: "#F8FAFC", secondary: "#94A3B8", cardBg: "rgba(15, 23, 42, 0.45)", border: "rgba(56, 189, 248, 0.4)", glow: "rgba(56, 189, 248, 0.15)" },
         physics: { mass: 0.8, stiffness: 280, damping: 22 },
-        threeJsEnv: { geometryType: "particles", materialStyle: "points", cameraMotion: "orbit" },
+        threeJsEnv: { geometryType: "grid", materialStyle: "matte", cameraMotion: "orbit" },
         lottieStyle: { lineThickness: 2.0, glowIntensity: "10px" }
       },
       liquid: {
@@ -95,11 +95,12 @@ export const ThreeComposition: React.FC<Props> = ({
     const matStyle = threeJsEnv.materialStyle;
     const cameraMotion = threeJsEnv.cameraMotion;
 
-    const actualGeom = (geomType === 'particles') ? 'dna'
-                     : (geomType === 'torus_knot') ? 'torusKnot'
+    const actualGeom = (geomType === 'torus_knot') ? 'torusKnot'
                      : (geomType === 'chroma_spheres') ? 'sphere'
                      : (geomType === 'fluid') ? 'tunnel'
-                     : geomType;
+                     : (geomType === 'particles' || geomType === 'dna' || geomType === 'points')
+                       ? 'torusKnot'
+                       : geomType;
 
     const themeColor = new THREE.Color(palette.border || accentColor);
 
@@ -125,19 +126,6 @@ export const ThreeComposition: React.FC<Props> = ({
       geometry = new THREE.TorusGeometry(0.8, 0.25, 12, 48);
     } else if (actualGeom === 'torusKnot') {
       geometry = new THREE.TorusKnotGeometry(0.8, 0.28, 100, 16);
-    } else if (actualGeom === 'dna') {
-      const count = 400;
-      const positions = new Float32Array(count * 3);
-      for (let i = 0; i < count; i++) {
-        const theta = (i / count) * Math.PI * 6; // 3 turns
-        const helix = i % 2 === 0 ? 1 : -1;
-        const r = 0.5;
-        positions[i * 3] = Math.cos(theta) * r * helix;
-        positions[i * 3 + 1] = (i / count - 0.5) * 3.0; // Y axis
-        positions[i * 3 + 2] = Math.sin(theta) * r * helix;
-      }
-      geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     } else if (actualGeom === 'tunnel') {
       geometry = new THREE.CylinderGeometry(1.0, 1.0, 15, 16, 20, true);
     } else if (actualGeom === 'grid') {
@@ -153,15 +141,7 @@ export const ThreeComposition: React.FC<Props> = ({
 
     // Build Material
     let material: THREE.Material;
-    if (matStyle === 'points' || actualGeom === 'dna') {
-      material = new THREE.PointsMaterial({
-        color: themeColor,
-        size: 0.07,
-        transparent: true,
-        opacity: 0.8,
-        blending: THREE.AdditiveBlending
-      });
-    } else if (matStyle === 'glossy_metal') {
+    if (matStyle === 'glossy_metal') {
       material = new THREE.MeshStandardMaterial({
         color: themeColor,
         roughness: 0.1,
@@ -195,11 +175,7 @@ export const ThreeComposition: React.FC<Props> = ({
 
     // Add Mesh to Scene
     let mesh3d: THREE.Object3D | null = null;
-    let points3d: THREE.Points | null = null;
-    if (actualGeom === 'dna' || matStyle === 'points') {
-      points3d = new THREE.Points(geometry, material);
-      scene.add(points3d);
-    } else if (actualGeom !== 'grid') {
+    if (actualGeom !== 'grid') {
       mesh3d = new THREE.Mesh(geometry, material);
       if (actualGeom === 'tunnel') {
         mesh3d.rotation.x = Math.PI / 2;
@@ -221,22 +197,6 @@ export const ThreeComposition: React.FC<Props> = ({
         mesh3d.rotation.y = animFrame * 0.01;
       } else if (actualGeom === 'tunnel') {
         mesh3d.position.z = (animFrame * 0.08) % 15 - 7.5;
-      }
-    } else if (points3d) {
-      if (actualGeom === 'dna') {
-        points3d.rotation.y = animFrame * 0.03;
-        const positions = points3d.geometry.attributes.position.array as Float32Array;
-        const count = positions.length / 3;
-        for (let i = 0; i < count; i++) {
-          const theta = (i / count) * Math.PI * 6;
-          const helix = i % 2 === 0 ? 1 : -1;
-          const r = 0.5 + Math.sin(animFrame * 0.1 + (i / count) * 10) * 0.05;
-          positions[i * 3] = Math.cos(theta) * r * helix;
-          positions[i * 3 + 2] = Math.sin(theta) * r * helix;
-        }
-        points3d.geometry.attributes.position.needsUpdate = true;
-      } else {
-        points3d.rotation.y = animFrame * 0.025;
       }
     }
 
@@ -277,10 +237,6 @@ export const ThreeComposition: React.FC<Props> = ({
           }
         }
       });
-      if (points3d) {
-        points3d.geometry.dispose();
-        (points3d.material as THREE.Material).dispose();
-      }
       renderer.dispose();
     };
   }, [frame, width, height, resolvedVibe, accentColor]);
@@ -591,10 +547,8 @@ export const ThreeComposition: React.FC<Props> = ({
 export const HtmlGraphicsComposition: React.FC<{ htmlContent: string; clipStart?: number }> = ({ htmlContent, clipStart = 0 }) => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const frame = useCurrentFrame();
-  const { fps, width: compW, height: compH } = useVideoConfig();
+  const { fps } = useVideoConfig();
   const t = frame / fps;
-  const designW = compW >= compH ? 1920 : 1080;
-  const designH = compW >= compH ? 1080 : 1920;
 
   const srcDoc = useMemo(() => {
     if (!htmlContent) return '';
@@ -610,13 +564,27 @@ export const HtmlGraphicsComposition: React.FC<{ htmlContent: string; clipStart?
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100% !important; height: 100% !important; overflow: hidden !important; background: transparent !important; background-color: transparent !important; }
-    .clip { position: absolute; }
-    #root {
-      width: ${designW}px; height: ${designH}px;
-      position: absolute; top: 0; left: 0;
-      transform-origin: top left;
-      background: transparent !important; background-color: transparent !important; overflow: hidden;
+    html, body {
+      width: 100% !important; height: 100% !important;
+      overflow: visible !important;
+      background: transparent !important; background-color: transparent !important;
+    }
+    #root, .clip {
+      position: absolute !important; inset: 0 !important;
+      width: 100% !important; height: 100% !important;
+      overflow: visible !important; container-type: size;
+    }
+    .clip .glass-card, .clip .card, .clip .plate, .clip [data-plate] {
+      overflow: visible !important;
+      max-width: none !important;
+      max-height: none !important;
+      white-space: normal !important;
+    }
+    .clip .glass-card *, .clip [data-plate] * {
+      overflow: visible !important;
+      white-space: normal !important;
+      overflow-wrap: normal !important;
+      word-break: normal !important;
     }
   </style>
 </head>
@@ -625,19 +593,16 @@ export const HtmlGraphicsComposition: React.FC<{ htmlContent: string; clipStart?
     ${htmlContent}
   </div>
   <script>
-    const DESIGN_W = ${designW};
-    const DESIGN_H = ${designH};
-    // Scale root to fit viewport dynamically
     function scaleRoot(){
       const r=document.getElementById('root');
       if(!r)return;
-      r.style.width = DESIGN_W + 'px';
-      r.style.height = DESIGN_H + 'px';
-      const s=Math.min(window.innerWidth/DESIGN_W,window.innerHeight/DESIGN_H);
-      r.style.transform='scale('+s+')';
-      const scaledW=DESIGN_W*s, scaledH=DESIGN_H*s;
-      r.style.left=((window.innerWidth-scaledW)/2)+'px';
-      r.style.top=((window.innerHeight-scaledH)/2)+'px';
+      r.style.width='100%';
+      r.style.height='100%';
+      r.style.left='0';
+      r.style.top='0';
+      r.style.transform='none';
+      r.style.overflow='visible';
+      r.style.zoom='';
     }
     window.addEventListener('resize',scaleRoot);
     scaleRoot();

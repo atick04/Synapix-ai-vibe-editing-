@@ -5,6 +5,7 @@ TRANSLATIONS = {
     # Tool Registry MCP tools
     "build_kinetic_typography": "Building cinematic subtitles",
     "select_bgm": "Selecting cinematic soundtrack",
+    "design_sound": "Designing soundtrack bed and sparse SFX",
     "create_zoom": "Adding dynamic camera zooms",
     "cut_clip": "Trimming unnecessary footage",
     "add_broll": "Injecting contextual stock footage (B-roll)",

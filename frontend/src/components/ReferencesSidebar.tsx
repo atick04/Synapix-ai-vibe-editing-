@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { getApiUrl } from "@/utils/api";
+import { apiFetch, authHeaders, getApiUrl } from "@/utils/api";
+import { RESOLVE_SUBTITLE_PACK, resolvePresetToEditFields } from "@/utils/resolveSubtitlePack";
+import { SubtitleStylePreview } from "@/components/SubtitleStylePreview";
 
 interface ReferencesSidebarProps {
     activeEdits: any[];
@@ -331,8 +333,7 @@ export default function ReferencesSidebar({
         setIsGeneratingAudio(true);
         setAiAudioError(null);
         try {
-            const apiBase = getApiUrl();
-            const res = await fetch(`${apiBase}/api/video/${fileId}/generate_audio`, {
+            const res = await apiFetch(`/api/video/${fileId}/generate_audio`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -366,7 +367,7 @@ export default function ReferencesSidebar({
                 
                 // Обновляем медиабиблиотеку
                 if (onMediaLibraryChange) {
-                    const libRes = await fetch(`${apiBase}/api/video/${fileId}/media_library`);
+                    const libRes = await apiFetch(`/api/video/${fileId}/media_library`);
                     if (libRes.ok) {
                         const libData = await libRes.json();
                         onMediaLibraryChange(libData);
@@ -483,9 +484,8 @@ export default function ReferencesSidebar({
         setIsSearchingStock(true);
         setStockError(null);
         try {
-            const apiBase = getApiUrl();
             const endpoint = stockType === 'stickers' ? 'search_stickers' : 'search_music';
-            const res = await fetch(`${apiBase}/api/video/${endpoint}?query=${encodeURIComponent(stockQuery)}`);
+            const res = await apiFetch(`/api/video/${endpoint}?query=${encodeURIComponent(stockQuery)}`);
             if (res.ok) {
                 const data = await res.json();
                 setStockResults(data);
@@ -504,8 +504,7 @@ export default function ReferencesSidebar({
         setDownloadingAssetId(assetId);
         setStockError(null);
         try {
-            const apiBase = getApiUrl();
-            const res = await fetch(`${apiBase}/api/video/download_asset`, {
+            const res = await apiFetch(`/api/video/download_asset`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -528,7 +527,7 @@ export default function ReferencesSidebar({
                 }
                 
                 if (fileId && onMediaLibraryChange) {
-                    const libRes = await fetch(`${apiBase}/api/video/${fileId}/media_library`);
+                    const libRes = await apiFetch(`/api/video/${fileId}/media_library`);
                     if (libRes.ok) {
                         const libData = await libRes.json();
                         onMediaLibraryChange(libData);
@@ -561,11 +560,9 @@ export default function ReferencesSidebar({
     // Poll the media library periodically to get progress updates (such as visual/transcript analysis completion)
     useEffect(() => {
         if (!fileId || !onMediaLibraryChange) return;
-        const apiBase = getApiUrl();
-        
         const pollLibrary = async () => {
             try {
-                const res = await fetch(`${apiBase}/api/video/${fileId}/media_library`);
+                const res = await apiFetch(`/api/video/${fileId}/media_library`);
                 if (res.ok) {
                     const data = await res.json();
                     if (Array.isArray(data)) {
@@ -584,11 +581,9 @@ export default function ReferencesSidebar({
     // Poll the project session periodically to get hook detection and styling progress
     useEffect(() => {
         if (!fileId) return;
-        const apiBase = getApiUrl();
-        
         const pollSession = async () => {
             try {
-                const res = await fetch(`${apiBase}/api/video/${fileId}/session`);
+                const res = await apiFetch(`/api/video/${fileId}/session`);
                 if (res.ok) {
                     const data = await res.json();
                     setProjectSession(data);
@@ -617,14 +612,19 @@ export default function ReferencesSidebar({
         setIsDragging(false);
         const files = e.dataTransfer.files;
         if (files && files.length > 0) {
-            await handleUploadFile(files[0]);
+            for (const file of Array.from(files)) {
+                await handleUploadFile(file);
+            }
         }
     };
 
     const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const files = e.target.files;
         if (files && files.length > 0) {
-            await handleUploadFile(files[0]);
+            for (const file of Array.from(files)) {
+                await handleUploadFile(file);
+            }
+            e.target.value = "";
         }
     };
 
@@ -645,6 +645,9 @@ export default function ReferencesSidebar({
 
             const xhr = new XMLHttpRequest();
             xhr.open("POST", url, true);
+            xhr.withCredentials = true;
+            const hdrs = authHeaders();
+            Object.entries(hdrs).forEach(([k, v]) => xhr.setRequestHeader(k, v));
 
             xhr.upload.onprogress = (event) => {
                 if (event.lengthComputable) {
@@ -681,13 +684,30 @@ export default function ReferencesSidebar({
         }
     };
 
-    const additionalAssets = (mediaLibrary || []).filter(item => item.id !== 'main');
+    const additionalAssets = (mediaLibrary || []).filter((item) => {
+        if (item.id === 'main') return false;
+        const id = String(item.id || '');
+        if (id.startsWith('stock_') || id.startsWith('sfx_') || id.startsWith('ai_audio_') || id.startsWith('bgm_')) return false;
+        const path = String(item.path || '').toLowerCase();
+        if (/\.(mp3|wav|m4a|aac|ogg)$/.test(path)) return false;
+        return true;
+    });
+
+    const resolveLibrarySrc = (path?: string) => {
+        if (!path) return "";
+        const norm = path.replace(/\\/g, "/");
+        if (norm.startsWith("http")) return norm;
+        const idx = norm.toLowerCase().lastIndexOf("/uploads/");
+        if (idx >= 0) return `${getApiUrl()}${norm.slice(idx)}`;
+        if (norm.startsWith("uploads/")) return `${getApiUrl()}/${norm}`;
+        return `${getApiUrl()}/uploads/${norm.split("/").pop()}`;
+    };
 
     useEffect(() => {
         const fetchTracks = async () => {
             try {
                 const apiBase = getApiUrl();
-                const response = await fetch(`${apiBase}/assets/index.json`);
+                const response = await apiFetch("/assets/index.json");
                 if (!response.ok) throw new Error("Failed to fetch assets index");
                 const data = await response.json();
                 
@@ -844,12 +864,17 @@ export default function ReferencesSidebar({
     const insertCustomBroll = (asset: any) => {
         if (!onActiveEditsChange) return;
         const playheadTime = videoRef?.current?.currentTime || 0;
+        const clipLen = Math.min(3.5, Math.max(1.5, Number(asset.duration) || 3.0));
         const newEdit = {
             action: "add_broll",
             start: Number(playheadTime.toFixed(2)),
-            end: Number(Math.min(playheadTime + (asset.duration || 3.0), duration).toFixed(2)),
+            end: Number(Math.min(playheadTime + clipLen, duration).toFixed(2)),
             query: asset.filename,
-            resolved_path: asset.path
+            resolved_path: asset.path,
+            asset_id: asset.id,
+            media_type: asset.media_type || (/\.(jpe?g|png|webp|gif)$/i.test(asset.path || "") ? "image" : "video"),
+            source: "user",
+            layout: "full"
         };
         onActiveEditsChange([...activeEdits, newEdit]);
         triggerAddedFeedback(asset.id);
@@ -945,27 +970,6 @@ export default function ReferencesSidebar({
                 
                 {sidebarTab === 'media' && (
                     <div className="space-y-6">
-                        {isMobile ? (
-                            <div className="bg-white/[0.02] rounded-2xl p-3 border border-white/5 text-zinc-355 flex flex-col gap-1.5 shadow-md backdrop-blur-md font-sans">
-                                <span className="text-[10px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
-                                    💡 Вставка в одно касание
-                                </span>
-                                <span className="text-[11px] leading-relaxed text-zinc-300 font-medium">
-                                    Нажмите кнопку «+» или «выбрать трек» на любой карточке, чтобы мгновенно добавить элемент на таймлайн.
-                                </span>
-                            </div>
-                        ) : (
-                            <div className="bg-white/[0.02] rounded-2xl p-3 border border-white/5 text-zinc-355 flex flex-col gap-1.5 shadow-md backdrop-blur-md font-sans">
-                                <span className="text-[10px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
-                                    💡 Перетаскивание ассетов
-                                </span>
-                                <span className="text-[11px] leading-relaxed text-zinc-300 font-medium">
-                                    Перетащите любую карточку ассета на дорожки таймлайна, чтобы наложить её на видео.
-                                </span>
-                            </div>
-                        )}
-
-                        {/* Auto-detected Hook Card */}
                         {projectSession?.narrative_arc?.hook && (
                             <div 
                                 onClick={() => {
@@ -1007,7 +1011,8 @@ export default function ReferencesSidebar({
                         {/* Project Media Section */}
                         <div className="space-y-3">
                             <div className="flex items-center justify-between">
-                                <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">project media library</h3>
+                                <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">Мой B-roll</h3>
+                                <span className="text-[9px] font-mono text-zinc-500">{additionalAssets.length}</span>
                             </div>
                             
                             {/* Upload Zone */}
@@ -1026,7 +1031,8 @@ export default function ReferencesSidebar({
                                     type="file" 
                                     ref={fileInputRef} 
                                     className="hidden" 
-                                    accept="video/*" 
+                                    accept="video/*,image/jpeg,image/png,image/webp,image/gif"
+                                    multiple
                                     onChange={handleFileSelect} 
                                 />
                                 
@@ -1034,7 +1040,7 @@ export default function ReferencesSidebar({
                                     <div className="flex flex-col items-center gap-3.5 w-full">
                                         <div className="w-7 h-7 rounded-full border-[1.5px] border-white/10 border-t-amber-500 animate-spin" />
                                         <span className="text-[11.5px] text-zinc-400 font-sans font-semibold">
-                                            Uploading video... {uploadProgress}%
+                                            Загрузка... {uploadProgress}%
                                         </span>
                                         <div className="w-full bg-white/5 h-1 rounded-full overflow-hidden">
                                             <div 
@@ -1049,10 +1055,10 @@ export default function ReferencesSidebar({
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                                         </svg>
                                         <span className="text-[11.5px] font-bold text-zinc-200">
-                                            Stitch additional video
+                                            Загрузить свой B-roll
                                         </span>
                                         <span className="text-[10px] text-zinc-500 font-medium">
-                                            Drag & drop or click to browse
+                                            Видео или фото — агент поставит их как нарезку
                                         </span>
                                     </div>
                                 )}
@@ -1064,18 +1070,12 @@ export default function ReferencesSidebar({
                                 </div>
                             )}
 
-                            {/* Video List */}
+                            {additionalAssets.length > 0 && (
                             <div className="space-y-2">
-                                {additionalAssets.length === 0 ? (
-                                    <div className="text-center p-6 bg-white/[0.01] border border-white/5 rounded-2xl">
-                                        <span className="text-[11px] text-zinc-555 font-medium">
-                                            Нет добавленных видео.
-                                        </span>
-                                    </div>
-                                ) : (
-                                    additionalAssets.map((asset) => {
+                                {additionalAssets.map((asset) => {
                                         const isJustAdded = justAddedIds.includes(asset.id);
                                         const hasTranscript = !!asset.transcript;
+                                        const isImage = asset.media_type === 'image' || /\.(jpe?g|png|webp|gif)$/i.test(asset.path || "");
                                         
                                         return (
                                             <div 
@@ -1090,11 +1090,20 @@ export default function ReferencesSidebar({
                                                 }`}
                                             >
                                                 <div className="flex items-center gap-2.5 min-w-0">
-                                                    {/* Video Icon */}
-                                                    <div className="w-7 h-7 rounded-xl bg-zinc-950 border border-white/5 flex items-center justify-center shrink-0">
-                                                        <svg className="w-3.5 h-3.5 text-amber-500" fill="currentColor" viewBox="0 0 20 20">
-                                                            <path fillRule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm11 9l-3.5-3.5L10 11l-3-3L4 11V5h12v7z" clipRule="evenodd" />
-                                                        </svg>
+                                                    <div className="w-10 h-10 rounded-xl bg-zinc-950 border border-white/5 overflow-hidden shrink-0">
+                                                        {isImage ? (
+                                                            <img
+                                                                src={resolveLibrarySrc(asset.path)}
+                                                                alt=""
+                                                                className="w-full h-full object-cover"
+                                                            />
+                                                        ) : (
+                                                            <div className="w-full h-full flex items-center justify-center">
+                                                                <svg className="w-3.5 h-3.5 text-amber-500" fill="currentColor" viewBox="0 0 20 20">
+                                                                    <path fillRule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm11 9l-3.5-3.5L10 11l-3-3L4 11V5h12v7z" clipRule="evenodd" />
+                                                                </svg>
+                                                            </div>
+                                                        )}
                                                     </div>
                                                     
                                                     <div className="min-w-0 font-sans">
@@ -1106,13 +1115,12 @@ export default function ReferencesSidebar({
                                                                 {asset.duration ? `${asset.duration.toFixed(1)}s` : '0.0s'}
                                                             </span>
                                                             <span className="w-0.5 h-0.5 rounded-full bg-white/20" />
-                                                            {hasTranscript ? (
+                                                            <span className="text-[8.5px] font-semibold text-sky-400 bg-sky-950/20 px-1.5 py-0.5 rounded border border-sky-500/10">
+                                                                B-roll
+                                                            </span>
+                                                            {hasTranscript && (
                                                                 <span className="text-[8.5px] font-semibold text-emerald-400 bg-emerald-950/20 px-1.5 py-0.5 rounded border border-emerald-500/10">
                                                                     ИИ готов
-                                                                </span>
-                                                            ) : (
-                                                                <span className="text-[8.5px] font-semibold text-amber-400 bg-amber-950/20 px-1.5 py-0.5 rounded border border-amber-500/10 animate-pulse">
-                                                                    ИИ обрабатывает...
                                                                 </span>
                                                             )}
                                                         </div>
@@ -1120,7 +1128,7 @@ export default function ReferencesSidebar({
                                                 </div>
 
                                                 <div className="flex items-center gap-1.5 shrink-0">
-                                                    {/* Stitch to Main V1 Track Button */}
+                                                    {!isImage && (
                                                     <button 
                                                         onClick={(e) => {
                                                             e.stopPropagation();
@@ -1138,6 +1146,7 @@ export default function ReferencesSidebar({
                                                     >
                                                         +Основной
                                                     </button>
+                                                    )}
                                                     
                                                     {/* Overlay as B-Roll V2 Track Button */}
                                                     <button 
@@ -1157,196 +1166,15 @@ export default function ReferencesSidebar({
                                                 </div>
                                             </div>
                                         );
-                                    })
-                                )}
+                                    })}
                             </div>
-                        </div>
-
-                        {/* AI Stable Audio Generator (Apple-inspired Glassmorphic panel) */}
-                        <div className="bg-white/[0.02] rounded-2xl p-4 border border-white/5 shadow-md backdrop-blur-md space-y-4">
-                            <div className="flex items-center justify-between">
-                                <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                                    ИИ-генератор аудио (Stable Audio)
-                                </h3>
-                            </div>
-                            
-                            <form onSubmit={handleGenerateAiAudio} className="space-y-4">
-                                <div className="flex flex-col gap-1.5">
-                                    <span className="text-[9.5px] font-semibold text-zinc-400 uppercase tracking-wider">Prompt / Описание</span>
-                                    <textarea
-                                        value={aiPrompt}
-                                        onChange={(e) => setAiPrompt(e.target.value)}
-                                        placeholder="Например: 80s retro lofi study beat, cinematic deep riser whoosh..."
-                                        rows={2}
-                                        className="w-full bg-black/40 border border-white/5 rounded-xl px-3 py-2 text-[11px] text-white placeholder-zinc-555 focus:outline-none focus:border-white/20 transition-all resize-none font-sans"
-                                    />
-                                </div>
-
-                                <div className="flex gap-4">
-                                    <div className="flex-1 flex flex-col gap-1.5">
-                                        <span className="text-[9.5px] font-semibold text-zinc-400 uppercase tracking-wider">Тип</span>
-                                        <div className="flex bg-black/40 p-0.5 rounded-xl border border-white/5 gap-0.5">
-                                            <button
-                                                type="button"
-                                                onClick={() => setAiIsBgm(false)}
-                                                className={`flex-1 py-1 rounded-lg text-[9.5px] font-bold uppercase transition-all duration-200 cursor-pointer ${
-                                                    !aiIsBgm ? 'bg-white/10 text-white border border-white/5' : 'text-zinc-455 hover:text-zinc-200'
-                                                }`}
-                                            >
-                                                эффект (sfx)
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => setAiIsBgm(true)}
-                                                className={`flex-1 py-1 rounded-lg text-[9.5px] font-bold uppercase transition-all duration-200 cursor-pointer ${
-                                                    aiIsBgm ? 'bg-white/10 text-white border border-white/5' : 'text-zinc-455 hover:text-zinc-200'
-                                                }`}
-                                            >
-                                                музыка
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <div className="flex-1 flex flex-col gap-1.5">
-                                        <span className="text-[9.5px] font-semibold text-zinc-400 uppercase tracking-wider">Длительность: {aiDuration}с</span>
-                                        <input
-                                            type="range"
-                                            min="3"
-                                            max="45"
-                                            value={aiDuration}
-                                            onChange={(e) => setAiDuration(parseInt(e.target.value))}
-                                            className="w-full accent-white h-1 bg-black/40 rounded-lg appearance-none cursor-pointer mt-2"
-                                        />
-                                    </div>
-                                </div>
-
-                                {aiAudioError && (
-                                    <div className="text-[10px] text-rose-455 bg-rose-950/20 border border-rose-500/20 rounded-xl p-2.5 font-sans leading-tight">
-                                        ⚠️ {aiAudioError}
-                                    </div>
-                                )}
-
-                                <button
-                                    type="submit"
-                                    disabled={isGeneratingAudio || !aiPrompt.trim()}
-                                    className="w-full bg-white text-black hover:bg-neutral-250 disabled:bg-white/10 disabled:text-neutral-500 py-2 rounded-xl text-[11px] font-bold transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 shadow-sm font-sans"
-                                >
-                                    {isGeneratingAudio ? (
-                                        <>
-                                            <div className="w-3.5 h-3.5 rounded-full border-[1.5px] border-zinc-900 border-t-transparent animate-spin" />
-                                            <span>Генерация через Replicate...</span>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                                                <path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" />
-                                            </svg>
-                                            <span>Сгенерировать аудио</span>
-                                        </>
-                                    )}
-                                </button>
-                            </form>
-                        </div>
-
-                        {/* AI Generated History & Library */}
-                        <div className="space-y-3">
-                            <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-1.5">
-                                История ИИ-генераций
-                            </h3>
-                            
-                            {mediaLibrary.filter(item => item.id?.startsWith('ai_audio') || item.filename?.startsWith('AI:')).length === 0 ? (
-                                <div className="text-center p-6 bg-white/[0.01] border border-white/5 rounded-2xl">
-                                    <span className="text-[11px] text-zinc-555 font-medium">
-                                        Пока нет сгенерированных аудиодорожек.
-                                    </span>
-                                </div>
-                            ) : (
-                                <div className="space-y-2">
-                                    {mediaLibrary
-                                        .filter(item => item.id?.startsWith('ai_audio') || item.filename?.startsWith('AI:'))
-                                        .map((track) => {
-                                            const isPlaying = playingTrack === track.id;
-                                            const isJustAdded = justAddedIds.includes(track.id);
-                                            
-                                            // Check if it is currently added in activeEdits
-                                            const isApplied = activeEdits.some(e => 
-                                                e.action === 'add_asset' && e.resolved_path === track.path
-                                            );
-
-                                            return (
-                                                <div 
-                                                    key={track.id}
-                                                    draggable="true"
-                                                    onDragStart={(e) => handleDragStart(e, "music", {
-                                                        name: track.filename,
-                                                        title: track.filename,
-                                                        artist: "ИИ Модель",
-                                                        category: "Создано ИИ",
-                                                        rel_path: track.path,
-                                                        description: "Музыкальный трек, созданный ИИ"
-                                                    })}
-                                                    onDragEnd={() => onDragStateChange?.(null)}
-                                                    className={`p-2.5 border rounded-2xl flex items-center justify-between gap-3 transition-all duration-250 cursor-grab active:cursor-grabbing shadow-sm ${
-                                                        isApplied 
-                                                            ? 'border-amber-500/30 bg-amber-500/[0.02]' 
-                                                            : isJustAdded
-                                                                ? 'border-emerald-500 bg-emerald-950/10 scale-[0.98]'
-                                                                : 'border-white/5 bg-white/[0.02] hover:bg-white/[0.05] hover:border-white/10'
-                                                    }`}
-                                                >
-                                                    <div className="flex items-center gap-2.5 min-w-0">
-                                                        {/* Play Button */}
-                                                        <button 
-                                                            onClick={(e) => { e.stopPropagation(); togglePlayGeneratedAudio(track); }}
-                                                            className={`w-7 h-7 rounded-full flex items-center justify-center transition-all border cursor-pointer hover:scale-105 active:scale-95 shrink-0 ${
-                                                                isPlaying 
-                                                                    ? 'bg-white text-black border-white shadow-sm' 
-                                                                    : 'bg-black/40 border-white/10 text-zinc-400 hover:border-white/20 hover:text-white'
-                                                            }`}
-                                                        >
-                                                            {isPlaying ? (
-                                                                <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-                                                            ) : (
-                                                                <svg className="w-2.5 h-2.5 translate-x-px" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                                                            )}
-                                                        </button>
-
-                                                        <div className="min-w-0 font-sans">
-                                                            <p className={`text-[11.5px] font-bold truncate ${isApplied ? 'text-amber-400' : 'text-zinc-205'}`} title={track.filename}>
-                                                                {track.filename}
-                                                            </p>
-                                                            <div className="flex items-center gap-1.5 mt-0.5">
-                                                                <span className="text-[9px] font-mono text-zinc-450">
-                                                                    {track.duration ? `${track.duration.toFixed(1)}s` : '0.0s'}
-                                                                </span>
-                                                                <span className="w-0.5 h-0.5 rounded-full bg-white/20" />
-                                                                <span className="text-[9px] text-zinc-500 font-medium">Создано ИИ</span>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-
-                                                    <button 
-                                                        onClick={(e) => { e.stopPropagation(); applyGeneratedAudio(track, true); }}
-                                                        disabled={isApplied}
-                                                        className={`h-6.5 px-2.5 rounded-lg text-[9.5px] font-semibold tracking-wide transition-all flex items-center justify-center cursor-pointer ${
-                                                            isApplied 
-                                                                ? 'bg-amber-500/10 border border-amber-500/20 text-amber-500 cursor-default' 
-                                                                : 'bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-200 active:scale-98'
-                                                        }`}
-                                                    >
-                                                        {isApplied ? 'активен' : 'добавить'}
-                                                    </button>
-                                                </div>
-                                            );
-                                        })}
-                                </div>
                             )}
                         </div>
 
                         {/* Video B-Rolls Library */}
                         <div className="space-y-3">
                             <div className="flex items-center justify-between">
-                                <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">Библиотека B-Roll перебивок</h3>
+                                <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">Сток B-roll</h3>
                             </div>
                             
                             <div className="grid grid-cols-2 gap-2.5">
@@ -1410,7 +1238,7 @@ export default function ReferencesSidebar({
                         {/* SFX Sounds Library */}
                         <div className="space-y-3">
                             <div className="flex items-center justify-between">
-                                <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">sfx click & sweeps</h3>
+                                <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">Звуки</h3>
                             </div>
                             
                             <div className="flex flex-col gap-2">
@@ -1452,7 +1280,7 @@ export default function ReferencesSidebar({
                                                         }`}
                                                         title="Quick insert at playhead"
                                                     >
-                                                        {isJustAdded ? '✓' : '+ add'}
+                                                        {isJustAdded ? '✓' : '+'}
                                                     </button>
                                                 </div>
                                                 <p className="text-[9.5px] text-zinc-450 mt-0.5 leading-normal truncate font-medium">{item.description}</p>
@@ -1462,94 +1290,11 @@ export default function ReferencesSidebar({
                                 })}
                             </div>
                         </div>
-
-                        {/* Motion Graphics Library */}
-                        <div className="space-y-3">
-                            <div className="flex items-center justify-between">
-                                <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">motion designs & layouts</h3>
-                            </div>
-                            
-                            <div className="flex flex-col gap-2">
-                                {LIBRARY_GRAPHICS.map((item) => {
-                                    const isJustAdded = justAddedIds.includes(item.id);
-                                    return (
-                                        <div 
-                                            key={item.id}
-                                            draggable="true"
-                                            onDragStart={(e) => handleDragStart(e, "graphics", item)}
-                                            onDragEnd={() => onDragStateChange?.(null)}
-                                            className={`relative rounded-2xl border cursor-grab active:cursor-grabbing flex flex-col group overflow-hidden transition-all duration-200 shadow-sm ${
-                                                isJustAdded 
-                                                    ? 'border-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.2)] scale-[0.98]' 
-                                                    : 'border-white/5 bg-white/[0.02] hover:border-white/10'
-                                            }`}
-                                        >
-                                            <div className="w-full h-14 bg-black pointer-events-none overflow-hidden opacity-60 group-hover:opacity-90 transition-opacity">
-                                                <iframe
-                                                    srcDoc={`<!doctype html><html><head><meta charset="UTF-8"/><script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script><script src="https://cdn.tailwindcss.com"></script><style>*{margin:0;padding:0;box-sizing:border-box;}html,body{width:100%;height:100%;overflow:hidden;background:#050507;display:flex;align-items:center;justify-content:center;}.clip{position:absolute;}#root{width:1080px;height:1920px;position:relative;transform-origin:top left;transform:scale(0.074);}</style></head><body><div id="root">${item.html}</div></body></html>`}
-                                                    className="w-full h-full border-none rounded-t-2xl"
-                                                    style={{ background: 'transparent' }}
-                                                    title={`lib-graphic-${item.id}`}
-                                                />
-                                            </div>
-                                            
-                                            <div className="flex items-center justify-between px-3 py-2 border-t border-white/5 bg-black/40 font-sans">
-                                                <div className="flex flex-col min-w-0">
-                                                    <span className="text-[11.5px] font-bold text-zinc-200 truncate">{item.name}</span>
-                                                    <span className="text-[9.5px] text-zinc-450 truncate font-medium mt-0.5">{item.description}</span>
-                                                </div>
-                                                
-                                                <button 
-                                                    onClick={() => insertLibraryGraphic(item)}
-                                                    className={`w-5.5 h-5.5 rounded-full bg-black border flex items-center justify-center text-[12px] font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 shrink-0 ml-1.5 ${
-                                                        isJustAdded 
-                                                            ? 'border-emerald-500 text-emerald-400 bg-emerald-950/80' 
-                                                            : 'border-white/10 hover:border-amber-500 hover:text-amber-500 text-zinc-200'
-                                                    }`}
-                                                    title="Quick insert at playhead"
-                                                >
-                                                    {isJustAdded ? '✓' : '+'}
-                                                </button>
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-
-                        {/* Applied Edits Tracker */}
-                        {activeEdits.length > 0 && (
-                            <div className="pt-5 border-t border-white/5 space-y-3">
-                                <h3 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">currently active edits ({activeEdits.length})</h3>
-                                <div className="space-y-2 max-h-[180px] overflow-y-auto pr-1 scrollbar-thin">
-                                    {activeEdits.map((e, i) => {
-                                        let label = e.action.replace("add_", "").replace("_overlay", "");
-                                        if (e.action === 'add_broll') label = `broll: ${e.query}`;
-                                        else if (e.action === 'add_asset') label = `${e.asset_query?.toLowerCase().includes('sfx') ? 'sfx' : 'music'}: ${e.asset_query}`;
-                                        return (
-                                            <div key={i} className="flex items-center justify-between p-3 bg-white/[0.02] border border-white/5 rounded-2xl text-[12px] text-zinc-250 font-sans shadow-sm">
-                                                <span className="truncate max-w-[180px] font-medium">{label}</span>
-                                                <span className="text-zinc-500 shrink-0 font-semibold">{e.start != null ? `${e.start.toFixed(1)}s` : '0s'}</span>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                        )}
                     </div>
                 )}
 
                 {sidebarTab === 'color' && (
                     <div className="space-y-6">
-                        <div className="bg-white/[0.02] rounded-2xl p-3 border border-white/5 text-zinc-355 flex flex-col gap-1.5 font-sans shadow-md">
-                            <span className="text-[10px] font-bold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
-                                💡 Цветокоррекция и LUTs
-                            </span>
-                            <span className="text-[11px] leading-relaxed text-zinc-300 font-medium">
-                                Перетащите пресет на дорожку «Цветокор» (C1) или нажмите кнопку «+» на карточке пресета для добавления на позицию плейхеда.
-                            </span>
-                        </div>
-
                         <div className="grid grid-cols-2 gap-2.5">
                             {LUT_PRESETS.map((item) => {
                                 const isJustAdded = justAddedIds.includes(item.id);
@@ -1809,6 +1554,76 @@ export default function ReferencesSidebar({
                         return subEdit[field] !== undefined ? subEdit[field] : defaultValue;
                     };
 
+                    const applySubtitlePreset = (presetId: string) => {
+                        const fields = resolvePresetToEditFields(
+                            RESOLVE_SUBTITLE_PACK.find((p) => p.id === presetId) || RESOLVE_SUBTITLE_PACK[0]
+                        );
+                        if (!onActiveEditsChange) return;
+                        if (selectedSubMode === 'single' && focusedItem.subIdx !== undefined) {
+                            const indices = (selectedSubIndices && selectedSubIndices.length > 0)
+                                ? selectedSubIndices
+                                : [focusedItem.subIdx];
+                            let updatedEdits = [...activeEdits];
+                            indices.forEach((idx: number) => {
+                                const chunk = subtitleChunks ? subtitleChunks[idx] : null;
+                                if (!chunk) return;
+                                const overrideIndex = updatedEdits.findIndex(e => e.action === 'subtitle_override' && e.chunk_index === idx);
+                                if (overrideIndex === -1) {
+                                    updatedEdits.push({
+                                        action: 'subtitle_override',
+                                        chunk_index: idx,
+                                        deleted: true,
+                                        text: chunk.words.map((w: any) => w.word).join(' '),
+                                        start: chunk.start,
+                                        end: chunk.end
+                                    });
+                                } else {
+                                    updatedEdits[overrideIndex] = { ...updatedEdits[overrideIndex], deleted: true };
+                                }
+                                const overlayId = `G1-Graphic-Sub-${idx}`;
+                                const overlayIndex = updatedEdits.findIndex(e => e.action === 'add_text_overlay' && e.is_subtitle && e.id === overlayId);
+                                const merged = {
+                                    ...fields,
+                                    font_size: fields.font_size,
+                                    fontsize: fields.font_size,
+                                    font_color: fields.font_color,
+                                    color: fields.font_color,
+                                };
+                                if (overlayIndex === -1) {
+                                    updatedEdits.push({
+                                        action: 'add_text_overlay',
+                                        is_subtitle: true,
+                                        id: overlayId,
+                                        chunk_index: idx,
+                                        text: chunk.words.map((w: any) => w.word).join(' '),
+                                        start: chunk.start,
+                                        end: chunk.end,
+                                        position: subEdit.position || 'bottom',
+                                        x: subEdit.x !== undefined ? subEdit.x : 50,
+                                        y: subEdit.y !== undefined ? subEdit.y : 78,
+                                        ...merged,
+                                    });
+                                } else {
+                                    updatedEdits[overlayIndex] = { ...updatedEdits[overlayIndex], ...merged };
+                                }
+                            });
+                            onActiveEditsChange(updatedEdits);
+                            return;
+                        }
+                        const exists = activeEdits.some(e => e.action === 'add_subtitles');
+                        if (exists) {
+                            onActiveEditsChange(activeEdits.map(e => (
+                                e.action === 'add_subtitles' ? { ...e, ...fields } : e
+                            )));
+                        } else {
+                            onActiveEditsChange([...activeEdits, {
+                                action: 'add_subtitles',
+                                position: 'bottom',
+                                ...fields
+                            }]);
+                        }
+                    };
+
                     const updateSubtitleText = (newText: string) => {
                         if (!onActiveEditsChange || focusedItem.subIdx === undefined) return;
                         const idx = focusedItem.subIdx;
@@ -1949,6 +1764,36 @@ export default function ReferencesSidebar({
                                         <h4 className="text-[15px] font-bold text-zinc-300 uppercase tracking-wider font-mono">
                                             {selectedSubMode === 'single' ? 'Оформление фрагмента' : 'Оформление дорожки (Глобально)'}
                                         </h4>
+
+                                        <div className="space-y-2">
+                                            <div className="flex items-baseline justify-between gap-3">
+                                                <span className="text-[16px] font-medium text-zinc-400">Пак Resolve</span>
+                                                <span className="text-[11px] text-zinc-500 font-mono">Text+ looks</span>
+                                            </div>
+                                            <div className="grid grid-cols-1 gap-2">
+                                                {RESOLVE_SUBTITLE_PACK.map((preset) => {
+                                                    const isAct = getActiveSubValue('subtitle_preset', '') === preset.id;
+                                                    return (
+                                                        <button
+                                                            key={preset.id}
+                                                            type="button"
+                                                            onClick={() => applySubtitlePreset(preset.id)}
+                                                            className={`group w-full text-left rounded-2xl overflow-hidden border transition-all cursor-pointer ${
+                                                                isAct
+                                                                    ? 'border-blue-400/50 ring-1 ring-blue-400/20'
+                                                                    : 'border-white/10 hover:border-white/25'
+                                                            }`}
+                                                        >
+                                                            <SubtitleStylePreview look={preset.look} active={isAct} />
+                                                            <div className="px-3 py-1.5 bg-zinc-950/80 flex items-center justify-between">
+                                                                <span className="text-[11px] font-bold text-white">{preset.label}</span>
+                                                                {isAct && <span className="text-[9px] uppercase font-bold text-blue-400">выбран</span>}
+                                                            </div>
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
                                         
                                         {/* Font Family */}
                                         <div className="flex items-center justify-between gap-6">
@@ -1958,7 +1803,7 @@ export default function ReferencesSidebar({
                                                 onChange={(e) => selectedSubMode === 'single' ? updateSingleChunkProperty('font', e.target.value) : updateSubtitleGlobalStyle('font', e.target.value)}
                                                 className="bg-zinc-950 border border-white/10 rounded-xl px-4 py-1.5 text-[16px] text-white focus:outline-none focus:border-blue-500/40 shadow-sm font-sans"
                                             >
-                                                {['Inter', 'Manrope', 'Rubik', 'Oswald', 'Montserrat', 'Comfortaa', 'Lobster', 'JetBrainsMono', 'IBMPlexSans', 'BebasNeue', 'Arial', 'Impact', 'Courier New'].map(f => (
+                                                {['Inter', 'Manrope', 'Rubik', 'Oswald', 'Montserrat', 'Montserrat-ExtraBold', 'Comfortaa', 'Lobster', 'JetBrainsMono', 'IBMPlexSans', 'BebasNeue', 'Arial', 'Impact', 'Courier New'].map(f => (
                                                     <option key={f} value={f}>{f}</option>
                                                 ))}
                                             </select>

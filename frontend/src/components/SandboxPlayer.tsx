@@ -5,6 +5,8 @@ import { useVibe } from "@/context/VibeContext";
 import { SemanticSceneOverlay } from "@/components/SemanticSceneOverlay";
 import { RemotionGraphicPlayer } from "@/components/RemotionGraphicPlayer";
 import { ReactBitsPlayer } from "@/components/ReactBitsPlayer";
+import { GRAPHIC_ANTI_CLIP_CSS, GRAPHIC_FIT_ROOT_SCRIPT } from "@/utils/graphicCanvasFit";
+import { getResolveSubtitlePreset, type CaptionLook } from "@/utils/resolveSubtitlePack";
 
 
 // ──────────────────────────────────────────────────────────────────
@@ -30,6 +32,9 @@ interface Edit {
     query?: string;
     broll_url?: string;
     resolved_path?: string;
+    media_type?: string;
+    asset_id?: string;
+    source?: string;
     asset_type?: string;
     asset_query?: string;
     transition_asset_query?: string;
@@ -76,6 +81,10 @@ interface Edit {
     height?: number;
     letter_spacing?: number;
     line_spacing?: number;
+    subtitle_preset?: string;
+    caption_look?: CaptionLook | string;
+    box_color?: string;
+    outline_width?: number;
     scene_data?: any;
     lut?: string;
 
@@ -125,6 +134,10 @@ interface SubtitleConfig {
     active_scale?: number | null;
     letter_spacing?: number;
     line_spacing?: number;
+    subtitle_preset?: string;
+    caption_look?: CaptionLook | string;
+    box_color?: string;
+    outline_width?: number;
 }
 
 interface DrawnTextBox {
@@ -162,6 +175,9 @@ interface Props {
     transcript?: { words: TranscriptWord[] } | null;
     subtitleConfig?: SubtitleConfig | null;
     focusedClipId?: string | null;
+    onFocusedClipChange?: (id: string | null) => void;
+    /** Canonical project edits (timeline indices). `edits` may include injected subtitle overlays. */
+    sourceEdits?: Edit[];
     onUpdateEdit?: (index: number, updates: Record<string, any>) => void;
     onUpdateSubtitleGlobal?: (field: string, value: any) => void;
     onUpdateSubtitleGlobalMultiple?: (fields: Record<string, any>) => void;
@@ -191,7 +207,7 @@ function zoomPunchEnvelope(p: number): number {
 
 // Google Fonts (Cyrillic-capable). Prefer CSS load over latin-only fontsource files.
 const CYRILLIC_FONT_CSS =
-    'https://fonts.googleapis.com/css2?family=Comfortaa:wght@700&family=Inter:wght@700;900&family=JetBrains+Mono:wght@700&family=Manrope:wght@700;800&family=Montserrat:wght@700;800;900&family=Oswald:wght@700&family=Playfair+Display:wght@700&family=Rubik:wght@700;800&family=Unbounded:wght@700;900&family=Bebas+Neue&family=IBM+Plex+Sans:wght@700&display=swap';
+    'https://fonts.googleapis.com/css2?family=Comfortaa:wght@700&family=Inter:wght@700;900&family=JetBrains+Mono:wght@700&family=Lobster&family=Marck+Script&family=Manrope:wght@700;800&family=Montserrat:wght@700;800;900&family=Oswald:wght@700&family=Playfair+Display:wght@700&family=Rubik:wght@700;800&family=Unbounded:wght@700;900&family=Bebas+Neue&family=IBM+Plex+Sans:wght@700&display=swap';
 
 const FONT_URLS: Record<string, string> = {
     // Fallback files — prefer Cyrillic subsets from fontsource when CSS load fails
@@ -202,6 +218,8 @@ const FONT_URLS: Record<string, string> = {
     'Montserrat': 'https://cdn.jsdelivr.net/npm/@fontsource/montserrat@5.0.8/files/montserrat-cyrillic-800-normal.woff2',
     'Comfortaa': 'https://cdn.jsdelivr.net/npm/@fontsource/comfortaa@5.0.8/files/comfortaa-cyrillic-700-normal.woff2',
     'Lobster': 'https://cdn.jsdelivr.net/npm/@fontsource/lobster@5.0.8/files/lobster-cyrillic-400-normal.woff2',
+    'Marck Script': 'https://cdn.jsdelivr.net/npm/@fontsource/marck-script@5.0.8/files/marck-script-cyrillic-400-normal.woff2',
+    'MarckScript': 'https://cdn.jsdelivr.net/npm/@fontsource/marck-script@5.0.8/files/marck-script-cyrillic-400-normal.woff2',
     'JetBrainsMono': 'https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.8/files/jetbrains-mono-cyrillic-700-normal.woff2',
     'IBMPlexSans': 'https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.8/files/ibm-plex-sans-cyrillic-700-normal.woff2',
     'Unbounded': 'https://cdn.jsdelivr.net/npm/@fontsource/unbounded@5.0.8/files/unbounded-cyrillic-700-normal.woff2',
@@ -225,6 +243,203 @@ function getNormalizedFontName(fontName: string): string {
         .replace(/[-_](24pt|Bold|Regular|Medium|Italic|ExtraBold|SemiBold|Black|Light|Thin|ExtraLight|Extra-Bold|Semi-Bold).*$/i, '')
         .replace(/\.ttf$/i, '')
         .trim();
+}
+
+type StackLayer = 'front' | 'script' | 'back';
+
+function pickStackedAccentIndex(wordCount: number, wordStyles: any[]): number {
+    const marked = wordStyles.findIndex((s) => s && (s.accent || s.script || s.role === 'script'));
+    if (marked >= 0 && marked < wordCount) return marked;
+    if (wordCount >= 2) return 1;
+    return 0;
+}
+
+function splitDropcapLayout(words: string[]): { drop: string; lines: string[][]; flourish: string } {
+    const cleaned = words.map((w) => w.trim()).filter(Boolean);
+    if (!cleaned.length) return { drop: '', lines: [], flourish: '' };
+    const first = cleaned[0];
+    const drop = first.charAt(0);
+    const body: string[] = [];
+    const restFirst = first.slice(1);
+    if (restFirst) body.push(restFirst.toUpperCase());
+    for (let i = 1; i < cleaned.length; i++) body.push(cleaned[i].toUpperCase());
+    let flourish = '';
+    if (cleaned.length >= 3 && body.length) {
+        flourish = body.pop()!.toLowerCase();
+    }
+    const lines: string[][] = [];
+    if (!body.length) return { drop, lines, flourish };
+    if (body.length <= 2) lines.push(body);
+    else if (body.length <= 4) {
+        lines.push(body.slice(0, 2));
+        lines.push(body.slice(2));
+    } else {
+        lines.push(body.slice(0, 2));
+        lines.push(body.slice(2, 4));
+        lines.push(body.slice(4));
+    }
+    return { drop, lines, flourish };
+}
+
+type CaptionVideoPlate = {
+    video: HTMLVideoElement;
+    sx: number;
+    sy: number;
+    sw: number;
+    sh: number;
+    W: number;
+    H: number;
+    zoom: number;
+};
+
+let _captionVideoPlate: CaptionVideoPlate | null = null;
+let _maskScratch: HTMLCanvasElement | null = null;
+
+function getMaskScratch(w: number, h: number): CanvasRenderingContext2D | null {
+    if (typeof document === 'undefined') return null;
+    if (!_maskScratch) _maskScratch = document.createElement('canvas');
+    const c = _maskScratch;
+    const tw = Math.max(1, Math.ceil(w));
+    const th = Math.max(1, Math.ceil(h));
+    if (c.width !== tw) c.width = tw;
+    if (c.height !== th) c.height = th;
+    const o = c.getContext('2d', { willReadFrequently: false });
+    if (!o) return null;
+    o.setTransform(1, 0, 0, 1, 0, 0);
+    o.globalCompositeOperation = 'source-over';
+    o.globalAlpha = 1;
+    o.filter = 'none';
+    o.clearRect(0, 0, tw, th);
+    return o;
+}
+
+/** Sample the live video into the glyphs, then invert — true text-mask / video-inside-text. */
+function drawTextMaskInvert(
+    ctx: CanvasRenderingContext2D,
+    text: string,
+    x: number,
+    y: number,
+    fontSpec: string,
+    fontSize: number
+) {
+    ctx.save();
+    ctx.font = fontSpec;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    const metrics = ctx.measureText(text);
+    const pad = Math.max(8, fontSize * 0.1);
+    const boxW = Math.ceil(metrics.width) + pad * 2;
+    const boxH = Math.ceil(fontSize * 1.36);
+    const left = x - pad;
+    const top = y - fontSize * 1.08;
+    const plate = _captionVideoPlate;
+    const o = getMaskScratch(boxW, boxH);
+
+    const fillSolid = () => {
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = '#F4FFFF';
+        ctx.fillText(text, x, y);
+    };
+
+    if (!o || !plate || plate.video.readyState < 2) {
+        fillSolid();
+        ctx.restore();
+        return;
+    }
+
+    try {
+        const z = plate.zoom || 1;
+        const cx = plate.W / 2;
+        const cy = plate.H / 2;
+        const unzoom = (px: number, py: number) => ({
+            x: (px - cx) / z + cx,
+            y: (py - cy) / z + cy,
+        });
+        const a = unzoom(left, top);
+        const b = unzoom(left + boxW, top + boxH);
+        const vx = plate.sx + (a.x / plate.W) * plate.sw;
+        const vy = plate.sy + (a.y / plate.H) * plate.sh;
+        const vw = ((b.x - a.x) / plate.W) * plate.sw;
+        const vh = ((b.y - a.y) / plate.H) * plate.sh;
+
+        o.drawImage(plate.video, vx, vy, vw, vh, 0, 0, boxW, boxH);
+        o.globalCompositeOperation = 'difference';
+        o.fillStyle = '#ffffff';
+        o.fillRect(0, 0, boxW, boxH);
+        o.globalCompositeOperation = 'overlay';
+        o.fillStyle = 'rgba(255,255,255,0.18)';
+        o.fillRect(0, 0, boxW, boxH);
+        o.globalCompositeOperation = 'destination-in';
+        o.font = fontSpec;
+        o.textAlign = 'left';
+        o.textBaseline = 'alphabetic';
+        o.fillStyle = '#ffffff';
+        o.fillText(text, pad, fontSize * 1.08);
+
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.drawImage(o.canvas, left, top);
+    } catch {
+        fillSolid();
+    }
+    ctx.restore();
+}
+
+function drawNeonScript(
+    ctx: CanvasRenderingContext2D,
+    text: string,
+    x: number,
+    y: number,
+    fontSpec: string,
+    color: string,
+    fontSize: number,
+    rotation = 0
+) {
+    ctx.save();
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.font = fontSpec;
+    ctx.translate(x, y);
+    if (rotation) ctx.rotate(rotation);
+    ctx.fillStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = fontSize * 0.55;
+    ctx.fillText(text, 0, 0);
+    ctx.globalAlpha = 0.55;
+    ctx.shadowBlur = fontSize * 0.95;
+    ctx.fillText(text, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
+    ctx.fillText(text, 0, 0);
+    ctx.restore();
+}
+
+function easeOutBack(p: number): number {
+    const c1 = 1.70158;
+    const c3 = c1 + 1;
+    return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2);
+}
+
+function fillRoundRect(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    r: number
+) {
+    const rad = Math.max(0, Math.min(r, w / 2, h / 2));
+    ctx.beginPath();
+    if (typeof (ctx as any).roundRect === 'function') {
+        (ctx as any).roundRect(x, y, w, h, rad);
+    } else {
+        ctx.moveTo(x + rad, y);
+        ctx.arcTo(x + w, y, x + w, y + h, rad);
+        ctx.arcTo(x + w, y + h, x, y + h, rad);
+        ctx.arcTo(x, y + h, x, y, rad);
+        ctx.arcTo(x, y, x + w, y, rad);
+        ctx.closePath();
+    }
+    ctx.fill();
 }
 
 
@@ -333,6 +548,8 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
     transcript,
     subtitleConfig,
     focusedClipId,
+    onFocusedClipChange,
+    sourceEdits,
     onUpdateEdit,
     onUpdateSubtitleGlobal,
     onUpdateSubtitleGlobalMultiple,
@@ -371,6 +588,96 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
     const drawnTextBoxesRef = useRef<DrawnTextBox[]>([]);
     const [selectedEntity, setSelectedEntity] = useState<{ sceneEditIndex: number; entityId: string } | null>(null);
     const [selectedGraphicEditIndex, setSelectedGraphicEditIndex] = useState<number | null>(null);
+    // selectedGraphicEditIndex = index into `edits` (player render list)
+    // Timeline G1-Graphic-N uses index into sourceEdits/activeEdits
+
+    const isGraphicEdit = useCallback((e: Edit | null | undefined) => {
+        if (!e) return false;
+        return e.action === 'canvas_overlay' ||
+            e.action === 'hyperframes_html' ||
+            e.action === 'add_hyperframes_graphics' ||
+            e.action === 'add_motion_graphic' ||
+            e.action === 'add_dynamic_graphic' ||
+            (e.action === 'add_text_overlay' && !e.is_subtitle && !!(e.html_content || e.html || e.text));
+    }, []);
+
+    const resolveGraphicPlayerIndex = useCallback((timelineRawIdx: number): number | null => {
+        const baseList = sourceEdits && sourceEdits.length > 0 ? sourceEdits : edits;
+        if (!Number.isFinite(timelineRawIdx) || timelineRawIdx < 0 || timelineRawIdx >= baseList.length) return null;
+        const base = baseList[timelineRawIdx];
+        if (!isGraphicEdit(base)) return null;
+        // Same object reference when edits is derived from sourceEdits
+        let idx = edits.indexOf(base);
+        if (idx >= 0) return idx;
+        idx = edits.findIndex(e =>
+            e.action === base.action &&
+            (e.start ?? 0) === (base.start ?? 0) &&
+            (e.end ?? null) === (base.end ?? null) &&
+            (e.html_content || e.html || '') === (base.html_content || base.html || '')
+        );
+        return idx >= 0 ? idx : null;
+    }, [sourceEdits, edits, isGraphicEdit]);
+
+    const timelineRawIndexForEdit = useCallback((edit: Edit, playerIndex: number): number => {
+        if (sourceEdits && sourceEdits.length > 0) {
+            const byRef = sourceEdits.indexOf(edit);
+            if (byRef >= 0) return byRef;
+            const byMatch = sourceEdits.findIndex(e =>
+                e.action === edit.action &&
+                (e.start ?? 0) === (edit.start ?? 0) &&
+                (e.end ?? null) === (edit.end ?? null) &&
+                (e.html_content || e.html || '') === (edit.html_content || edit.html || '')
+            );
+            if (byMatch >= 0) return byMatch;
+        }
+        return playerIndex;
+    }, [sourceEdits]);
+
+    // Timeline → player: selecting G1-Graphic-${rawIndex} highlights & enables drag in RemotionGraphicPlayer
+    useEffect(() => {
+        if (!focusedClipId) return;
+        if (!focusedClipId.startsWith("G1-Graphic-")) {
+            if (focusedClipId.startsWith("T1-") || focusedClipId.startsWith("S1-") || focusedClipId.startsWith("V2-") || focusedClipId.startsWith("C1-")) {
+                setSelectedGraphicEditIndex(null);
+            }
+            return;
+        }
+        const rawIdx = parseInt(focusedClipId.replace("G1-Graphic-", ""), 10);
+        const playerIdx = resolveGraphicPlayerIndex(rawIdx);
+        if (playerIdx == null) return;
+        setSelectedGraphicEditIndex(playerIdx);
+        const edit = edits[playerIdx];
+        const v = (videoRef as React.RefObject<HTMLVideoElement | null>)?.current;
+        if (edit && v) {
+            const s = edit.start ?? 0;
+            const e = edit.end ?? s + 3;
+            if (v.currentTime < s || v.currentTime >= e) {
+                const seekTo = Math.min(s + 0.08, Math.max(s, e - 0.05));
+                v.currentTime = seekTo;
+                setCurrentTime(seekTo);
+                onTimeUpdate?.(seekTo);
+            }
+            // Pause so the graphic can be dragged immediately
+            if (!v.paused) {
+                try { v.pause(); } catch { /* ignore */ }
+                if (isPlaying && onTogglePlay) onTogglePlay();
+            }
+        }
+    }, [focusedClipId, edits, resolveGraphicPlayerIndex, isPlaying, onTogglePlay, onTimeUpdate]);
+
+    // Clear drag chrome while playing; restore from timeline focus when paused again
+    useEffect(() => {
+        if (isPlaying) {
+            setSelectedGraphicEditIndex(null);
+            return;
+        }
+        if (focusedClipId?.startsWith("G1-Graphic-")) {
+            const rawIdx = parseInt(focusedClipId.replace("G1-Graphic-", ""), 10);
+            const playerIdx = resolveGraphicPlayerIndex(rawIdx);
+            if (playerIdx != null) setSelectedGraphicEditIndex(playerIdx);
+        }
+    }, [isPlaying, focusedClipId, resolveGraphicPlayerIndex]);
+
     const [editingEntity, setEditingEntity] = useState<{
         sceneEditIndex: number;
         entityId: string;
@@ -457,8 +764,6 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
                 let style = 'cinematic';
                 if (/tech|data|code|blueprint|logic|graph/i.test(query)) {
                     style = 'blueprint';
-                } else if (/fluid|flow|energy|liquid|particles/i.test(query)) {
-                    style = 'liquid';
                 }
                 return {
                     ...raw,
@@ -487,8 +792,11 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
     const resolveMediaUrl = useCallback((path: string | undefined) => {
         if (!path) return "";
         if (path.startsWith("http://") || path.startsWith("https://")) return path;
-        if (path.startsWith("uploads/")) return `${API_URL}/${path}`;
-        return `${API_URL}/assets/${path}`;
+        const norm = path.replace(/\\/g, "/");
+        const uploadsIdx = norm.toLowerCase().lastIndexOf("/uploads/");
+        if (uploadsIdx >= 0) return `${API_URL}${norm.slice(uploadsIdx)}`;
+        if (norm.startsWith("uploads/")) return `${API_URL}/${norm}`;
+        return `${API_URL}/assets/${norm}`;
     }, [API_URL]);
 
     useEffect(() => {
@@ -579,16 +887,19 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
                 : normFont === 'IBMPlexSans' ? 'IBM Plex Sans'
                 : normFont === 'PlayfairDisplay' ? 'Playfair Display'
                 : normFont === 'BebasNeue' ? 'Bebas Neue'
+                : (normFont === 'MarckScript' || normFont === 'Marck Script') ? 'Marck Script'
                 : normFont;
+
+            const loadWeight = (normFont === 'Lobster' || normFont === 'BebasNeue' || cssFamily === 'Marck Script') ? '400' : '700';
 
             // Google Fonts CSS (with Cyrillic) → document.fonts, then optional woff2 fallback
             if (typeof document !== 'undefined' && document.fonts?.load) {
-                document.fonts.load(`700 64px "${cssFamily}"`).then((faces) => {
+                document.fonts.load(`${loadWeight} 64px "${cssFamily}"`).then((faces) => {
                     if (faces.length > 0) markLoaded();
                 }).catch(() => { /* fallback below */ });
             }
 
-            let url = FONT_URLS[normFont];
+            let url = FONT_URLS[normFont] || FONT_URLS[cssFamily];
             if (!url && brandAssets?.fonts) {
                 const bFont = brandAssets.fonts.find(f => f.name.toLowerCase() === normFont.toLowerCase() || f.filename.toLowerCase() === normFont.toLowerCase());
                 if (bFont) {
@@ -604,8 +915,8 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
             }
 
             console.log(`[SandboxPlayer] Dynamic Font Loading: ${normFont} from ${url}`);
-            const font = new FontFace(normFont, `url(${url})`, {
-                weight: normFont === 'Lobster' || normFont === 'BebasNeue' ? '400' : '700',
+            const font = new FontFace(cssFamily, `url(${url})`, {
+                weight: loadWeight,
             });
 
             font.load().then((loadedFont) => {
@@ -621,7 +932,7 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
     const assetEdits = edits.filter(e => e.action === 'add_asset' && e.resolved_path);
     const assetRefs = useRef<(HTMLMediaElement | null)[]>([]);
     const brollEdits = edits.filter(e => e.action === 'add_broll' && (e.resolved_path || e.broll_url));
-    const brollRefs = useRef<(HTMLVideoElement | null)[]>([]);
+    const brollRefs = useRef<(HTMLVideoElement | HTMLImageElement | null)[]>([]);
     const sceneIframeRef = useRef<HTMLIFrameElement>(null);
     const sceneTransitionRefs = useRef<(HTMLMediaElement | null)[]>([]);
     const [isSceneActive, setIsSceneActive] = useState(false);
@@ -670,18 +981,16 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
     }, [edits, currentTime]);
     useEffect(() => { if (duration > 0) setDur(duration); }, [duration]);
     useEffect(() => { sceneEditsRef.current = sceneEdits; }, [sceneEdits]);
-    useEffect(() => {
-        if (isPlaying) setSelectedGraphicEditIndex(null);
-    }, [isPlaying]);
 
     // ── Graphics HTML ──────────────────────────────────────────────
-    const graphicsEdits = edits.filter(e => 
-        (e.action === 'canvas_overlay' || 
-         e.action === 'hyperframes_html' || 
-         e.action === 'add_hyperframes_graphics' || 
-         e.action === 'add_motion_graphic' || 
-         e.action === 'add_dynamic_graphic') && 
-        (e.html_content || e.html)
+    const graphicsEdits = edits.filter(e =>
+        (e.action === 'canvas_overlay' ||
+         e.action === 'hyperframes_html' ||
+         e.action === 'add_hyperframes_graphics' ||
+         e.action === 'add_motion_graphic' ||
+         e.action === 'add_dynamic_graphic' ||
+         (e.action === 'add_text_overlay' && !e.is_subtitle)) &&
+        (e.html_content || e.html || (e.action === 'add_text_overlay' && e.text) || e.action === 'add_motion_graphic')
     );
     const buildSingleGraphicHtml = useCallback((edit: Edit) => {
         const extractBody = (raw: string): string => {
@@ -778,14 +1087,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Graphics]', e); }
   <link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@700&family=Inter:wght@400;700;900&family=JetBrains+Mono:wght@700&family=Manrope:wght@400;700;800&family=Montserrat:wght@400;700;800;900&family=Oswald:wght@700&family=Playfair+Display:ital,wght@0,700;1,700&family=Rubik:wght@400;700;800&family=Unbounded:wght@700;900&display=swap" rel="stylesheet"/>
   <style>
     *{margin:0;padding:0;box-sizing:border-box;}
-    html,body{width:100% !important;height:100% !important;overflow:hidden !important;background:transparent !important;background-color:transparent !important;color-scheme:dark !important;}
-    .clip{position:absolute;}
-    #root{
-      width:${targetRatio >= 1 ? 1920 : 1080}px;height:${targetRatio >= 1 ? 1080 : 1920}px;
-      position:absolute;top:0;left:0;
-      transform-origin:top left;
-      background:transparent !important;background-color:transparent !important;overflow:hidden;
-    }
+    html{--design-w:${targetRatio >= 1 ? 1920 : 1080}px;--design-h:${targetRatio >= 1 ? 1080 : 1920}px;}
     html, body, #root, .clip,
     body > *, #root > *, #preview-container > *,
     .min-h-screen, .h-screen, .w-screen, .inset-0,
@@ -794,6 +1096,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Graphics]', e); }
         background: transparent !important;
         background-color: transparent !important;
     }
+    ${GRAPHIC_ANTI_CLIP_CSS}
   </style>
 </head>
 <body style="background: transparent !important; background-color: transparent !important;">
@@ -801,22 +1104,9 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Graphics]', e); }
     ${fragmentWithoutScripts}
   </div>
   <script>
-    // Scale #root to fit viewport (match video aspect)
-    const DESIGN_W=${targetRatio >= 1 ? 1920 : 1080};
-    const DESIGN_H=${targetRatio >= 1 ? 1080 : 1920};
-    function scaleRoot(){
-      const r=document.getElementById('root');
-      if(!r)return;
-      r.style.width=DESIGN_W+'px';
-      r.style.height=DESIGN_H+'px';
-      const s=Math.min(window.innerWidth/DESIGN_W,window.innerHeight/DESIGN_H);
-      r.style.transform='scale('+s+')';
-      // Center the scaled container
-      const scaledW=DESIGN_W*s, scaledH=DESIGN_H*s;
-      r.style.left=((window.innerWidth-scaledW)/2)+'px';
-      r.style.top=((window.innerHeight-scaledH)/2)+'px';
-    }
-    window.addEventListener('resize',scaleRoot);
+    window.__DESIGN_W=${targetRatio >= 1 ? 1920 : 1080};
+    window.__DESIGN_H=${targetRatio >= 1 ? 1080 : 1920};
+    ${GRAPHIC_FIT_ROOT_SCRIPT}
 
     // Load GSAP then execute agent scripts
     const gsapScript=document.createElement('script');
@@ -971,14 +1261,8 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
   <link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@700&family=Inter:wght@400;700;900&family=JetBrains+Mono:wght@700&family=Manrope:wght@400;700;800&family=Montserrat:wght@400;700;800;900&family=Oswald:wght@700&family=Playfair+Display:ital,wght@0,700;1,700&family=Rubik:wght@400;700;800&family=Unbounded:wght@700;900&display=swap" rel="stylesheet"/>
   <style>
     *{margin:0;padding:0;box-sizing:border-box;}
-    html,body{width:100% !important;height:100% !important;overflow:hidden !important;background:transparent !important;background-color:transparent !important;color-scheme:dark !important;}
-    .clip{position:absolute;}
-    #root{
-      width:${targetRatio >= 1 ? 1920 : 1080}px;height:${targetRatio >= 1 ? 1080 : 1920}px;
-      position:absolute;top:0;left:0;
-      transform-origin:top left;
-      background:transparent !important;background-color:transparent !important;overflow:hidden;
-    }
+    html{--design-w:${targetRatio >= 1 ? 1920 : 1080}px;--design-h:${targetRatio >= 1 ? 1080 : 1920}px;}
+    ${GRAPHIC_ANTI_CLIP_CSS}
     img{max-width:none;}
   </style>
 </head>
@@ -987,20 +1271,9 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
     ${htmlWithoutScripts}
   </div>
   <script>
-    const DESIGN_W=${targetRatio >= 1 ? 1920 : 1080};
-    const DESIGN_H=${targetRatio >= 1 ? 1080 : 1920};
-    function scaleRoot(){
-      const r=document.getElementById('root');
-      if(!r)return;
-      r.style.width=DESIGN_W+'px';
-      r.style.height=DESIGN_H+'px';
-      const s=Math.min(window.innerWidth/DESIGN_W,window.innerHeight/DESIGN_H);
-      r.style.transform='scale('+s+')';
-      const scaledW=DESIGN_W*s, scaledH=DESIGN_H*s;
-      r.style.left=((window.innerWidth-scaledW)/2)+'px';
-      r.style.top=((window.innerHeight-scaledH)/2)+'px';
-    }
-    window.addEventListener('resize',scaleRoot);
+    window.__DESIGN_W=${targetRatio >= 1 ? 1920 : 1080};
+    window.__DESIGN_H=${targetRatio >= 1 ? 1080 : 1920};
+    ${GRAPHIC_FIT_ROOT_SCRIPT}
     const gsapScript=document.createElement('script');
     gsapScript.src='https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js';
     gsapScript.onload=function(){
@@ -1221,6 +1494,12 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
         const customX = ov.x !== undefined ? ov.x : subtitleConfig?.x;
         const customY = ov.y !== undefined ? ov.y : subtitleConfig?.y;
 
+        const presetId = ov.subtitle_preset || subtitleConfig?.subtitle_preset;
+        const pack = presetId ? getResolveSubtitlePreset(presetId) : null;
+        const captionLook = (ov.caption_look || subtitleConfig?.caption_look || pack?.look || 'outline') as CaptionLook;
+        const boxColor = ov.box_color || subtitleConfig?.box_color || pack?.box_color || 'rgba(0,0,0,0.78)';
+        const outlineMul = ov.outline_width ?? subtitleConfig?.outline_width ?? pack?.outline_width ?? 0.06;
+
         // Position Y setup
         let baseY = H * 0.78;
         if (customY !== undefined) {
@@ -1233,6 +1512,306 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
         let alignX = 'center';
         if (positionPreset.includes('right')) alignX = 'right';
         else if (positionPreset.includes('left')) alignX = 'left';
+
+        if (isSub && captionLook === 'stacked') {
+            const scriptFont = getNormalizedFontName(
+                ov.font_pairing || subtitleConfig?.font_pairing || pack?.font_pairing || 'Lobster'
+            );
+            const paleGold = /^(#facc15|#f2e16a|#ffe14a|#f5f5f7|#ffffff)$/i;
+            const juicyYellow = accentColor && !paleGold.test(accentColor) ? accentColor : '#FFD000';
+            const accentIdx = pickStackedAccentIndex(wordsLayout.length, wordStylesParsed);
+            const dtEnter = t - (ov.start || 0);
+            const dtExit = (ov.end || 0) - t;
+            const enterDur = 0.55;
+            const exitDur = 0.22;
+
+            const stackedScale = (word: string, layer: StackLayer, indexInLine: number) => {
+                if (layer === 'script') return 1.32;
+                const short = word.replace(/[^\p{L}\p{N}]/gu, '').length <= 2;
+                if (layer === 'front') {
+                    if (short && indexInLine === 0) return 0.72;
+                    if (indexInLine === 0) return 1.08;
+                    return 0.88;
+                }
+                return indexInLine === 0 ? 0.96 : 0.86;
+            };
+
+            type StackLine = { layer: StackLayer; words: typeof wordsLayout };
+            const stackLines: StackLine[] = [];
+            if (accentIdx > 0) {
+                stackLines.push({ layer: 'front', words: wordsLayout.slice(0, accentIdx) });
+            }
+            stackLines.push({ layer: 'script', words: [wordsLayout[accentIdx]] });
+            const after = wordsLayout.slice(accentIdx + 1);
+            for (let i = 0; i < after.length; i += 2) {
+                stackLines.push({ layer: 'back', words: after.slice(i, i + 2) });
+            }
+
+            let fit = 1;
+            let measured: { line: StackLine; width: number; height: number; space: number }[] = [];
+            let blockW = 0;
+            let blockH = 0;
+
+            for (let attempt = 0; attempt < 5; attempt++) {
+                measured = [];
+                blockW = 0;
+                blockH = 0;
+                stackLines.forEach((line) => {
+                    let width = 0;
+                    let height = 0;
+                    let space = 0;
+                    line.words.forEach((w, wi) => {
+                        const isScript = line.layer === 'script';
+                        const sizeMul = stackedScale(w.word, line.layer, wi);
+                        w.fontFamily = isScript ? scriptFont : getNormalizedFontName(ov.font || subtitleConfig?.font || 'Montserrat');
+                        w.fontSize = Math.round(basePx * sizeMul * scaleMul * fit);
+                        w.color = isScript ? juicyYellow : (w.color || mainColor);
+                        w.bold = !isScript;
+                        w.italic = !isScript && line.layer === 'back' && stackLines[stackLines.length - 1] === line;
+                        if (isScript) w.word = w.word.toLowerCase();
+                        setCtxFontAndSpacing(`${w.italic ? 'italic ' : ''}${w.bold ? 'bold ' : ''}${w.fontSize}px '${w.fontFamily}', Inter, sans-serif`);
+                        w.measuredWidth = ctx.measureText(w.word).width;
+                        space = ctx.measureText(' ').width || w.fontSize * 0.18;
+                        width += w.measuredWidth + (wi > 0 ? space : 0);
+                        height = Math.max(height, w.fontSize);
+                    });
+                    measured.push({ line, width, height, space });
+                    blockW = Math.max(blockW, width);
+                    blockH += height * (line.layer === 'script' ? 0.58 : 0.72);
+                });
+                if (blockW <= W * 0.88 && blockH <= H * 0.42) break;
+                fit *= 0.86;
+            }
+
+            const originX = customX !== undefined
+                ? W * (customX / 100) - blockW / 2
+                : alignX === 'right'
+                    ? W * 0.82 - blockW
+                    : alignX === 'left'
+                        ? W * 0.14
+                        : W / 2 - blockW / 2;
+            const originY = baseY - blockH / 2;
+
+            const layerProgress = (layer: StackLayer) => {
+                const delay = layer === 'back' ? 0 : layer === 'front' ? 0.08 : 0.2;
+                if (dtExit >= 0 && dtExit < exitDur) return Math.max(0, dtExit / exitDur);
+                if (dtEnter < delay) return 0;
+                return Math.min(1, (dtEnter - delay) / (enterDur - delay));
+            };
+
+            const drawStackWord = (
+                w: (typeof wordsLayout)[number],
+                cx: number,
+                cy: number,
+                layer: StackLayer,
+                p: number
+            ) => {
+                const isScript = layer === 'script';
+                let op = 1;
+                let sc = 1;
+                let ty = 0;
+                let rot = 0;
+                if (p < 1) {
+                    const e = isScript ? easeOutBack(p) : p;
+                    op = Math.min(1, p * 1.4);
+                    if (isScript) {
+                        sc = 0.72 + 0.28 * e;
+                        rot = (-6 + 6 * e) * Math.PI / 180;
+                    } else if (layer === 'front') {
+                        sc = 0.86 + 0.14 * e;
+                    } else {
+                        ty = (1 - e) * 10 * scaleMul;
+                    }
+                }
+                ctx.save();
+                ctx.globalAlpha = op;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'alphabetic';
+                ctx.translate(cx, cy - w.fontSize * 0.32);
+                ctx.rotate(rot);
+                ctx.scale(sc, sc);
+                ctx.translate(-cx, -(cy - w.fontSize * 0.32));
+                setCtxFontAndSpacing(`${w.italic ? 'italic ' : ''}${w.bold ? 'bold ' : ''}${w.fontSize}px '${w.fontFamily}', Inter, sans-serif`);
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
+                ctx.shadowOffsetX = 0;
+                ctx.shadowOffsetY = 0;
+                ctx.fillStyle = isScript ? juicyYellow : (w.color || mainColor);
+                ctx.fillText(w.word, cx, cy + ty);
+                ctx.restore();
+            };
+
+            let yCursor = originY;
+            const placed: { line: StackLine; x: number; y: number; width: number; height: number; space: number }[] = [];
+            measured.forEach((m) => {
+                placed.push({ ...m, x: originX, y: yCursor });
+                if (m.line.layer === 'front') {
+                    yCursor += m.height * 0.58;
+                } else if (m.line.layer === 'script') {
+                    yCursor += m.height * 0.52;
+                } else {
+                    yCursor += m.height * 0.78;
+                }
+            });
+
+            const leadRow = placed.find((row) => row.line.layer === 'front');
+            const order: StackLayer[] = ['back', 'front', 'script'];
+            order.forEach((layer) => {
+                placed.forEach((row) => {
+                    if (row.line.layer !== layer) return;
+                    const p = layerProgress(layer);
+                    let x = row.x;
+                    if (layer === 'script') {
+                        const shift = leadRow ? leadRow.width * 0.22 : row.height * 0.4;
+                        x += Math.max(8 * scaleMul, shift);
+                    }
+                    row.line.words.forEach((w) => {
+                        const cx = x + w.measuredWidth / 2;
+                        const cy = row.y + row.height * 0.88;
+                        drawStackWord(w, cx, cy, layer, p);
+                        x += w.measuredWidth + row.space;
+                    });
+                });
+            });
+
+            const editIndex = editsRef.current.indexOf(ov);
+            drawnTextBoxesRef.current.push({
+                id: "subtitles",
+                isSub: true,
+                editIndex: editIndex !== -1 ? editIndex : undefined,
+                chunkIndex: ov.chunk_index,
+                left: originX,
+                top: originY,
+                width: blockW,
+                height: blockH,
+                x: customX !== undefined ? customX : 50,
+                y: customY !== undefined ? customY : (positionPreset.includes('top') ? 18 : positionPreset.includes('center') ? 50 : 78)
+            });
+            return;
+        }
+
+        if (isSub && captionLook === 'dropcap') {
+            try {
+            const scriptFont = getNormalizedFontName(
+                ov.font_pairing || subtitleConfig?.font_pairing || pack?.font_pairing || 'Marck Script'
+            );
+            const bodyFont = getNormalizedFontName(ov.font || subtitleConfig?.font || pack?.font || 'Montserrat');
+            const palePink = /^(#facc15|#f2e16a|#ffe14a|#f5f5f7|#ffffff|#00e5ff)$/i;
+            const neonPink = accentColor && !palePink.test(accentColor) ? accentColor : '#FF2D95';
+            const layout = splitDropcapLayout(wordsLayout.map((w) => w.word));
+            const dtEnter = t - (ov.start || 0);
+            const enterP = easeOutBack(Math.max(0, Math.min(1, dtEnter / 0.48)));
+
+            let fit = 1;
+            let bodyPx = Math.round(basePx * 0.92 * scaleMul);
+            let dropPx = Math.round(bodyPx * 3.05);
+            let flourishPx = Math.round(bodyPx * 1.35);
+            let lineGap = bodyPx * 0.92;
+            let dropW = dropPx * 0.62;
+            let bodyBlockW = 0;
+            let bodyBlockH = 0;
+
+            for (let attempt = 0; attempt < 5; attempt++) {
+                bodyPx = Math.round(basePx * 0.92 * scaleMul * fit);
+                dropPx = Math.round(bodyPx * 3.05);
+                flourishPx = Math.round(bodyPx * 1.35);
+                lineGap = bodyPx * 0.92;
+                setCtxFontAndSpacing(`400 ${dropPx}px '${scriptFont}', cursive`);
+                dropW = ctx.measureText(layout.drop || 'A').width;
+                bodyBlockW = 0;
+                layout.lines.forEach((line) => {
+                    setCtxFontAndSpacing(`900 ${bodyPx}px '${bodyFont}', Inter, sans-serif`);
+                    const lineW = ctx.measureText(line.join(' ')).width;
+                    bodyBlockW = Math.max(bodyBlockW, lineW);
+                });
+                if (layout.flourish) {
+                    setCtxFontAndSpacing(`400 ${flourishPx}px '${scriptFont}', cursive`);
+                    bodyBlockW = Math.max(bodyBlockW, ctx.measureText(layout.flourish).width * 0.7);
+                }
+                bodyBlockH = Math.max(dropPx * 0.88, layout.lines.length * lineGap + (layout.flourish ? flourishPx * 0.35 : 0));
+                if (dropW + bodyBlockW * 0.72 <= W * 0.88 && bodyBlockH <= H * 0.42) break;
+                fit *= 0.86;
+            }
+
+            const blockW = dropW * 0.55 + Math.max(bodyBlockW, dropW);
+            const blockH = bodyBlockH;
+            const originX = customX !== undefined
+                ? W * (customX / 100) - blockW / 2
+                : alignX === 'right'
+                    ? W * 0.82 - blockW
+                    : alignX === 'left'
+                        ? W * 0.12
+                        : W / 2 - blockW / 2;
+            const originY = baseY - blockH / 2;
+            const bodyX = originX + dropW * 0.52;
+            const dropBaseline = originY + dropPx * 0.82;
+
+            ctx.save();
+            ctx.globalAlpha = 1;
+
+            layout.lines.forEach((line, li) => {
+                const isUnder = li >= 2;
+                const lx = isUnder ? originX : bodyX;
+                const ly = isUnder
+                    ? originY + dropPx * 0.92
+                    : originY + dropPx * 0.28 + li * lineGap;
+                const fontSpec = `900 ${bodyPx}px '${bodyFont}', Inter, sans-serif`;
+                ctx.save();
+                ctx.translate(0, (1 - enterP) * 8 * scaleMul);
+                drawTextMaskInvert(ctx, line.join(' '), lx, ly, fontSpec, bodyPx);
+                ctx.restore();
+            });
+
+            if (layout.flourish) {
+                const fx = originX + dropW * 0.58;
+                const fy = originY + Math.max(dropPx * 0.78, layout.lines.length * lineGap * 0.55 + dropPx * 0.35);
+                drawNeonScript(
+                    ctx,
+                    layout.flourish,
+                    fx,
+                    fy,
+                    `400 ${flourishPx}px '${scriptFont}', cursive`,
+                    neonPink,
+                    flourishPx,
+                    -8 * Math.PI / 180
+                );
+            }
+
+            ctx.save();
+            ctx.translate(originX + dropW * 0.5, dropBaseline);
+            ctx.scale(0.72 + 0.28 * enterP, 0.72 + 0.28 * enterP);
+            ctx.translate(-(originX + dropW * 0.5), -dropBaseline);
+            drawNeonScript(
+                ctx,
+                layout.drop,
+                originX,
+                dropBaseline,
+                `400 ${dropPx}px '${scriptFont}', cursive`,
+                neonPink,
+                dropPx,
+                (-10 + 10 * enterP) * Math.PI / 180
+            );
+            ctx.restore();
+            ctx.restore();
+
+            const editIndex = editsRef.current.indexOf(ov);
+            drawnTextBoxesRef.current.push({
+                id: "subtitles",
+                isSub: true,
+                editIndex: editIndex !== -1 ? editIndex : undefined,
+                chunkIndex: ov.chunk_index,
+                left: originX,
+                top: originY,
+                width: blockW,
+                height: blockH,
+                x: customX !== undefined ? customX : 50,
+                y: customY !== undefined ? customY : (positionPreset.includes('top') ? 18 : positionPreset.includes('center') ? 50 : 78)
+            });
+            return;
+            } catch (err) {
+                console.warn('[SandboxPlayer] dropcap caption failed, using default look', err);
+            }
+        }
 
         // Auto-fit loop: if total width > 90% or height > 85%, scale font size down
         let fitScale = 1.0;
@@ -1456,6 +2035,31 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 }
             }
 
+            if (isSub && captionLook === 'boxed') {
+                const padX = Math.round(lineHeights[j] * 0.38);
+                const padY = Math.round(lineHeights[j] * 0.22);
+                ctx.save();
+                ctx.globalAlpha = 1;
+                ctx.shadowColor = 'transparent';
+                ctx.fillStyle = boxColor;
+                fillRoundRect(
+                    ctx,
+                    currentX - padX,
+                    currentY + lineHeights[j] * 0.08,
+                    lineWidths[j] + padX * 2,
+                    lineHeights[j] * 1.12,
+                    Math.round(lineHeights[j] * 0.18)
+                );
+                ctx.restore();
+            } else if (isSub && captionLook === 'bar') {
+                const barH = Math.max(3, lineHeights[j] * 0.07);
+                ctx.save();
+                ctx.shadowColor = 'transparent';
+                ctx.fillStyle = accentColor;
+                ctx.fillRect(currentX, currentY + lineHeights[j] + 6 * scaleMul, lineWidths[j], barH);
+                ctx.restore();
+            }
+
             line.forEach((w) => {
                 // For typewriter animation, only show words that have started!
                 if (ov.animation_style === 'typewriter' && w.start > t) {
@@ -1512,12 +2116,30 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
 
 
                 // Shadows & Glow
-                const useOutline = ov.use_outline !== false;
+                const useOutline = ov.use_outline !== false && captionLook !== 'boxed' && captionLook !== 'pill';
                 const useShadow = ov.use_shadow !== false;
+                const neonLook = captionLook === 'neon' || ov.animation_style === 'glow';
 
-                if (w.glow || (useKaraokeHighlight && isActive && ov.animation_style === 'glow')) {
+                if (isSub && captionLook === 'pill') {
+                    const padX = w.fontSize * 0.28;
+                    const padY = w.fontSize * 0.2;
+                    ctx.save();
+                    ctx.shadowColor = 'transparent';
+                    ctx.fillStyle = isActive && useKaraokeHighlight ? accentColor : boxColor;
+                    fillRoundRect(
+                        ctx,
+                        cx - w.measuredWidth / 2 - padX * 0.35,
+                        cy - w.fontSize * 0.82,
+                        w.measuredWidth + padX * 0.7,
+                        w.fontSize * 1.12,
+                        w.fontSize * 0.42
+                    );
+                    ctx.restore();
+                }
+
+                if (w.glow || neonLook || (useKaraokeHighlight && isActive && ov.animation_style === 'glow')) {
                     ctx.shadowColor = w.color || accentColor || '#00E5FF';
-                    ctx.shadowBlur = 25;
+                    ctx.shadowBlur = neonLook ? Math.max(22, shadowBlur) : 25;
                     ctx.shadowOffsetX = 0;
                     ctx.shadowOffsetY = 0;
                 } else if (useShadow) {
@@ -1530,9 +2152,9 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                     ctx.shadowBlur = 0;
                 }
 
-                if (useOutline && !useShadow) {
+                if (useOutline && !useShadow && captionLook !== 'cinema' && captionLook !== 'minimal' && captionLook !== 'neon') {
                     ctx.strokeStyle = 'rgba(0,0,0,0.9)';
-                    ctx.lineWidth = Math.max(2, w.fontSize * 0.06);
+                    ctx.lineWidth = Math.max(2, w.fontSize * outlineMul);
                     ctx.strokeText(w.word, cx, cy);
                 }
                 ctx.fillText(w.word, cx, cy);
@@ -1576,7 +2198,11 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
             e => e.action === 'add_text_overlay' && e.is_subtitle && e.start != null && e.end != null && t >= e.start && t < e.end
         );
         if (!activeSub) return;
-        drawStyledTextOverlay(ctx, activeSub, t, W, H, true);
+        try {
+            drawStyledTextOverlay(ctx, activeSub, t, W, H, true);
+        } catch (err) {
+            console.warn('[SandboxPlayer] caption overlay failed', err);
+        }
     }, [drawStyledTextOverlay]);
 
     // ── Direct Semantic Scene Canvas Renderer (No Iframe) ──────────
@@ -2760,6 +3386,28 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
         const t = video.currentTime;
         const scale = getZoomScale(editsRef.current, t);
 
+        let plateSx = 0;
+        let plateSy = 0;
+        let plateSw = VW;
+        let plateSh = VH;
+        if (videoRatio > targetRatio) {
+            plateSw = VH * targetRatio;
+            plateSx = (VW - plateSw) / 2;
+        } else if (videoRatio < targetRatio) {
+            plateSh = VW / targetRatio;
+            plateSy = (VH - plateSh) / 2;
+        }
+        _captionVideoPlate = {
+            video,
+            sx: plateSx,
+            sy: plateSy,
+            sw: plateSw,
+            sh: plateSh,
+            W,
+            H,
+            zoom: scale || 1,
+        };
+
         ctx.save();
         ctx.clearRect(0, 0, W, H);
 
@@ -3025,7 +3673,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                     finalS = 1.2;
                     finalH = -4;
                     vignette = 0.45;
-                    filmGrain = 0.02;
+                    filmGrain = 0.0;
                 } else {
                     const base = LUT_PRESETS[presetKey] || { brightness: 1.0, contrast: 1.0, saturation: 1.0, hue: 0 };
                     const userB = activeColor.brightness !== undefined ? activeColor.brightness : 100;
@@ -3040,7 +3688,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
 
                     if (['cinema', 'cyberpunk', 'teal_orange'].includes(presetKey)) {
                         vignette = 0.5;
-                        filmGrain = 0.015;
+                        filmGrain = 0.0;
                     }
                 }
             }
@@ -3089,16 +3737,11 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                     return box.isSub;
                 }
                 if (focusedClipId.startsWith("G1-Graphic-")) {
-                    const parts = focusedClipId.split('-');
-                    const gIdx = parseInt(parts[parts.length - 1], 10);
-                    const graphicEdits = editsRef.current.filter(x => 
-                        x.action === "canvas_overlay" || x.action === "hyperframes_html" ||
-                        x.action === 'add_hyperframes_graphics' || x.action === 'add_motion_graphic' ||
-                        x.action === 'add_dynamic_graphic' || x.action === 'add_text_overlay'
-                    );
-                    const targetEdit = graphicEdits[gIdx];
-                    const targetEditIndex = editsRef.current.indexOf(targetEdit);
-                    return box.editIndex === targetEditIndex;
+                    const rawIdx = parseInt(focusedClipId.replace("G1-Graphic-", ""), 10);
+                    if (!Number.isFinite(rawIdx)) return false;
+                    if (box.editIndex === rawIdx) return true;
+                    const playerIdx = resolveGraphicPlayerIndex(rawIdx);
+                    return playerIdx != null && box.editIndex === playerIdx;
                 }
                 return false;
             });
@@ -3270,33 +3913,15 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
 
         // Render Three.js compositor with latest overlay texture and color settings
         if (isThreeActive) {
-            const showTransition = editsRef.current.some(e => 
-                (e.action === 'build_transition' || (e.action === 'add_asset' && e.asset_query?.toLowerCase().includes('transition'))) && 
-                e.start != null && t >= e.start && t < (e.start + 0.8)
-            );
             const rawMG = editsRef.current.find(e =>
                 (e.action === 'add_motion_graphic' || (e.action === 'add_broll' && (e.broll_url === 'remotion_three_js_dynamic' || (!e.resolved_path && !e.broll_url)))) && e.start != null && e.end != null && t >= e.start && t < e.end
             );
             let activeMG = rawMG;
-            if (!activeMG && activeSemanticScenes.length > 0) {
-                activeMG = {
-                    action: 'add_motion_graphic',
-                    style: 'custom',
-                    geometry: vibeConfig.threeJsEnv.geometryType,
-                    material: vibeConfig.threeJsEnv.materialStyle,
-                    accent_color: vibeConfig.palette.glow,
-                    animation: vibeConfig.threeJsEnv.cameraMotion === 'music_pulse' ? 'pulse' : 'rotate',
-                    speed: 1.0,
-                    particle_count: 500
-                };
-            }
             if (activeMG && activeMG.action === 'add_broll') {
                 const query = activeMG.query || 'technology';
                 let style = 'cinematic';
                 if (/tech|data|code|blueprint|logic|graph/i.test(query)) {
                     style = 'blueprint';
-                } else if (/fluid|flow|energy|liquid|particles/i.test(query)) {
-                    style = 'liquid';
                 }
                 activeMG = {
                     ...activeMG,
@@ -3316,9 +3941,9 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 filmGrain,
                 zoom: scale,
                 templateId: selectedTemplate,
-            }, t, showTransition, activeMG);
+            }, t, false, activeMG);
         }
-    }, [textOverlays, drawAestheticCaptions, drawStyledTextOverlay, transcript, focusedClipId, targetRatio, selectedEntity, threeReady, behindModeActive, activeSemanticScenes, vibeConfig, rvmAlphaSrc, rvmAlphaReady, rvmMaskSrc, rvmMaskReady, videoSrc, subtitleConfig]);
+    }, [textOverlays, drawAestheticCaptions, drawStyledTextOverlay, transcript, focusedClipId, targetRatio, selectedEntity, threeReady, behindModeActive, activeSemanticScenes, vibeConfig, rvmAlphaSrc, rvmAlphaReady, rvmMaskSrc, rvmMaskReady, videoSrc, subtitleConfig, resolveGraphicPlayerIndex]);
 
     // ── RAF Render + EDL enforcement loop ────────────────────────
     useEffect(() => {
@@ -3500,24 +4125,31 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 if (!edit || edit.start == null || edit.end == null) return;
                 
                 const isActive = t >= edit.start && t < edit.end;
+                const isImg = el.tagName === 'IMG';
                 
                 if (isActive) {
-                    if (el.paused && !video.paused) {
-                        el.currentTime = t - edit.start;
-                        el.play().catch(() => {});
-                    } else if (!video.paused && !el.seeking && Math.abs(el.currentTime - (t - edit.start)) > 0.3) {
-                        el.currentTime = t - edit.start;
-                    }
-                    if (edit.broll_url === 'remotion_three_js_dynamic') {
-                        el.style.opacity = '0';
-                        el.style.display = 'none';
+                    if (!isImg) {
+                        const vid = el as HTMLVideoElement;
+                        if (vid.paused && !video.paused) {
+                            vid.currentTime = t - edit.start;
+                            vid.play().catch(() => {});
+                        } else if (!video.paused && !vid.seeking && Math.abs(vid.currentTime - (t - edit.start)) > 0.3) {
+                            vid.currentTime = t - edit.start;
+                        }
+                        if (edit.broll_url === 'remotion_three_js_dynamic') {
+                            el.style.opacity = '0';
+                            el.style.display = 'none';
+                        } else {
+                            el.style.opacity = vid.readyState >= 2 ? '1' : '0';
+                            el.style.display = vid.readyState >= 2 ? 'block' : 'none';
+                        }
                     } else {
-                        el.style.opacity = el.readyState >= 2 ? '1' : '0';
-                        el.style.display = el.readyState >= 2 ? 'block' : 'none';
+                        el.style.opacity = '1';
+                        el.style.display = 'block';
                     }
                     el.style.filter = brollFilter;
                 } else {
-                    if (!el.paused) el.pause();
+                    if (!isImg && !(el as HTMLVideoElement).paused) (el as HTMLVideoElement).pause();
                     el.style.opacity = '0';
                     el.style.display = 'none';
                     el.style.filter = 'none';
@@ -3550,7 +4182,9 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 if (el && !el.paused) el.pause();
             });
             brollRefs.current.forEach(el => {
-                if (el && !el.paused) el.pause();
+                if (el && el.tagName !== 'IMG' && !(el as HTMLVideoElement).paused) {
+                    (el as HTMLVideoElement).pause();
+                }
             });
         }
     }, [isPlaying, videoReady]);
@@ -3576,23 +4210,18 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                     return b.isSub;
                 }
                 if (focusedClipId.startsWith("G1-Graphic-")) {
-                    const parts = focusedClipId.split('-');
-                    const gIdx = parseInt(parts[parts.length - 1], 10);
-                    const graphicEdits = editsRef.current.filter(x => 
-                        x.action === "canvas_overlay" || x.action === "hyperframes_html" ||
-                        x.action === 'add_hyperframes_graphics' || x.action === 'add_motion_graphic' ||
-                        x.action === 'add_dynamic_graphic' || x.action === 'add_text_overlay'
-                    );
-                    const targetEdit = graphicEdits[gIdx];
-                    const targetEditIndex = editsRef.current.indexOf(targetEdit);
-                    return b.editIndex === targetEditIndex;
+                    const rawIdx = parseInt(focusedClipId.replace("G1-Graphic-", ""), 10);
+                    if (!Number.isFinite(rawIdx)) return false;
+                    if (b.editIndex === rawIdx) return true;
+                    const playerIdx = resolveGraphicPlayerIndex(rawIdx);
+                    return playerIdx != null && b.editIndex === playerIdx;
                 }
                 return false;
             });
             if (box) return box;
         }
         return null;
-    }, [selectedEntity, focusedClipId]);
+    }, [selectedEntity, focusedClipId, resolveGraphicPlayerIndex]);
 
     const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
         const canvas = e.currentTarget;
@@ -3726,13 +4355,13 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                     if (hitBox.isSub) {
                         focusId = hitBox.chunkIndex !== undefined ? `T1-Sub-${hitBox.chunkIndex}` : "T1-Sub-0";
                     } else if (hitBox.editIndex !== undefined) {
-                        const graphicEdits = editsRef.current.filter(x => 
-                            x.action === "canvas_overlay" || x.action === "hyperframes_html" ||
-                            x.action === 'add_hyperframes_graphics' || x.action === 'add_motion_graphic' ||
-                            x.action === 'add_dynamic_graphic' || x.action === 'add_text_overlay'
-                        );
-                        const relIdx = graphicEdits.indexOf(editsRef.current[hitBox.editIndex]);
-                        focusId = `G1-Graphic-${relIdx !== -1 ? relIdx : 0}`;
+                        const edit = editsRef.current[hitBox.editIndex];
+                        const rawIdx = edit
+                            ? timelineRawIndexForEdit(edit, hitBox.editIndex)
+                            : hitBox.editIndex;
+                        focusId = `G1-Graphic-${rawIdx}`;
+                        setSelectedGraphicEditIndex(hitBox.editIndex);
+                        onFocusedClipChange?.(focusId);
                     }
 
                     if (focusId) {
@@ -4089,7 +4718,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 src={activeVideoSrc || undefined}
                 preload="auto"
                 playsInline
-                crossOrigin="anonymous"
+                crossOrigin="use-credentials"
                 style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: 0, left: 0 }}
                 onLoadedMetadata={() => {
                     const v = videoRef.current;
@@ -4122,7 +4751,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                     preload="auto"
                     playsInline
                     muted
-                    crossOrigin="anonymous"
+                    crossOrigin="use-credentials"
                     style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: 0, left: 0 }}
                     onLoadedData={() => setRvmAlphaReady(true)}
                     onError={() => {
@@ -4139,7 +4768,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                     preload="auto"
                     playsInline
                     muted
-                    crossOrigin="anonymous"
+                    crossOrigin="use-credentials"
                     style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 1, height: 1, top: 0, left: 0 }}
                     onLoadedData={() => setRvmMaskReady(true)}
                     onError={() => {
@@ -4155,13 +4784,15 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 style={{ minHeight: 0 }}
             >
                 <div
-                    className="relative flex items-center justify-center overflow-hidden"
+                    className="relative flex items-center justify-center"
                     style={{
                         width: targetRatio > 1 ? '100%' : 'auto',
                         height: targetRatio < 1 ? '100%' : 'auto',
                         aspectRatio: `${targetRatio}`,
                         maxWidth: '100%',
                         maxHeight: '100%',
+                        // Visible so graphic plates near edges are not chopped; video still fills the box
+                        overflow: 'visible',
                     }}
                 >
                     {/* 2D Fallback / Interaction Canvas — forced on for behind-speaker */}
@@ -4344,8 +4975,12 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                         const duration = edit.duration ?? (edit.end ? (edit.end - start) : 999999);
                         const end = edit.end ?? (start + duration);
                         const globalIndex = edits.indexOf(edit);
+                        const timelineRawIdx = timelineRawIndexForEdit(edit, globalIndex);
+                        const isSelected =
+                            selectedGraphicEditIndex === globalIndex ||
+                            focusedClipId === `G1-Graphic-${timelineRawIdx}`;
                         const isGraphicActive = currentTime >= start && currentTime < end;
-                        const interactive = !isPlaying && isGraphicActive;
+                        const interactive = !isPlaying && (isGraphicActive || isSelected);
                         return (
                             <RemotionGraphicPlayer
                                 key={`graphic-remotion-${idx}-${start}-${end}-${edit.design_aspect || (targetRatio > 1 ? 'h' : 'v')}`}
@@ -4361,11 +4996,15 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                                 scaleX={edit.scale_x ?? 1}
                                 scaleY={edit.scale_y ?? 1}
                                 interactive={interactive}
-                                selected={selectedGraphicEditIndex === globalIndex}
-                                onSelect={() => setSelectedGraphicEditIndex(globalIndex)}
-                                onTransformChange={({ offsetX: ox, offsetY: oy, scaleX: sx, scaleY: sy }) => {
-                                    if (globalIndex < 0) return;
+                                selected={isSelected}
+                                onSelect={() => {
                                     setSelectedGraphicEditIndex(globalIndex);
+                                    onFocusedClipChange?.(`G1-Graphic-${timelineRawIdx}`);
+                                }}
+                                onTransformChange={({ offsetX: ox, offsetY: oy, scaleX: sx, scaleY: sy }) => {
+                                    if (timelineRawIdx < 0) return;
+                                    setSelectedGraphicEditIndex(globalIndex);
+                                    onFocusedClipChange?.(`G1-Graphic-${timelineRawIdx}`);
                                     const target = editsRef.current[globalIndex];
                                     if (target) {
                                         target.offset_x = ox;
@@ -4373,27 +5012,65 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                                         target.scale_x = sx;
                                         target.scale_y = sy;
                                     }
-                                    onUpdateEdit?.(globalIndex, {
+                                    onUpdateEdit?.(timelineRawIdx, {
                                         offset_x: ox,
                                         offset_y: oy,
                                         scale_x: sx,
                                         scale_y: sy,
                                     });
                                 }}
+                                onHtmlChange={(html) => {
+                                    if (timelineRawIdx < 0) return;
+                                    const target = editsRef.current[globalIndex];
+                                    if (target) {
+                                        target.html_content = html;
+                                        target.html = html;
+                                    }
+                                    onUpdateEdit?.(timelineRawIdx, { html_content: html, html });
+                                }}
                             />
                         );
                     })}
 
-                    {/* ReactBits Motion Component Overlays (BlurText, ShinyText, DecryptedText, TrueFocus, GlitchText, Subtitles) */}
-                    {videoReady && editsRef.current.filter(e => (e.action === 'reactbits_preset' || (e as any).preset || (e as any).component || (e.action === 'add_subtitles' && ['blur', 'shiny', 'decrypted', 'true_focus', 'glitch', 'gradient', 'echo'].includes((e as any).animation_style))) && e.start != null && e.end != null && currentTime >= e.start && currentTime < e.end).map((edit, idx) => (
-                        <ReactBitsPlayer
-                            key={`reactbits-${idx}-${edit.start}`}
-                            preset={(edit as any).preset || (edit as any).component || ((edit as any).animation_style ? (edit as any).animation_style : 'BlurText')}
-                            props={edit}
-                            currentTime={currentTime}
-                            start={edit.start ?? 0}
-                            end={edit.end ?? (edit.start! + 4.0)}
-                        />
+                    {/* ReactBits kinetic titles — ONLY real reactbits_preset edits.
+                        Do NOT match any edit that happens to have a `preset` field
+                        (color_correction uses preset:"cinema" and was falsely drawing
+                        the placeholder "VIBE EDIT AI" with pointer-events-none). */}
+                    {videoReady && editsRef.current
+                        .map((edit, editIndex) => ({ edit, editIndex }))
+                        .filter(({ edit }) => {
+                            if ((edit as any).deleted) return false;
+                            if (edit.action !== 'reactbits_preset') return false;
+                            if (edit.start == null || edit.end == null) return false;
+                            if (currentTime < edit.start || currentTime >= edit.end) return false;
+                            const t = String((edit as any).text || (edit as any).title || (edit as any).phrase || '').trim();
+                            return t.length > 0;
+                        })
+                        .map(({ edit, editIndex }) => (
+                        <div
+                            key={`reactbits-${editIndex}-${edit.start}`}
+                            className="absolute inset-0 z-[150] flex items-center justify-center overflow-hidden p-6 group/rb"
+                            style={{ pointerEvents: 'auto' }}
+                            onClick={(ev) => {
+                                ev.stopPropagation();
+                                // Click = remove this kinetic title (was undraggable before)
+                                if (onUpdateEdit) {
+                                    onUpdateEdit(editIndex, { deleted: true, end: edit.start });
+                                }
+                            }}
+                            title="Нажми, чтобы убрать надпись"
+                        >
+                            <ReactBitsPlayer
+                                preset={(edit as any).preset || (edit as any).component || 'BlurText'}
+                                props={edit}
+                                currentTime={currentTime}
+                                start={edit.start ?? 0}
+                                end={edit.end ?? (edit.start! + 4.0)}
+                            />
+                            <div className="absolute top-3 right-3 opacity-0 group-hover/rb:opacity-100 transition-opacity pointer-events-none rounded-full bg-black/70 text-white text-[11px] px-2.5 py-1 border border-white/20">
+                                клик = убрать
+                            </div>
+                        </div>
                     ))}
 
 
@@ -4491,13 +5168,14 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
 
                     {/* B-roll Overlays */}
                     {videoReady && brollEdits.map((edit, i) => {
-                        const src = edit.resolved_path 
-                            ? (edit.resolved_path.startsWith('http') ? edit.resolved_path : `${API_URL}/${edit.resolved_path}`)
+                        const src = edit.resolved_path
+                            ? resolveMediaUrl(edit.resolved_path)
                             : edit.broll_url;
                         if (!src) return null;
 
+                        const isImageBroll = edit.media_type === 'image' || /\.(jpe?g|png|webp|gif)(\?|$)/i.test(src);
                         let activeBrollSrc = src;
-                        if (isMobile && src && !src.includes('_proxy')) {
+                        if (!isImageBroll && isMobile && src && !src.includes('_proxy')) {
                             const filenameFromSrc = src.split('/').pop()?.toLowerCase();
                             if (filenameFromSrc && mediaLibrary) {
                                 const foundItem = mediaLibrary.find((item: any) => {
@@ -4517,7 +5195,29 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                             }
                         }
 
-                        const isBrollSplit = edit.layout === 'split' || edit.is_split;
+                        const isBrollSplit = edit.layout === 'split' || (edit as any).is_split;
+                        const overlayStyle = {
+                            opacity: 0,
+                            display: 'none' as const,
+                            pointerEvents: 'none' as const,
+                            top: isBrollSplit ? '50%' : 0,
+                            height: isBrollSplit ? '50%' : '100%',
+                            objectFit: (isBrollSplit ? 'cover' : 'contain') as const,
+                            background: 'transparent',
+                            backgroundColor: 'transparent'
+                        };
+                        if (isImageBroll) {
+                            return (
+                                <img
+                                    key={`broll-${i}`}
+                                    ref={el => { brollRefs.current[i] = el; }}
+                                    src={activeBrollSrc}
+                                    alt=""
+                                    className="absolute left-0 w-full z-[95]"
+                                    style={overlayStyle}
+                                />
+                            );
+                        }
                         return (
                             <video
                                 key={`broll-${i}`}
@@ -4527,16 +5227,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                                 playsInline
                                 muted
                                 className="absolute left-0 w-full z-[95]"
-                                style={{
-                                    opacity: 0,
-                                    display: 'none',
-                                    pointerEvents: 'none',
-                                    top: isBrollSplit ? '50%' : 0,
-                                    height: isBrollSplit ? '50%' : '100%',
-                                    objectFit: isBrollSplit ? 'cover' : 'contain',
-                                    background: 'transparent',
-                                    backgroundColor: 'transparent'
-                                }}
+                                style={overlayStyle}
                                 onError={(e) => {
                                     const el = e.currentTarget;
                                     if (el.src.includes('_proxy')) {

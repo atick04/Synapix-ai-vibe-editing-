@@ -15,16 +15,15 @@ import {
 } from "lucide-react";
 
 import { useLanguage } from "@/context/LanguageContext";
+import { useAuth } from "@/context/AuthContext";
 
 export default function Sidebar() {
   const pathname = usePathname();
   const { lang, theme, setTheme } = useTheme() as any;
   const { lang: appLang } = useLanguage();
+  const { user, logout } = useAuth();
   const [mounted, setMounted] = useState(false);
   const [lastProjectId, setLastProjectId] = useState<string | null>(null);
-
-  // Hide sidebar on admin panel
-  if (pathname?.startsWith('/admin')) return null;
 
   useEffect(() => {
     setMounted(true);
@@ -34,11 +33,14 @@ export default function Sidebar() {
     }
   }, [pathname]);
 
+  if (pathname?.startsWith('/admin')) return null;
+
   const menuItems = [
     { id: "studio", icon: Video, label: appLang === 'ru' ? "Студия" : "Studio", href: lastProjectId ? `/editor/${lastProjectId}` : "/" },
     { id: "commercials", icon: Wand2, label: appLang === 'ru' ? "ИИ Реклама" : "AI Ads", href: "/ai-commercials" },
-    { id: "templates", icon: LayoutTemplate, label: appLang === 'ru' ? "Шаблоны" : "Templates", href: "/templates" },
+    { id: "templates", icon: LayoutTemplate, label: appLang === 'ru' ? "Reels стиль" : "Reels style", href: "/templates" },
     { id: "projects", icon: FolderClock, label: appLang === 'ru' ? "Проекты" : "Projects", href: "/" },
+    { id: "account", icon: Settings, label: appLang === 'ru' ? "Кабинет" : "Account", href: "/account" },
   ];
 
   return (
@@ -53,7 +55,12 @@ export default function Sidebar() {
 
       <nav className="flex-1 flex flex-col gap-2">
         {menuItems.map((item, idx) => {
-          const isActive = (pathname === item.href && item.id !== "studio") || (item.id === "studio" && pathname.startsWith("/editor"));
+          const isActive =
+            item.id === "studio"
+              ? pathname.startsWith("/editor")
+              : item.id === "account"
+                ? pathname.startsWith("/account")
+                : pathname === item.href;
           return (
             <Link
               key={idx}
@@ -89,10 +96,23 @@ export default function Sidebar() {
           )}
         </button>
 
-        <button className="flex items-center gap-4 px-2.5 py-2.5 w-full rounded-[12px] text-[13px] font-medium text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200/50 dark:hover:bg-neutral-800/50 hover:text-neutral-900 dark:hover:text-neutral-100 transition-all duration-200 overflow-hidden">
-          <Settings className="w-4.5 h-4.5 shrink-0" />
-          <span className="whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-300">Настройки</span>
-        </button>
+        {user && (
+          <Link href="/account" className="flex items-center gap-3 px-1.5 py-2 rounded-[12px] overflow-hidden hover:bg-neutral-200/50 dark:hover:bg-neutral-800/50">
+            {user.picture ? (
+              <img src={user.picture} alt="" className="w-8 h-8 rounded-full object-cover shrink-0" />
+            ) : (
+              <div className="w-8 h-8 rounded-full bg-neutral-800 text-white text-[11px] font-semibold flex items-center justify-center shrink-0">
+                {(user.name || user.email || "?").slice(0, 1).toUpperCase()}
+              </div>
+            )}
+            <div className="min-w-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+              <p className="text-[12px] font-semibold truncate text-neutral-900 dark:text-neutral-100">{user.name || user.email}</p>
+              <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); logout(); }} className="text-[10px] text-neutral-500 hover:text-rose-400 cursor-pointer">
+                Выйти
+              </button>
+            </div>
+          </Link>
+        )}
       </div>
     </aside>
   );

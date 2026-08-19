@@ -1,5 +1,13 @@
 from fastapi import APIRouter, File, UploadFile, HTTPException, BackgroundTasks, Depends
 from app.api.admin import validate_user_access_key
+from app.auth.deps import assert_project_access, register_project
+
+
+def assert_brand_access(brand_id: str, user: dict, write: bool = False):
+    if not write and brand_id in ("default", "", None):
+        return
+    if brand_id != user.get("id"):
+        raise HTTPException(status_code=403, detail="brand_forbidden")
 import os
 import uuid
 import shutil
@@ -119,8 +127,36 @@ async def process_video_pipeline(video_path: str, audio_path: str, file_id: str)
     else:
         log_progress(file_id, f"⚠️ Визуальный анализ пропущен (нет кадров или ошибка VLM ({VLM_MODEL})).")
 
+    try:
+        from app.services.content_look import infer_content_look, save_look, transcript_blob
+        from app.workflows.production_session import update_session
+
+        look = infer_content_look(
+            video_path=video_path,
+            scenes=scenes or [],
+            transcript=transcript_blob(transcript),
+        )
+        save_look(os.path.join(UPLOAD_DIR, f"{file_id}_look.json"), look)
+        update_session(file_id, {
+            "content_look": look,
+            "visual_identity": {
+                "dominant_color": (look.get("palette") or {}).get("accent", "#C8F542"),
+                "font_family": "Unbounded",
+                "graphics_template": "optical_cut",
+            },
+            "editing_strategy": {
+                "zoom_frequency": (look.get("montage") or {}).get("zoom_count", "low"),
+                "broll_frequency": (look.get("montage") or {}).get("broll_bias", "user_first"),
+                "pacing": (look.get("montage") or {}).get("pacing", "measured"),
+            },
+        })
+        fam = look.get("family", "ink")
+        log_progress(file_id, f"🎨 Стиль кадра: {fam}. Монтаж подстроится под свет и цвет ролика.")
+    except Exception as look_err:
+        log_progress(file_id, f"⚠️ Content look пропущен: {look_err}")
+
 @router.post("/upload")
-async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = File(...), _key=Depends(validate_user_access_key)):
+async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = File(...), user=Depends(validate_user_access_key)):
     ext = os.path.splitext(file.filename)[1].lower()
     c_type = file.content_type or ""
     # We allow any file here to prevent strict browser rejections. 
@@ -141,15 +177,45 @@ async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
     
     audio_path = os.path.join(UPLOAD_DIR, f"{file_id}.mp3")
     background_tasks.add_task(process_video_pipeline, file_path, audio_path, file_id)
+    register_project(user, file_id, file.filename or filename)
     
     return {
         "message": "Video uploaded successfully", 
         "file_id": file_id, 
         "filename": filename,
-        "path": file_path
+        "path": file_path,
+        "owner_id": user.get("id"),
     }
 
-def add_to_media_library(file_id: str, asset_id: str, filename: str, path: str, duration: float = 0.0):
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"}
+_SKIP_BROLL_ID_PREFIXES = ("stock_", "sfx_", "ai_audio_", "bgm_")
+
+
+def _media_type_from_path(path: str) -> str:
+    ext = os.path.splitext(path or "")[1].lower()
+    if ext in IMAGE_EXTS:
+        return "image"
+    if ext in VIDEO_EXTS:
+        return "video"
+    return "file"
+
+
+def _public_upload_path(file_path: str) -> str:
+    name = os.path.basename(str(file_path).replace("\\", "/"))
+    return f"uploads/{name}"
+
+
+def _normalize_library_path(path: str) -> str:
+    p = (path or "").replace("\\", "/")
+    low = p.lower()
+    marker = "/uploads/"
+    if marker in low:
+        return "uploads/" + p[low.rfind(marker) + len(marker):]
+    return p
+
+
+def add_to_media_library(file_id: str, asset_id: str, filename: str, path: str, duration: float = 0.0, **extra):
     lib_path = os.path.join(UPLOAD_DIR, f"{file_id}_media_library.json")
     library = []
     if os.path.exists(lib_path):
@@ -158,25 +224,101 @@ def add_to_media_library(file_id: str, asset_id: str, filename: str, path: str, 
                 library = json.load(f)
         except Exception:
             pass
-    # Check if already exists
+    kind = extra.get("kind")
+    if not kind:
+        kind = "user_broll" if str(asset_id).startswith("additional_") else "library"
+    payload = {
+        "id": asset_id,
+        "filename": filename,
+        "path": _normalize_library_path(path) if "uploads" in (path or "").replace("\\", "/").lower() else path,
+        "duration": duration,
+        "kind": kind,
+        "media_type": extra.get("media_type") or _media_type_from_path(path),
+        "source": extra.get("source") or ("user" if kind == "user_broll" else "library"),
+    }
     for item in library:
         if item.get("id") == asset_id:
-            item["filename"] = filename
-            item["path"] = path
-            item["duration"] = duration
+            item.update(payload)
             break
     else:
-        library.append({
-            "id": asset_id,
-            "filename": filename,
-            "path": path,
-            "duration": duration
-        })
+        library.append(payload)
     with open(lib_path, "w", encoding="utf-8") as f:
         json.dump(library, f, ensure_ascii=False, indent=2)
 
+
+def list_user_broll(file_id: str) -> list:
+    lib_path = os.path.join(UPLOAD_DIR, f"{file_id}_media_library.json")
+    library = []
+    if os.path.exists(lib_path):
+        try:
+            with open(lib_path, "r", encoding="utf-8") as f:
+                library = json.load(f)
+        except Exception:
+            pass
+    clips = []
+    for item in library:
+        cid = item.get("id") or ""
+        if cid == "main" or cid.startswith(_SKIP_BROLL_ID_PREFIXES):
+            continue
+        path = _normalize_library_path(item.get("path") or "")
+        ext = os.path.splitext(path)[1].lower()
+        if ext in {".mp3", ".wav", ".m4a", ".aac", ".ogg"}:
+            continue
+        kind = item.get("kind")
+        media_type = item.get("media_type") or _media_type_from_path(path)
+        is_user = (
+            kind in ("user_broll", "additional", "broll")
+            or cid.startswith("additional_")
+            or (item.get("source") == "user" and media_type in ("image", "video"))
+        )
+        if not is_user:
+            continue
+        clips.append({
+            **item,
+            "path": path,
+            "media_type": media_type,
+            "kind": "user_broll",
+        })
+    return clips
+
+
+def resolve_user_broll(file_id: str, query: str = None, asset_id: str = None, used_paths=None):
+    clips = list_user_broll(file_id)
+    if not clips:
+        return None
+    used = {str(p).replace("\\", "/") for p in (used_paths or []) if p}
+
+    if asset_id:
+        for clip in clips:
+            if clip.get("id") == asset_id:
+                return clip
+
+    if query:
+        q = (query or "").strip().lower()
+        for clip in clips:
+            name = (clip.get("filename") or "").lower()
+            cid = (clip.get("id") or "").lower()
+            if q and (q == name or q in name or q == cid or q in cid):
+                return clip
+        tokens = [t for t in q.replace("_", " ").replace("-", " ").split() if len(t) > 2]
+        if tokens:
+            scored = []
+            for clip in clips:
+                blob = f"{clip.get('filename', '')} {clip.get('id', '')}".lower()
+                score = sum(1 for t in tokens if t in blob)
+                if score:
+                    scored.append((score, clip))
+            if scored:
+                scored.sort(key=lambda x: -x[0])
+                return scored[0][1]
+
+    unused = [c for c in clips if c.get("path") not in used]
+    pool = unused or clips
+    return pool[0] if pool else None
+
 @router.get("/{file_id}/media_library")
-async def get_media_library(file_id: str):
+async def get_media_library(file_id: str, user=Depends(validate_user_access_key)):
+    assert_project_access(file_id, user)
     lib_path = os.path.join(UPLOAD_DIR, f"{file_id}_media_library.json")
     library = []
     if os.path.exists(lib_path):
@@ -262,9 +404,15 @@ async def get_media_library(file_id: str):
     return library
 
 @router.post("/{file_id}/upload_additional")
-async def upload_additional_video(file_id: str, background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload_additional_video(file_id: str, background_tasks: BackgroundTasks, file: UploadFile = File(...), user=Depends(validate_user_access_key)):
+    assert_project_access(file_id, user)
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Файл без имени")
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in IMAGE_EXTS | VIDEO_EXTS:
+        raise HTTPException(status_code=400, detail="Загрузи видео или картинку (mp4, mov, webm, jpg, png, webp)")
+
     asset_uuid = str(uuid.uuid4())
-    ext = os.path.splitext(file.filename)[1]
     asset_id = f"additional_{asset_uuid}"
     filename = f"{file_id}_{asset_id}{ext}"
     file_path = os.path.join(UPLOAD_DIR, filename)
@@ -274,25 +422,38 @@ async def upload_additional_video(file_id: str, background_tasks: BackgroundTask
             shutil.copyfileobj(file.file, buffer)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-        
-    duration = 0.0
-    if os.path.exists(file_path):
+
+    media_type = _media_type_from_path(file_path)
+    duration = 3.0 if media_type == "image" else 0.0
+    if media_type == "video" and os.path.exists(file_path):
         try:
             cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file_path]
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
             duration = float(res.stdout.strip())
         except Exception:
-            pass
-            
-    add_to_media_library(file_id, asset_id, file.filename, file_path.replace("\\", "/"), duration)
-    
-    audio_path = os.path.join(UPLOAD_DIR, f"{file_id}_{asset_id}.mp3")
-    background_tasks.add_task(process_video_pipeline, file_path, audio_path, f"{file_id}_{asset_id}")
-    
-    return await get_media_library(file_id)
+            duration = 3.0
+
+    rel_path = _public_upload_path(file_path)
+    add_to_media_library(
+        file_id,
+        asset_id,
+        file.filename,
+        rel_path,
+        duration,
+        kind="user_broll",
+        media_type=media_type,
+        source="user",
+    )
+
+    if media_type == "video":
+        audio_path = os.path.join(UPLOAD_DIR, f"{file_id}_{asset_id}.mp3")
+        background_tasks.add_task(process_video_pipeline, file_path, audio_path, f"{file_id}_{asset_id}")
+
+    return await get_media_library(file_id, user)
 
 @router.get("/{file_id}/status")
-async def get_video_status(file_id: str):
+async def get_video_status(file_id: str, user=Depends(validate_user_access_key)):
+    assert_project_access(file_id, user)
     rendered_path = os.path.join(UPLOAD_DIR, f"{file_id}_rendered.mp4")
     log_path = os.path.join(UPLOAD_DIR, f"{file_id}.log")
     render_lock_path = os.path.join(UPLOAD_DIR, f"{file_id}.rendering")
@@ -322,7 +483,8 @@ async def get_video_status(file_id: str):
     }
 
 @router.get("/{file_id}/transcript")
-async def get_transcript(file_id: str):
+async def get_transcript(file_id: str, user=Depends(validate_user_access_key)):
+    assert_project_access(file_id, user)
     transcript_path = os.path.join(UPLOAD_DIR, f"{file_id}_transcript.json")
     if os.path.exists(transcript_path):
         try:
@@ -333,7 +495,8 @@ async def get_transcript(file_id: str):
     return {"status": "processing"}
 
 @router.get("/{file_id}/session")
-async def get_project_session(file_id: str):
+async def get_project_session(file_id: str, user=Depends(validate_user_access_key)):
+    assert_project_access(file_id, user)
     from app.workflows.production_session import load_session
     try:
         session = load_session(file_id)
@@ -344,7 +507,7 @@ async def get_project_session(file_id: str):
 
 from pydantic import BaseModel
 from typing import Optional, List, Any
-from app.services.video_service import render_video
+from app.services.video_service import render_video, safe_replace
 import asyncio
 
 class ExportSettings(BaseModel):
@@ -364,33 +527,67 @@ class ExportSettings(BaseModel):
     brand_id: Optional[str] = None
 
 RESOLUTION_MAP = {
-    "720p":  (1280, 720),
-    "1080p": (1920, 1080),
-    "4k":    (3840, 2160),
+    # Instagram Reels — vertical only
+    "720p":  (720, 1280),
+    "1080p": (1080, 1920),
 }
 
+# Quality drives encode AND pipeline speed (Remotion / masking / loudnorm).
 QUALITY_MAP = {
-    "high":   (18, "fast"),
-    "medium": (23, "veryfast"),
-    "fast":   (28, "ultrafast"),
-}
-
-FORMAT_MAP = {
-    "mp4_h264": {"vcodec": "libx264", "ext": "mp4"},
-    "mp4_h265": {"vcodec": "libx265", "ext": "mp4"},
-    "webm":     {"vcodec": "libvpx-vp9", "ext": "webm"},
+    "fast": {
+        "crf": 26,
+        "preset": "ultrafast",
+        "remotion_max_frames": 36,
+        "remotion_max_graphics": 2,
+        "remotion_timeout": 60,
+        "enable_masking": False,
+        "loudnorm": False,
+        "skip_semantic": True,
+        "mid_preset": "ultrafast",
+        "mid_crf": 28,
+    },
+    "medium": {
+        "crf": 23,
+        "preset": "veryfast",
+        "remotion_max_frames": 60,
+        "remotion_max_graphics": 4,
+        "remotion_timeout": 90,
+        "enable_masking": False,
+        "loudnorm": False,
+        "skip_semantic": True,
+        "mid_preset": "ultrafast",
+        "mid_crf": 26,
+    },
+    "high": {
+        "crf": 18,
+        "preset": "veryfast",  # was "fast" — still good for Reels, much quicker
+        "remotion_max_frames": 90,
+        "remotion_max_graphics": 6,
+        "remotion_timeout": 120,
+        "enable_masking": True,  # only if cached RVM mask already exists
+        "loudnorm": True,
+        "skip_semantic": False,
+        "mid_preset": "veryfast",
+        "mid_crf": 23,
+    },
 }
 
 async def run_export_task(file_id: str, settings: ExportSettings):
-    """Background task: export final video with user-chosen settings via FFmpeg."""
+    """Background task: export final Instagram Reels video with working quality settings."""
     render_lock = os.path.join(UPLOAD_DIR, f"{file_id}.rendering")
     open(render_lock, "w").close()
-    log_progress(file_id, f"🎬 Экспорт начат: {settings.resolution} / {settings.fps}fps / {settings.quality} / {settings.format}")
+    profile = QUALITY_MAP.get(settings.quality) or QUALITY_MAP["medium"]
+    log_progress(
+        file_id,
+        f"🎬 Экспорт Reels: {settings.resolution} / {settings.quality} "
+        f"(графика≤{profile['remotion_max_graphics']}, "
+        f"маска={'да' if profile['enable_masking'] else 'нет'})",
+    )
 
     try:
         source = None
         for f in os.listdir(UPLOAD_DIR):
-            if f.startswith(file_id) and not any(x in f for x in ["_rendered", "_transcript", "_visual", ".log", ".mp3", ".rendering", ".ass"]):
+            if f.startswith(file_id) and not any(x in f for x in ["_rendered", "_transcript", "_visual", ".log", ".mp3", ".rendering", ".ass", "_worksrc", "_proxy", "_rvm", "_restore", "_corrupted", "_diag"]):
                 ext_lower = os.path.splitext(f)[1].lower()
                 if ext_lower in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
                     source = os.path.join(UPLOAD_DIR, f)
@@ -400,10 +597,16 @@ async def run_export_task(file_id: str, settings: ExportSettings):
             log_progress(file_id, "❌ Исходный видеофайл не найден.")
             return
 
-        resolution = RESOLUTION_MAP.get(settings.resolution, (1920, 1080))
-        crf, preset = QUALITY_MAP.get(settings.quality, (23, "medium"))
-        fmt = FORMAT_MAP.get(settings.format, {"vcodec": "libx264", "ext": "mp4"})
-        out_path = os.path.join(UPLOAD_DIR, f"{file_id}_rendered.{fmt['ext']}")
+        tw, th = RESOLUTION_MAP.get(settings.resolution, (1080, 1920))
+        crf = profile["crf"]
+        preset = profile["preset"]
+        out_path = os.path.join(UPLOAD_DIR, f"{file_id}_rendered.mp4")
+        # Write to a unique temp file first — Windows denies overwrite of
+        # *_rendered.mp4 while the browser <video> has it open (WinError 5).
+        import uuid
+        tmp_out = os.path.join(
+            UPLOAD_DIR, f"{file_id}_rendered.exporting.{uuid.uuid4().hex[:8]}.mp4"
+        )
 
         transcript = None
         transcript_path = os.path.join(UPLOAD_DIR, f"{file_id}_transcript.json")
@@ -412,11 +615,11 @@ async def run_export_task(file_id: str, settings: ExportSettings):
                 import json
                 transcript = json.load(f)
 
-        log_progress(file_id, f"⚙️ FFmpeg рендерит: {resolution[0]}x{resolution[1]}, CRF={crf}, пресет={preset}...")
+        log_progress(file_id, f"⚙️ Быстрый рендер Reels {tw}x{th}, CRF={crf}, preset={preset}...")
 
-        await asyncio.to_thread(
+        ok = await asyncio.to_thread(
             render_video,
-            source, out_path,
+            source, tmp_out,
             transcript_data=transcript,
             edits=settings.edits or [],
             edl=settings.edl,
@@ -426,19 +629,55 @@ async def run_export_task(file_id: str, settings: ExportSettings):
             font_color=settings.font_color or "white",
             template_id=settings.template_id,
             brand_id=settings.brand_id,
+            export_crf=crf,
+            export_preset=preset,
+            export_audio_bitrate=settings.audio_bitrate or "192k",
+            target_width=tw,
+            target_height=th,
+            export_quality=settings.quality or "medium",
+            export_profile=profile,
+            source_file_id=file_id,
         )
-        log_progress(file_id, f"✅ Экспорт завершён! Файл готов к скачиванию.")
+        if ok is False:
+            log_progress(file_id, "❌ Экспорт не удался (FFmpeg).")
+            if os.path.exists(tmp_out):
+                try:
+                    os.remove(tmp_out)
+                except OSError:
+                    pass
+            return
+        try:
+            safe_replace(tmp_out, out_path)
+        except PermissionError as e:
+            log_progress(
+                file_id,
+                "❌ Не удалось заменить готовый файл — закройте превью видео в редакторе и экспортируйте снова.",
+            )
+            log_progress(file_id, str(e))
+            if os.path.exists(tmp_out):
+                try:
+                    os.remove(tmp_out)
+                except OSError:
+                    pass
+            return
+        log_progress(file_id, f"✅ Экспорт завершён! Reel готов к скачиванию.")
     except Exception as e:
         log_progress(file_id, f"❌ Ошибка экспорта: {e}")
         import traceback
         log_progress(file_id, traceback.format_exc())
     finally:
         if os.path.exists(render_lock):
-            os.remove(render_lock)
+            try:
+                os.remove(render_lock)
+            except OSError:
+                pass
 
 @router.post("/export")
-async def export_video(settings: ExportSettings, background_tasks: BackgroundTasks):
+async def export_video(settings: ExportSettings, background_tasks: BackgroundTasks, user=Depends(validate_user_access_key)):
     """Trigger final FFmpeg export with user-chosen quality settings."""
+    assert_project_access(settings.file_id, user)
+    from app.billing.entitlements import assert_can_use_ai
+    assert_can_use_ai(user, settings.file_id)
     render_lock = os.path.join(UPLOAD_DIR, f"{settings.file_id}.rendering")
     if os.path.exists(render_lock):
         raise HTTPException(status_code=409, detail="Рендер уже запущен")
@@ -463,7 +702,9 @@ async def search_music(query: str):
     return search_stock_music(query)
 
 @router.post("/download_asset")
-async def download_asset(req: DownloadAssetReq):
+async def download_asset(req: DownloadAssetReq, user=Depends(validate_user_access_key)):
+    if req.file_id:
+        assert_project_access(req.file_id, user)
     local_path = download_stock_asset(req.asset_id, req.url)
     if not local_path:
         raise HTTPException(status_code=500, detail="Не удалось скачать ассет")
@@ -506,7 +747,11 @@ class GenerateAudioRequest(BaseModel):
     volume: float = -15.0
 
 @router.post("/{file_id}/generate_audio")
-async def generate_audio_endpoint(file_id: str, req: GenerateAudioRequest):
+async def generate_audio_endpoint(file_id: str, req: GenerateAudioRequest, user=Depends(validate_user_access_key)):
+    assert_project_access(file_id, user)
+    from app.billing.entitlements import assert_can_use_ai, claim_free_project
+    assert_can_use_ai(user, file_id)
+    claim_free_project(user, file_id)
     import time
     from app.services.stable_audio_service import generate_audio_via_replicate
     try:
@@ -560,10 +805,11 @@ async def generate_audio_endpoint(file_id: str, req: GenerateAudioRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 class RecommendAudioRequest(BaseModel):
-    template_id: str = "promotional"
+    template_id: str = "instagram_reels"
 
 @router.post("/{file_id}/recommend_audio")
-async def recommend_audio_endpoint(file_id: str, req: RecommendAudioRequest, _key=Depends(validate_user_access_key)):
+async def recommend_audio_endpoint(file_id: str, req: RecommendAudioRequest, user=Depends(validate_user_access_key)):
+    assert_project_access(file_id, user)
     from app.services.audio_recommendation_service import get_audio_recommendation
     try:
         rec = await get_audio_recommendation(file_id, req.template_id)
@@ -572,16 +818,20 @@ async def recommend_audio_endpoint(file_id: str, req: RecommendAudioRequest, _ke
         raise HTTPException(status_code=500, detail=str(e))
 
 class AutoComposeRequest(BaseModel):
-    template_id: str = "promotional"
+    template_id: str = "instagram_reels"
 
 @router.post("/{file_id}/auto_compose")
-async def auto_compose_endpoint(file_id: str, req: AutoComposeRequest, _key=Depends(validate_user_access_key)):
+async def auto_compose_endpoint(file_id: str, req: AutoComposeRequest, user=Depends(validate_user_access_key)):
+    assert_project_access(file_id, user)
+    from app.billing.entitlements import assert_can_use_ai, claim_free_project
+    assert_can_use_ai(user, file_id)
+    claim_free_project(user, file_id)
     import time
     import os
-    from app.services.template_service import get_template
+    from app.services.template_service import get_template, get_default_template_id
     
     try:
-        tpl = get_template(req.template_id) or get_template("promotional")
+        tpl = get_template(req.template_id) or get_template(get_default_template_id())
         
         # 1. Update session with template settings so the AI Director behaves according to the template
         sub_font = "Montserrat-ExtraBold"
@@ -625,9 +875,15 @@ async def auto_compose_endpoint(file_id: str, req: AutoComposeRequest, _key=Depe
         from app.workflows.graph import editor_graph
         initial_state = {
             "file_id": file_id,
-            "user_message": f"Сделай авто-монтаж ролика по шаблону {req.template_id}: проанализируй речь, расставь наезды камеры (zoom), выдели хук в начале с помощью графики, добавь подходящую фоновую музыку и SFX переходы, настроить кинетическую караоке-типографику.",
+            "user_message": (
+                "Сделай авто-монтаж Instagram Reels 9:16: вырежи паузы, "
+                "кинетические субтитры (2–3 слова), зумы на акцентах речи, "
+                "хук-графика в начале, 1–3 B-roll/плашки на punchline, "
+                "один energetic bed с ducking под голос и точечные SFX на cuts. "
+                "Только вертикальный Reels — без YouTube 16:9 и long-form."
+            ),
             "is_evaluation": False,
-            "template_id": req.template_id,
+            "template_id": req.template_id or "instagram_reels",
             "active_edits": [],
             "critic_retry_count": 0,
             "focused_item": None
@@ -665,7 +921,8 @@ async def auto_compose_endpoint(file_id: str, req: AutoComposeRequest, _key=Depe
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/brand/{brand_id}/upload_font")
-async def upload_brand_font(brand_id: str, file: UploadFile = File(...)):
+async def upload_brand_font(brand_id: str, file: UploadFile = File(...), user=Depends(validate_user_access_key)):
+    assert_brand_access(brand_id, user, write=True)
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in [".ttf", ".otf"]:
         raise HTTPException(status_code=400, detail="Only .ttf and .otf font files are supported")
@@ -688,7 +945,8 @@ async def upload_brand_font(brand_id: str, file: UploadFile = File(...)):
     }
 
 @router.post("/brand/{brand_id}/upload_lut")
-async def upload_brand_lut(brand_id: str, file: UploadFile = File(...)):
+async def upload_brand_lut(brand_id: str, file: UploadFile = File(...), user=Depends(validate_user_access_key)):
+    assert_brand_access(brand_id, user, write=True)
     ext = os.path.splitext(file.filename)[1].lower()
     if ext != ".cube":
         raise HTTPException(status_code=400, detail="Only .cube LUT files are supported")
@@ -711,7 +969,8 @@ async def upload_brand_lut(brand_id: str, file: UploadFile = File(...)):
     }
 
 @router.post("/brand/{brand_id}/upload_music")
-async def upload_brand_music(brand_id: str, file: UploadFile = File(...)):
+async def upload_brand_music(brand_id: str, file: UploadFile = File(...), user=Depends(validate_user_access_key)):
+    assert_brand_access(brand_id, user, write=True)
     ext = os.path.splitext(file.filename)[1].lower()
     if ext != ".mp3":
         raise HTTPException(status_code=400, detail="Only .mp3 audio files are supported")
@@ -734,7 +993,8 @@ async def upload_brand_music(brand_id: str, file: UploadFile = File(...)):
     }
 
 @router.get("/brand/{brand_id}/assets")
-async def get_brand_assets(brand_id: str):
+async def get_brand_assets(brand_id: str, user=Depends(validate_user_access_key)):
+    assert_brand_access(brand_id, user, write=False)
     brand_dir = os.path.join(UPLOAD_DIR, "brands", brand_id)
     fonts_dir = os.path.join(brand_dir, "fonts")
     luts_dir = os.path.join(brand_dir, "luts")
@@ -777,7 +1037,11 @@ async def get_brand_assets(brand_id: str):
     }
 
 @router.post("/{file_id}/smart_cut")
-async def run_smart_cut(file_id: str):
+async def run_smart_cut(file_id: str, user=Depends(validate_user_access_key)):
+    assert_project_access(file_id, user)
+    from app.billing.entitlements import assert_can_use_ai, claim_free_project
+    assert_can_use_ai(user, file_id)
+    claim_free_project(user, file_id)
     """Analyze Whisper transcript to automatically detect bad takes, pauses, and filler words."""
     transcript_path = os.path.join(UPLOAD_DIR, f"{file_id}_transcript.json")
     if not os.path.exists(transcript_path):
@@ -799,7 +1063,9 @@ async def detect_topic_transitions(
     file_id: str,
     use_llm: bool = False,
     min_gap_sec: float = 5.0,
+    user=Depends(validate_user_access_key),
 ):
+    assert_project_access(file_id, user)
     """Detect topic-change moments in speech for montage transitions."""
     transcript_path = os.path.join(UPLOAD_DIR, f"{file_id}_transcript.json")
     if not os.path.exists(transcript_path):
@@ -1017,9 +1283,10 @@ async def start_roto_preview(
     file_id: str,
     req: RotoPreviewRequest,
     background_tasks: BackgroundTasks,
-    _key=Depends(validate_user_access_key),
+    user=Depends(validate_user_access_key),
 ):
     """Start async RVM rotoscoping for live preview (not full export)."""
+    assert_project_access(file_id, user)
     lock = os.path.join(UPLOAD_DIR, f"{file_id}.roto")
     mode = (req.mode or "composite").lower()
     out_name, alpha_name = _roto_artifact_names(file_id, mode)
@@ -1072,8 +1339,9 @@ async def start_roto_preview(
 
 
 @router.get("/{file_id}/roto_status")
-async def get_roto_status(file_id: str, _key=Depends(validate_user_access_key)):
+async def get_roto_status(file_id: str, user=Depends(validate_user_access_key)):
     """Poll RVM preview job status."""
+    assert_project_access(file_id, user)
     lock = os.path.join(UPLOAD_DIR, f"{file_id}.roto")
     status_path = os.path.join(UPLOAD_DIR, f"{file_id}_roto_status.json")
 

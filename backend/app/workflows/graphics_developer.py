@@ -7,26 +7,32 @@ from app.workflows.json_sanitizer import parse_json_blocks_from_text, safe_json_
 
 logger = logging.getLogger(__name__)
 
-GRAPHICS_DEVELOPER_PROMPT = """Ты — ведущий Motion Designer, Art Director и UI Designer в студии Synapix AI.
-Ты создаёшь КИНЕМАТОГРАФИЧЕСКИЕ ГРАФИЧЕСКИЕ ОВЕРЛЕИ для видеоконтента уровня Apple / Vox / MrBeast.
-Технологии (HTML, CSS, GSAP, SVG) — это инструменты реализации твоих дизайнерских решений.
-НЕ думай категориями HTML-компонентов. Думай категориями ВИЗУАЛЬНОЙ КОММУНИКАЦИИ.
+
+def _look_palette(look: dict | None) -> dict:
+    from app.services.content_look import default_look
+    base = default_look()
+    if look and isinstance(look.get("palette"), dict):
+        pal = {**base["palette"], **look["palette"]}
+        return pal
+    return base["palette"]
+
+GRAPHICS_DEVELOPER_PROMPT = """Ты — Motion Designer студии Synapix.
+Язык графики — SYNAPIX OPTICAL CUT: регистрационные L-риски по углам, волосяная 1px линия, Unbounded,
+один accent из Content Look. Это НЕ Canva, НЕ glass-indigo, НЕ чужой UI-кит, НЕ Odysser-орб ради орба.
+Цвета, поле TITLE и ease приходят из Content Look. Не выдумывай #6366F1 / #00E5FF / #FACC15.
+
+Технологии (HTML, CSS, GSAP, SVG) — инструменты. Думай категориями ВИЗУАЛЬНОЙ КОММУНИКАЦИИ.
 
 ---
-## DESIGN TOKENS — ОБЯЗАТЕЛЬНЫЕ ПЕРЕМЕННЫЕ
+## DESIGN TOKENS — БЕРИ ИЗ CSS VARS СЦЕНЫ (--look-*)
 
 ```css
-/* ЦВЕТА */
---bg-glass:      rgba(12, 12, 20, 0.72);
---bg-glass-2:    rgba(255, 255, 255, 0.04);
---border-glass:  rgba(255, 255, 255, 0.12);
---accent-blue:   #6366F1;   /* основной */
---accent-cyan:   #00E5FF;   /* энергичный */
---accent-gold:   #FACC15;   /* TikTok-выделение */
---accent-purple: #A855F7;   /* премиум */
---accent-green:  #22C55E;   /* успех, рост */
---text-primary:  #F5F7FA;
---text-secondary: rgba(245, 247, 250, 0.55);
+/* Фолбэк, если look не пришёл. Иначе СТРОГО var(--look-accent) и т.д. */
+--bg-glass:      var(--look-field, #0B0B0B);
+--accent:        var(--look-accent, #C8F542);
+--text-primary:  var(--look-paper, #F6F1E8);
+--look-ink:      #101010;
+
 
 /* ТЕНИ И СВЕЧЕНИЯ */
 --shadow-card: 0 24px 64px rgba(0,0,0,0.55), 0 4px 16px rgba(0,0,0,0.35);
@@ -59,8 +65,15 @@ GRAPHICS_DEVELOPER_PROMPT = """Ты — ведущий Motion Designer, Art Dire
 | **16:9** | `width: 34%` … `38%` (max-width: 38%) | max-height: 70% | `padding: 2cqw 2.4cqw` | left/right 4–6% ИЛИ bottom 8% |
 | **9:16** | `width: 86%` … `90%` (max-width: 90%) | max-height: 38% | `padding: 3.2cqw 4cqw` | top 5% ИЛИ bottom 7% (лицо 25–70% свободно) |
 
-### Full-screen graphic B-roll
-- Контейнер `.clip` = 100% × 100%. Внутренние карточки: 16:9 → до 42% ширины каждая; 9:16 → 88% ширины, стек `flex-col gap: 2.5cqh`.
+### Full-screen TITLE B-roll (рилс-перебивка)
+- Это НЕ карточка и НЕ bento. Это КИНЕМАТИЧЕСКИЙ ТАЙТЛ на весь кадр.
+- `.clip` = 100% × 100%, непрозрачный тёмный/цветной градиент (спикер скрыт).
+- Главный текст: **2–5 слов**, UPPERCASE, Unbounded 900.
+- 9:16: `font-size: var(--font-hero-916)` или 8–12cqw, по центру, line-height 0.95.
+- 16:9: `font-size: var(--font-hero-169)` или 4–6cqw.
+- Одно акцентное слово — цвет `var(--look-accent)`, без золотого градиента.
+- Опционально микро-лейбл сверху (4–10 букв, tracking 0.2em).
+- ЗАПРЕЩЕНО: glass-card, max-height 38%, плашка в углу, мелкая типографика, слово TITLE на экране.
 
 ### Запрет «гигантских» элементов
 - Overlay: одна плашка НЕ должна занимать >42% ширины кадра в 16:9 и >92% в 9:16.
@@ -83,9 +96,11 @@ GRAPHICS_DEVELOPER_PROMPT = """Ты — ведущий Motion Designer, Art Dire
    - Safe-zone лица: 25%–70% по высоте — не перекрывай.
    - Шрифты: `var(--font-*-916)` или cqw.
 
-3. **КРИТИЧЕСКОЕ ПРАВИЛО: ЗАПРЕТ ОБРЕЗАНИЯ КАРТОЧЕК СНИЗУ**:
+3. **КРИТИЧЕСКОЕ ПРАВИЛО: ПЛАШКА НИКОГДА НЕ ОБРЕЗАЕТСЯ**:
+   - ЗАПРЕЩЕНО: `overflow: hidden`, `overflow-x: hidden`, `text-overflow: ellipsis`, `white-space: nowrap` на плашке и тексте.
+   - Плашка: `width: fit-content; max-width: 90%` (9:16) / `38%` (16:9); `overflow: visible`.
+   - Текст: `white-space: normal; overflow-wrap: anywhere` — слово переносится, не режется посередине.
    - Нижнее якорение: `bottom: 8%` (не `top: 68%`).
-   - `max-height` по таблице выше; `box-sizing: border-box`.
    - ЗАПРЕЩЕНО: `vw`, `vh`, `vmin`, `vmax` — они ломают масштаб в превью.
 
 
@@ -98,78 +113,40 @@ GRAPHICS_DEVELOPER_PROMPT = """Ты — ведущий Motion Designer, Art Dire
 ```
 
 ---
-## 5 ТИПОВ КАРТОЧЕК — ВЫБИРАЙ ПОД КОНЦЕПТ
+## ЧИСТАЯ СЦЕНА — ЖЁСТКИЙ ЛИМИТ (рилс 2–4с)
 
-### 1. GLASSMORPHISM CARD (основная карточка)
-```css
-.glass-card {
-  background: rgba(12, 12, 20, 0.72);
-  backdrop-filter: blur(28px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 20px;
-  box-shadow: 0 24px 64px rgba(0,0,0,0.55);
-  overflow: hidden;
-}
-/* Верхняя светящаяся полоса */
-.glass-card::before {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, #6366F1, #00E5FF, transparent);
-}
-```
+Зритель не успевает прочитать больше двух строк. Перегруз = провал.
 
-### 2. BIG STAT CALLOUT (большая анимированная цифра)
-```html
-<div class="stat-value" id="stat-num">0</div>  <!-- GSAP countup -->
-<div class="stat-bar"><div class="stat-bar-fill" id="bar"></div></div>
-```
-```css
-.stat-value {
-  font-family: 'Unbounded', sans-serif; font-size: var(--font-stat-169, 4.2cqw); font-weight: 900;
-  background: linear-gradient(135deg, #FFFFFF 30%, #6366F1 100%);
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-}
-.stat-bar { height: 6px; background: rgba(255,255,255,0.1); border-radius: 999px; overflow: hidden; }
-.stat-bar-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #6366F1, #00E5FF);
-  box-shadow: 0 0 12px rgba(0,229,255,0.5); }
-```
-```javascript
-// GSAP countup
-gsap.to({ val: 0 }, { val: TARGET_NUM, duration: 1.8, ease: "power2.out", delay: 0.4,
-  onUpdate: function() { document.getElementById("stat-num").textContent = Math.round(this.targets()[0].val); } });
-gsap.to("#bar", { width: "78%", duration: 1.5, ease: "power2.out", delay: 0.5 });
-```
+**На экране РОВНО:**
+1. Один заголовок (2–6 слов)
+2. Один ключевой момент (цифра **или** 2–6 слов)
+3. Опционально одна абстрактная иконка (геометрия / 1 glyph, не набор эмодзи)
 
-### 3. KINETIC TYPOGRAPHY (кинетический леттеринг)
-```css
-.kinetic-hero { font-family: 'Unbounded', sans-serif; font-size: var(--font-hero-169, 3.2cqw); font-weight: 900; line-height: 1.05; color: #F5F7FA; }
-.kinetic-accent {
-  background: linear-gradient(135deg, #FACC15 0%, #F59E0B 100%);
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-  filter: drop-shadow(0 0 20px rgba(250,204,21,0.4));
-}
-```
+**ЗАПРЕЩЕНО:** bento, сетки 2×2, process steps, списки «3 причины», абзацы, графики, таймлайны, стрелки между карточками, 2+ карточки, нижние подписи-эссе, бейджи+лейблы+капшены сразу.
 
-### 4. LOWER THIRD (плашка-тайтл)
-```css
-.lower-third {
-  position: absolute; bottom: 8%; left: 6%;
-  background: rgba(10, 10, 18, 0.85); backdrop-filter: blur(20px);
-  border: 1px solid rgba(255,255,255,0.1); border-left: 4px solid #6366F1;
-  border-radius: 0 14px 14px 0; padding: 18px 28px;
-}
-.lt-name { font-family: 'Inter', sans-serif; font-size: var(--font-title-169, 1.9cqw); font-weight: 700; color: #F5F7FA; }
-.lt-role { font-family: 'Inter', sans-serif; font-size: var(--font-body-169, 1.25cqw); color: rgba(245,247,250,0.60); }
-```
+---
+## 3 ТИПА СЦЕН (как Odysser: элемент за элементом, не «просто плашка»)
 
-### 5. PROCESS STEPS (список шагов)
-```css
-.step-num { font-family: 'Unbounded'; font-size: 2cqw; font-weight: 900; color: #6366F1; min-width: 3cqw; }
-.step-text { font-family: 'Inter'; font-size: var(--font-body-169, 1.25cqw); font-weight: 500; color: #F5F7FA; }
-.step-divider { height: 1px; background: rgba(255,255,255,0.08); }
-```
+Графика — это СТОРИТЕЛЛИНГ. Каждый холст анимируется по слоям: геометрия → обводка → слово → акцент.
+Лицо спикера — герой кадра. Графика его обрамляет, не закрывает коробкой.
+
+### 1. ABSTRACT ACCENT (по умолчанию для overlay) — КАК В ПРОМО ODYSSER
+НЕТ glass-card. Свободные слои на прозрачном `.clip`:
+- 1 короткая фраза (2–6 слов) — `.headline`, Unbounded, без подложки
+- опционально ключ — `.key` как тонкий pill/chip, не карточка
+- 2–4 абстрактных элемента: орб/градиентный шар, кольцо SVG, draw-on линия, угловые скобки, точка-акцент
+Анимация ПОЭЛЕМЕНТНО (stagger 0.06–0.12): сначала геометрия, потом слово, потом underline.
+Safe-zone: top 5–12% или bottom 8–14% (9:16); left/right 5% (16:9). Лицо 25–70% свободно.
+`data-plate="1"` вешай на блок `.abs-copy` (текст), не на орб.
+
+### 2. CLEAN PLATE — только цифра, имя, «закон»
+Одна glass-card: заголовок + ключ. Не используй как дефолт.
+
+### 3. KINETIC TITLE (fullscreen)
+2–5 слов на весь кадр. Без карточки. Геометрическая метка сверху ок.
+
+### 4. BIG STAT — только если ключ это число
+Лейбл мелкий + огромная цифра. Без progress-bar и второй подписи.
 
 ---
 ## GSAP СИНХРОНИЗАЦИЯ — ОБЯЗАТЕЛЬНО
@@ -182,17 +159,13 @@ window.__timelines["main"] = tl;
 
 // Вход карточки (стандарт)
 tl.fromTo("#card",
-  { opacity: 0, y: 60, scale: 0.88, rotateX: 12 },
-  { opacity: 1, y: 0, scale: 1, rotateX: 0, duration: 0.75, ease: "back.out(1.4)" }, 0.1
+  { opacity: 0, y: 28, scale: 0.98 },
+  { opacity: 1, y: 0, scale: 1, duration: 0.55, ease: "power3.out" }, 0.1
 );
 // Выход карточки (за 0.5s до конца сцены)
-tl.to("#card", { opacity: 0, y: -40, scale: 0.94, duration: 0.45, ease: "power2.in" }, DURATION - 0.6);
+tl.to("#card", { opacity: 0, y: -24, scale: 0.98, duration: 0.4, ease: "power2.in" }, DURATION - 0.6);
 
-// Stagger для нескольких элементов
-tl.fromTo(".item",
-  { opacity: 0, y: 40 },
-  { opacity: 1, y: 0, duration: 0.5, stagger: 0.1, ease: "power3.out" }, 0.2
-);
+// Stagger только для слов TITLE. На overlay — один вход карточки, без роя .item.
 
 // Lower Third вход
 tl.fromTo("#lt", { opacity: 0, x: -60 }, { opacity: 1, x: 0, duration: 0.55, ease: "power3.out" }, 0.2);
@@ -222,22 +195,19 @@ tl.fromTo("#arrow-path",
 - `safe_zone="right"`  → `left: 50%; width: 44%; bottom: 8%; max-height: 80%;`
 - `safe_zone="top"`    → `top: 6%; left: 50%; transform: translateX(-50%); width: 88%; max-height: 35%;`
 - `safe_zone="bottom"` → `bottom: 8%; left: 6%; width: 88%; max-height: 75%;` (ОБЯЗАТЕЛЬНО якорить через `bottom: 8%`, НЕ через `top: 68%`, чтобы карточка не срезалась снизу!)
-- `mode="full_broll"`  → весь экран, закрывает видео полностью, тёмный градиентный фон
+- `mode="full_broll"` / `layout="fullscreen"` → TITLE на весь кадр: огромные 2–5 слов, непрозрачный фон, без glass-card
 
 ---
 ## МАППИНГ: КОНЦЕПТ → ШАБЛОН
 
 | Концепт | Шаблон |
 |---|---|
-| "рост на X%" / цифра | Stat Callout + progress bar |
-| "3 шага / причины" | Process Steps Card |
-| "имя / должность" | Lower Third |
-| "главная мысль" | Kinetic Typography |
-| "сравнение A vs B" | Bento 2 карточки |
-| "объяснение концепции" | Full-screen Bento |
-| "статистика / данные" | Stat + SVG chart |
-| "хронология / шаги" | SVG Timeline |
-| "цитата" | Quote Card + accent border |
+| тезис / глагол / «суть» / эмоция | ABSTRACT ACCENT (слово + орб/линия, без плашки) |
+| цифра / % / сумма | Plate или BIG STAT |
+| термин / закон / имя | Plate: заголовок + ключ |
+| главный хук ролика | Fullscreen kinetic TITLE (2–5 слов) |
+
+Шаги/причины/хронология → одна фраза + геометрия. Не рисуй список.
 
 ---
 ## АНТИ-ПАТТЕРНЫ — НИКОГДА
@@ -245,11 +215,14 @@ tl.fromTo("#arrow-path",
 ❌ Белый или светлый фон карточки (только тёмный rgba)
 ❌ font-family: Arial (только Inter / Unbounded / Manrope)
 ❌ font-size через vw/vh (ломает пропорции при смене формата и в iframe-превью)
-❌ Гигантская overlay-плашка (>42% ширины в 16:9 или >92% в 9:16)
+❌ Fullscreen TITLE как glass-card / bento / маленькая плашка — только огромные 2–5 слов на весь кадр
 ❌ GSAP без window.__timelines["main"] — рендер сломается
 ❌ Использование `top: 68%` или фиксированного отступа сверху, из-за которого нижняя часть плашки уходит за нижнюю границу экрана
 ❌ Выход элементов за Safe Area (`bottom < 6%` или `top < 4%`)
 ❌ Перекрытие зоны лица (25%-70% высоты)
+❌ Более 2 текстовых блоков на плашке (заголовок + ключ — потолок)
+❌ Bento / process steps / списки / графики / таймлайны / 2+ карточки
+❌ Абзац или подпись длиннее 6 слов
 ❌ Более 3 акцентных цветов в одной сцене
 ❌ Анимации без ease параметра
 ❌ Статичные элементы без анимации входа/выхода
@@ -257,7 +230,8 @@ tl.fromTo("#arrow-path",
 ---
 ## SELF-REVIEW ПЕРЕД ОТПРАВКОЙ
 
-✔ Карточка гарантированно вмещается на 100% по высоте (отступ от нижнего края `bottom: 8%`, ни одна строка текста не обрезана)
+✔ Overlay: либо ABSTRACT (слово + 2–4 геом. слоя, без glass-card), либо plate только для цифры/имени
+✔ Текст и геометрия не обрезаны; overflow:visible; лицо 25–70% свободно
 ✔ safe_zone соблюдена — лицо спикера не перекрыто
 ✔ window.__timelines["main"] зарегистрирован
 ✔ Контейнер .clip с data-start и data-duration присутствует
@@ -329,6 +303,258 @@ def extract_robust_html(content: str) -> str:
     return ""
 
 
+def _split_headline_key(concept_prompt: str) -> tuple:
+    """Pull a short headline + optional key line from a messy concept string."""
+    raw = concept_prompt or ""
+    raw = re.split(r"Контекст речи:|Настроение:", raw, maxsplit=1)[0]
+    raw = re.sub(r"^Заголовок:\s*", "", raw, flags=re.I).strip()
+    raw = raw.strip(" «»\"'")
+    if "|" in raw:
+        left, right = raw.split("|", 1)
+        headline = " ".join(left.split()[:6]).strip()
+        key = " ".join(right.split()[:6]).strip()
+        return headline or "КЛЮЧЕВОЕ", key
+    words = [w for w in re.split(r"\s+", raw) if w]
+    if not words:
+        return "КЛЮЧЕВОЕ", ""
+    if len(words) <= 4:
+        return " ".join(words), ""
+    return " ".join(words[:4]), " ".join(words[4:8])
+
+
+def _pick_scene_kind(
+    mode: str,
+    layout: str,
+    scene_template: str,
+    concept_prompt: str,
+) -> str:
+    """title | plate | abstract — Odysser-style mix, not plates-only."""
+    mode_l = (mode or "").lower()
+    layout_l = (layout or "").lower()
+    st = (scene_template or "").lower().replace(" ", "_")
+    if mode_l == "full_broll" or layout_l in ("fullscreen", "cover", "full", "full_broll"):
+        return "title"
+    if st in ("kinetic_title", "title", "fullscreen"):
+        return "title"
+    if st in ("stat_card", "headline", "plate", "card", "lower_third", "lower-third"):
+        return "plate"
+    if st in ("abstract", "accent", "motion", "odysser", "orbital"):
+        return "abstract"
+    headline, key = _split_headline_key(concept_prompt)
+    blob = f"{headline} {key}"
+    if re.search(r"\d|%|\$|€|₽", blob):
+        return "plate"
+    return "abstract"
+
+
+def _overlay_is_overloaded(html: str) -> bool:
+    if not html:
+        return True
+    if re.search(r"bento|process[-_ ]?step|feature[-_ ]?grid|timeline|bar-chart|step-num", html, re.I):
+        return True
+    if len(re.findall(r"<li\b", html, re.I)) >= 3:
+        return True
+    text_blocks = len(re.findall(r"<(h[1-6]|p|blockquote|figcaption)\b", html, re.I))
+    return text_blocks > 3
+
+
+def _abstract_accent_fallback(concept_prompt: str, start_time: float, duration: float, aspect_ratio: str, layout: str = "overlay", look: dict | None = None) -> str:
+    """Optical Cut: floating copy + registration ticks. No glass plate."""
+    pal = _look_palette(look)
+    accent = pal["accent"]
+    paper = pal["paper"]
+    headline, key = _split_headline_key(concept_prompt)
+    headline = headline.upper()
+    ar_l = (aspect_ratio or "9:16").lower()
+    is_v = "9:16" in ar_l or "vertical" in ar_l or "portrait" in ar_l
+    variant = sum(ord(c) for c in (headline + key)) % 3
+    top = "58%" if layout == "split" else ("8%" if is_v else "14%")
+    left = "50%" if is_v or layout == "split" else "6%"
+    transform = "translateX(-50%)" if is_v or layout == "split" else "none"
+    title_fs = "5.2cqw" if is_v else "2.1cqw"
+    key_fs = "3.4cqw" if is_v else "1.45cqw"
+    hold = max(0.85, float(duration) - 0.7)
+    key_html = (
+        f'<div class="key abs-chip" id="abs-key">{key}</div>'
+        if key else ""
+    )
+    ticks = (
+        '<div class="abs-tick abs-tick-tl" id="abs-br-a" aria-hidden="true"></div>'
+        '<div class="abs-tick abs-tick-br" id="abs-br-b" aria-hidden="true"></div>'
+    )
+    ring = (
+        '<svg class="abs-ring" id="abs-ring" viewBox="0 0 80 80" aria-hidden="true">'
+        f'<circle cx="40" cy="40" r="34" fill="none" stroke="{accent}" stroke-width="1.2" '
+        'opacity="0.85" stroke-dasharray="214" stroke-dashoffset="214" id="abs-ring-path"/></svg>'
+        if variant == 0 else ""
+    )
+    stroke = (
+        '<svg class="abs-stroke" id="abs-stroke" viewBox="0 0 200 8" aria-hidden="true">'
+        f'<line x1="0" y1="4" x2="200" y2="4" stroke="{accent}" stroke-width="2" '
+        'stroke-linecap="round" stroke-dasharray="200" stroke-dashoffset="200" id="abs-line"/></svg>'
+    )
+    return f"""
+<div class="clip" data-start="{start_time}" data-duration="{duration}"
+     style="position:absolute;inset:0;width:100%;height:100%;overflow:visible;background:transparent;">
+  {ticks}
+  {ring}
+  <div class="abs-copy" data-plate="1" id="card"
+       style="position:absolute;top:{top};left:{left};transform:{transform};overflow:visible;">
+    <div class="plate-content" data-plate-content="1">
+      <div class="headline" id="abs-head">{headline}</div>
+      {stroke}
+      {key_html}
+    </div>
+  </div>
+</div>
+<style>
+.abs-copy {{ overflow:visible; width:max-content; max-width:90%; }}
+.abs-copy .headline {{
+  font-family:'Unbounded',sans-serif;font-weight:800;font-size:{title_fs};
+  line-height:1.08;color:{paper};letter-spacing:-0.03em;margin:0;
+  white-space:normal;overflow-wrap:normal;word-break:normal;
+  text-shadow:0 8px 28px rgba(0,0,0,0.45);
+}}
+.abs-chip {{
+  display:inline-block;margin-top:0.55em;padding:0.22em 0.7em;
+  font-family:'Unbounded',sans-serif;font-weight:800;font-size:{key_fs};
+  color:{pal["ink"]};background:{accent};border-radius:2px;letter-spacing:-0.02em;
+}}
+.abs-ring {{
+  position:absolute;top:72%;left:8%;width:11cqw;height:11cqw;overflow:visible;pointer-events:none;
+}}
+.abs-stroke {{ display:block;width:72%;max-width:28cqw;height:8px;margin-top:0.45em;overflow:visible; }}
+.abs-tick {{
+  position:absolute;width:2.6cqw;height:2.6cqw;border:1.5px solid {accent};pointer-events:none;
+}}
+.abs-tick-tl {{ top:7%;left:7%;border-right:none;border-bottom:none; }}
+.abs-tick-br {{ bottom:14%;right:8%;border-left:none;border-top:none; }}
+</style>
+<script>
+window.__timelines = window.__timelines || {{}};
+if (window.gsap) {{
+  const tl = gsap.timeline({{ paused: true }});
+  window.__timelines["main"] = tl;
+  tl.fromTo("#abs-br-a, #abs-br-b", {{ opacity: 0 }},
+    {{ opacity: 1, duration: 0.4, stagger: 0.06, ease: "power2.out" }}, 0.04);
+  tl.fromTo("#abs-ring-path", {{ strokeDashoffset: 214 }},
+    {{ strokeDashoffset: 0, duration: 0.7, ease: "power2.inOut" }}, 0.1);
+  tl.fromTo("#abs-head", {{ opacity: 0, y: 18 }},
+    {{ opacity: 1, y: 0, duration: 0.48, ease: "power3.out" }}, 0.16);
+  tl.fromTo("#abs-line", {{ strokeDashoffset: 200 }},
+    {{ strokeDashoffset: 0, duration: 0.4, ease: "power2.out" }}, 0.3);
+  tl.fromTo("#abs-key", {{ opacity: 0, y: 8 }},
+    {{ opacity: 1, y: 0, duration: 0.32, ease: "power2.out" }}, 0.38);
+  tl.to("#card, #abs-ring, #abs-br-a, #abs-br-b",
+    {{ opacity: 0, y: -12, duration: 0.32, ease: "power2.in" }}, {hold});
+}}
+</script>
+"""
+
+
+def _clean_overlay_fallback(concept_prompt: str, start_time: float, duration: float, aspect_ratio: str, layout: str = "overlay", look: dict | None = None) -> str:
+    """One headline + one key + hairline mark. Optical Cut plate."""
+    pal = _look_palette(look)
+    accent = pal["accent"]
+    paper = pal["paper"]
+    field = pal["field"]
+    headline, key = _split_headline_key(concept_prompt)
+    headline = headline.upper()
+    ar_l = (aspect_ratio or "9:16").lower()
+    is_v = "9:16" in ar_l or "vertical" in ar_l or "portrait" in ar_l
+    top_pos = "55%" if layout == "split" else ("6%" if is_v else "12%")
+    left_pos = "50%" if is_v or layout == "split" else "5%"
+    transform = "translateX(-50%)" if is_v or layout == "split" else "none"
+    title_fs = "4.4cqw" if is_v else "1.85cqw"
+    key_fs = "6.2cqw" if is_v else "2.6cqw"
+    if key and re.search(r"[\d%]", key):
+        key_fs = "7.4cqw" if is_v else "3.2cqw"
+    hold = max(0.8, float(duration) - 0.65)
+    key_html = (
+        f'<div class="key" style="font-family:Unbounded,sans-serif;font-weight:900;font-size:{key_fs};'
+        f'line-height:1.05;color:{accent};margin-top:0.35em;letter-spacing:-0.02em;">{key}</div>'
+        if key else ""
+    )
+    return f"""
+<div class="clip" data-start="{start_time}" data-duration="{duration}">
+  <div class="glass-card" data-plate="1" id="card"
+       style="position:absolute;top:{top_pos};left:{left_pos};transform:{transform};
+              width:max-content;max-width:var(--plate-max-w,90%);
+              overflow:visible;box-sizing:border-box;padding:var(--plate-pad,3cqw 3.6cqw);
+              background:{field}ee;border:1px solid {accent}55;
+              border-radius:4px;">
+    <div class="plate-content" data-plate-content="1">
+    <div class="mark" aria-hidden="true"
+         style="width:1.4em;height:1.4em;border:1.5px solid {accent};border-radius:0;
+                margin-bottom:0.7em;opacity:0.9;"></div>
+    <div class="headline" style="font-family:Unbounded,sans-serif;font-weight:800;font-size:{title_fs};
+                line-height:1.12;color:{paper};letter-spacing:-0.02em;margin:0;
+                white-space:normal;overflow-wrap:normal;word-break:normal;">{headline}</div>
+    {key_html}
+    </div>
+  </div>
+</div>
+<script>
+window.__timelines = window.__timelines || {{}};
+if (window.gsap) {{
+  const tl = gsap.timeline({{ paused: true }});
+  window.__timelines["main"] = tl;
+  tl.fromTo("#card", {{ opacity: 0, y: 28 }},
+    {{ opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }}, 0.08);
+  tl.to("#card", {{ opacity: 0, y: -18, duration: 0.36, ease: "power2.in" }}, {hold});
+}}
+</script>
+"""
+
+
+def _kinetic_title_fallback(concept_prompt: str, start_time: float, duration: float, aspect_ratio: str, look: dict | None = None) -> str:
+    """Fullscreen Reels title: 2–5 words, Optical Cut field."""
+    pal = _look_palette(look)
+    raw = re.sub(r"^(Заголовок:\s*|Контекст речи:.*|Настроение:.*)", "", concept_prompt or "", flags=re.I)
+    words = [w for w in re.split(r"\s+", raw.strip()) if w and not w.startswith("«")]
+    title_words = words[:5] if words else ["КЛЮЧЕВАЯ", "МЫСЛЬ"]
+    accent_word = title_words[-1].upper() if title_words else ""
+    ar_l = (aspect_ratio or "9:16").lower()
+    is_v = "9:16" in ar_l or "vertical" in ar_l or "portrait" in ar_l
+    hero = "9.2cqw" if is_v else "4.6cqw"
+    hold = max(0.8, float(duration) - 0.7)
+    parts = []
+    for i, w in enumerate(title_words):
+        cls = "kinetic-accent" if w.upper() == accent_word and i == len(title_words) - 1 else "kinetic-hero"
+        parts.append(f'<span class="{cls} title-word" style="display:inline-block;margin:0 0.18em 0.08em 0;">{w.upper()}</span>')
+    words_html = "".join(parts)
+    return f"""
+<div class="clip" data-start="{start_time}" data-duration="{duration}"
+     style="position:absolute;inset:0;width:100%;height:100%;
+            background:{pal["field"]};
+            display:flex;flex-direction:column;align-items:center;justify-content:center;
+            padding:8% 7%;box-sizing:border-box;text-align:center;">
+  <div class="abs-tick abs-tick-tl" aria-hidden="true"></div>
+  <div class="abs-tick abs-tick-br" aria-hidden="true"></div>
+  <h1 style="margin:0;max-width:92%;font-size:{hero};line-height:0.95;letter-spacing:-0.03em;">{words_html}</h1>
+</div>
+<style>
+.abs-tick {{ position:absolute;width:2.4cqw;height:2.4cqw;border:1.5px solid {pal["accent"]}; }}
+.abs-tick-tl {{ top:6%;left:7%;border-right:none;border-bottom:none; }}
+.abs-tick-br {{ bottom:8%;right:7%;border-left:none;border-top:none; }}
+.kinetic-hero {{ font-family:'Unbounded',sans-serif;font-weight:900;color:{pal["paper"]}; }}
+.kinetic-accent {{
+  font-family:'Unbounded',sans-serif;font-weight:900;color:{pal["accent"]};
+}}
+</style>
+<script>
+window.__timelines = window.__timelines || {{}};
+if (window.gsap) {{
+  const tl = gsap.timeline({{ paused: true }});
+  window.__timelines["main"] = tl;
+  tl.fromTo(".title-word", {{ opacity: 0, y: 32 }},
+    {{ opacity: 1, y: 0, duration: 0.5, stagger: 0.07, ease: "power3.out" }}, 0.08);
+  tl.to(".title-word", {{ opacity: 0, y: -22, duration: 0.36, ease: "power2.in" }}, {hold});
+}}
+</script>
+"""
+
+
 def _rewrite_viewport_units(css_or_html: str) -> str:
     """Map vw/vh/vmin/vmax → cqw/cqh so sizes track the design canvas, not the iframe chrome."""
     out = css_or_html
@@ -339,18 +565,22 @@ def _rewrite_viewport_units(css_or_html: str) -> str:
     return out
 
 
-def _proportional_tokens_css(aspect_ratio: str, mode: str = "overlay") -> str:
+def _proportional_tokens_css(aspect_ratio: str, mode: str = "overlay", look: dict | None = None) -> str:
     """Inject design tokens + plate caps so 16:9 / 9:16 stay visually balanced."""
-    ar = (aspect_ratio or "16:9").lower().replace(" ", "")
+    from app.services.content_look import look_css_vars
+    ar = (aspect_ratio or "9:16").lower().replace(" ", "")
     is_vertical = ar in ("9:16", "vertical", "portrait", "shorts", "reels") or "9:16" in ar
+    look_vars = look_css_vars(look)
     if is_vertical:
-        tokens = """
+        tokens = f"""
+  {look_vars}
   --font-hero-169: 3.2cqw; --font-title-169: 1.9cqw; --font-stat-169: 4.2cqw; --font-body-169: 1.25cqw;
   --font-hero-916: 7.2cqw; --font-title-916: 4.6cqw; --font-stat-916: 9.5cqw; --font-body-916: 2.8cqw;
   --plate-max-w: 90%; --plate-max-h: 38%; --plate-pad: 3.2cqw 4cqw;
 """
     else:
-        tokens = """
+        tokens = f"""
+  {look_vars}
   --font-hero-169: 3.2cqw; --font-title-169: 1.9cqw; --font-stat-169: 4.2cqw; --font-body-169: 1.25cqw;
   --font-hero-916: 7.2cqw; --font-title-916: 4.6cqw; --font-stat-916: 9.5cqw; --font-body-916: 2.8cqw;
   --plate-max-w: 38%; --plate-max-h: 70%; --plate-pad: 2cqw 2.4cqw;
@@ -363,14 +593,24 @@ def _proportional_tokens_css(aspect_ratio: str, mode: str = "overlay") -> str:
   .clip .glass-card, .clip .card, .clip .plate, .clip .lower-third,
   .clip [class*="glass"], .clip [class*="bento"], .clip [class*="Card"],
   .clip [data-plate], .clip [data-synapix-plate] {{
-    max-width: min(100%, var(--plate-max-w)) !important;
-    max-height: min(100%, var(--plate-max-h)) !important;
+    max-width: none !important;
+    max-height: none !important;
+    overflow: visible !important;
     box-sizing: border-box !important;
+    white-space: normal !important;
+    text-overflow: unset !important;
+  }}
+  .clip .glass-card *, .clip .card *, .clip .plate *,
+  .clip [data-plate] *, .clip [data-synapix-plate] * {{
+    overflow: visible !important;
+    white-space: normal !important;
+    text-overflow: unset !important;
+    overflow-wrap: normal !important;
+    word-break: normal !important;
   }}
   /* Soft default for a single absolute card without plate class */
   .clip > div[style*="position"][style*="absolute"] {{
-    max-width: min(100%, var(--plate-max-w));
-    max-height: min(100%, var(--plate-max-h));
+    overflow: visible;
     box-sizing: border-box;
   }}
 """
@@ -421,7 +661,8 @@ def clean_html_fragment(
     start_time: float,
     duration: float,
     mode: str = "overlay",
-    aspect_ratio: str = "16:9",
+    aspect_ratio: str = "9:16",
+    look: dict | None = None,
 ) -> str:
     """Cleans HTML fragment to be embedded inside Remotion/Hyperframes root container cleanly without losing CDN scripts or styles."""
     html = raw_html.strip()
@@ -429,6 +670,10 @@ def clean_html_fragment(
         return ""
 
     html = _rewrite_viewport_units(html)
+    if mode != "full_broll":
+        html = re.sub(r'overflow(?:-x|-y)?\s*:\s*hidden', 'overflow: visible', html, flags=re.I)
+        html = re.sub(r'\boverflow-hidden\b', '', html)
+        html = re.sub(r'\btruncate\b', '', html)
 
     # 1. Extract all external script tags (e.g. GSAP, Three.js, Tailwind, Lottie, Google Fonts)
     scripts = re.findall(r'<script[^>]*src=[\'"][^\'"]+[\'"][^>]*>\s*</script>', html, re.DOTALL | re.IGNORECASE)
@@ -452,7 +697,7 @@ def clean_html_fragment(
     if mode != "full_broll":
         transparency_override = "<style>\n  html, body, .clip, #root { background: transparent !important; background-color: transparent !important; }\n</style>\n"
 
-    proportional = _proportional_tokens_css(aspect_ratio, mode=mode)
+    proportional = _proportional_tokens_css(aspect_ratio, mode=mode, look=look)
 
     fragment = f"{script_str}\n{style_str}\n{proportional}\n{transparency_override}{body_content}".strip()
 
@@ -482,6 +727,8 @@ async def generate_custom_graphics_code(
     visual_frame_context: str = None,
     mode: str = "overlay",
     activity_step: str = None,
+    scene_template: str = None,
+    look: dict | None = None,
 ) -> Dict[str, Any]:
     """Generates custom animated HTML code based on narrative requirements, graphics mode, and layout directives."""
     logger.info(f"🎨 Graphics Developer Agent initiated for concept: '{concept_prompt}' (Mode: {mode}, Layout: {layout})")
@@ -502,32 +749,36 @@ async def generate_custom_graphics_code(
         except Exception:
             pass
 
+    kind = _pick_scene_kind(mode, layout, scene_template or "", concept_prompt)
     mode_ru = {
-        "overlay": "стеклянная плашка",
-        "full_broll": "полноэкранный графический B-roll",
-        "split": "split-layout",
-    }.get(mode, mode)
+        "title": "кинетический TITLE",
+        "plate": "стеклянная плашка",
+        "abstract": "абстрактный акцент (Odysser)",
+    }.get(kind, mode)
     _emit_progress(
         f"Пишу HTML/GSAP для «{(concept_prompt or '')[:70]}» — тип: {mode_ru}, {aspect_ratio}…",
         progress=0.74,
     )
     
     style_hint = ""
-    try:
-        from app.services.clip_service import _init_clip
-        model, _ = _init_clip()
-        if model:
-            style_hint = " ИСПОЛЬЗУЙ РАЗМЫТЫЙ СТЕКЛЯННЫЙ ФОН BENTO, АКЦЕНТНЫЙ ШРИФТ UNBOUNDED И КИНЕТИЧЕСКИЙ ВЫЛЕТ С ЭФФЕКТОМ VOX/APPLE."
-    except Exception:
-        pass
+    if kind == "abstract":
+        style_hint = " Optical Cut: слово + L-риски / линия, БЕЗ glass-card."
+    elif kind == "plate":
+        style_hint = " Компактная плашка под look, Unbounded на акценте, лицо спикера видно."
 
     mode_instruction = ""
-    if mode == "full_broll":
-        mode_instruction = """
-        - ТИП СЦЕНЫ: ПОЛНОЭКРАННАЯ ГРАФИЧЕСКАЯ ПЕРЕБИВКА (Full-screen Graphic B-roll).
-        - ЭТА СЦЕНА ДОЛЖНА ПОЛНОСТЬЮ ЗАКРЫТЬ ВИДЕОПОТОК СПИКЕРА!
-        - Внутри контейнера `.clip` обязательно добавь глубокий темный градиентный фон (например, bg-gradient-to-br from-neutral-950 via-slate-900 to-indigo-950), 3D частицы Three.js или перспективную сетку, крупную типографику и Bento-карты.
-        - Размеры внутренних карточек: % / cqw. В 16:9 карточка ≤42% ширины; в 9:16 ≤88% ширины.
+    if kind == "title" or mode == "full_broll":
+        is_v = "9:16" in (aspect_ratio or "").lower() or "vertical" in (aspect_ratio or "").lower() or "portrait" in (aspect_ratio or "").lower()
+        hero = "var(--font-hero-916, 9cqw)" if is_v else "var(--font-hero-169, 4.4cqw)"
+        mode_instruction = f"""
+        - ТИП СЦЕНЫ: TITLE B-ROLL (рилс-перебивка), НЕ карточка.
+        - Полностью закрой спикера: непрозрачный фон `.clip` = var(--look-field).
+        - ЗАПРЕЩЕНО: glass-card, bento, lower-third, max-height 38%, плашка в углу, слово TITLE на экране.
+        - Главный текст: 2–5 слов из концепта, UPPERCASE, Unbounded 900, по центру.
+        - font-size: {hero}; line-height: 0.95; letter-spacing: -0.03em.
+        - Одно ключевое слово — class="kinetic-accent" цвет var(--look-accent), без gold-градиента.
+        - Опционально микро-лейбл сверху (tracking 0.25em, opacity 0.5).
+        - GSAP: слова влетают stagger 0.08, hold, вылет за 0.45s до конца. ease power3.out / power2.in.
         """
     else:
         ar_l = (aspect_ratio or "16:9").lower()
@@ -538,14 +789,27 @@ async def generate_custom_graphics_code(
         else:
             size_rule = "width: 36%; max-width: 38%; max-height: 70%; padding: 2cqw 2.4cqw; font-size заголовка ~1.9cqw"
             place_rule = "слева/справа (left/right: 5%) или снизу (bottom: 8%), центр с лицом открыт"
-        mode_instruction = f"""
-        - ТИП СЦЕНЫ: КОМПАКТНАЯ СТЕКЛЯННАЯ ПЛАШКА (Floating Glass Overlay).
-        - Фон `.clip` = transparent. Не закрывай весь кадр тёмным фоном.
+        if kind == "abstract":
+            mode_instruction = f"""
+        - ТИП СЦЕНЫ: ABSTRACT ACCENT (Optical Cut). НЕ плашка.
+        - Фон `.clip` = transparent. Лицо спикера видно.
+        - ЗАПРЕЩЕНО: glass-card, сплошная тёмная подложка под весь текст, bento, списки, indigo-орбы.
+        - Слои отдельно: (1) L-риски по углам (2) заголовок 2–6 слов без фона (3) draw-on линия var(--look-accent) (4) опционально chip-ключ.
+        - data-plate="1" на `.abs-copy` (текстовый кластер), не на орб.
+        - ПОЗИЦИЯ: {place_rule}. Лицо 25–70% свободно.
+        - GSAP поэлементно: геометрия → слово → underline → chip. Stagger 0.06–0.12.
+        - overflow:visible. Единицы: % / cqw / cqh.
+        """
+        else:
+            mode_instruction = f"""
+        - ТИП СЦЕНЫ: ЧИСТАЯ ПЛАШКА (только цифра / имя / закон).
+        - Фон `.clip` = transparent. Не закрывай весь кадр.
         - Добавь class="glass-card" или data-plate="1" на корневую плашку.
         - РАЗМЕР (строго): {size_rule}.
         - ПОЗИЦИЯ: {place_rule}.
-        - Единицы: только % / cqw / cqh. Запрещены vw/vh и гигантские px-шрифты (>80px в 16:9).
-        - Стекло: rgba(12,12,20,0.8) + backdrop-filter: blur(24px); border-radius: 20–28px.
+        - СОДЕРЖИМОЕ: 1 заголовок + 1 ключ + опционально 1 геометрическая метка.
+        - ЗАПРЕЩЕНО: списки, bento, шаги, абзацы, графики, 2+ карточки.
+        - Единицы: только % / cqw / cqh.
         """
 
 
@@ -564,11 +828,14 @@ async def generate_custom_graphics_code(
     if visual_frame_context:
         user_input += f"\n    - Визуальный контекст кадра (VLM / Говорящая голова): \"{visual_frame_context}\"\n"
         
-    user_input += "\nНапиши кастомную премиальную верстку с анимациями, используя GSAP и Tailwind CSS."
+    user_input += "\nСобери сцену поэлементно (геометрия, слово, акцент). GSAP вход/выход. Без Tailwind-простыни."
+    from app.services.content_look import graphics_look_brief
+    look_brief = graphics_look_brief(look)
+    system_prompt = GRAPHICS_DEVELOPER_PROMPT + "\n" + look_brief
     
     try:
         _emit_progress("Жду ответ Graphics LLM (вёрстка + анимация)…", progress=0.78)
-        response = await invoke_graphics_llm(GRAPHICS_DEVELOPER_PROMPT, user_input)
+        response = await invoke_graphics_llm(system_prompt, user_input)
         content = response.content if hasattr(response, 'content') else str(response)
         _emit_progress("Разбираю HTML/GSAP и нормализую размеры под формат…", progress=0.82)
         
@@ -596,9 +863,23 @@ async def generate_custom_graphics_code(
         if not html_code:
             raise ValueError("Could not extract any valid HTML code block from LLM output")
 
+        # Fullscreen must be a title plate, not a leftover glass card
+        if kind == "title" and re.search(r"glass-card", html_code, re.I):
+            if not re.search(r"kinetic-hero|kinetic-accent|font-hero", html_code, re.I):
+                logger.info("Fullscreen HTML looked like an overlay card — using kinetic title fallback")
+                html_code = _kinetic_title_fallback(concept_prompt, start_time, duration, aspect_ratio, look=look)
+        elif kind == "abstract" and (
+            _overlay_is_overloaded(html_code) or re.search(r"glass-card", html_code, re.I)
+        ):
+            logger.info("Abstract scene fell back to Optical Cut accent (busy or plate-like HTML)")
+            html_code = _abstract_accent_fallback(concept_prompt, start_time, duration, aspect_ratio, layout, look=look)
+        elif kind == "plate" and _overlay_is_overloaded(html_code):
+            logger.info("Overlay HTML too busy — using clean headline+key fallback")
+            html_code = _clean_overlay_fallback(concept_prompt, start_time, duration, aspect_ratio, layout, look=look)
+
         # 3. Clean and normalize HTML fragment for hyperframes engine
         cleaned_html = clean_html_fragment(
-            html_code, start_time, duration, mode=mode, aspect_ratio=aspect_ratio
+            html_code, start_time, duration, mode=mode, aspect_ratio=aspect_ratio, look=look
         )
         
         logger.info(f"⚡ Graphics Developer: Successfully extracted and cleaned HTML scene ({len(cleaned_html)} chars)")
@@ -610,28 +891,21 @@ async def generate_custom_graphics_code(
         }
     except Exception as e:
         logger.error(f"⚠️ Graphics Developer code generation failed: {e}")
-        _emit_progress(f"LLM не ответил корректно — ставлю fallback-плашку. ({e})", status="running", progress=0.83)
-        ar_l = (aspect_ratio or "16:9").lower()
-        is_v = "9:16" in ar_l or "vertical" in ar_l
-        top_pos = '55%' if layout == 'split' else ('6%' if is_v else '12%')
-        left_pos = '50%' if is_v or layout == 'split' else '5%'
-        transform = 'translateX(-50%)' if is_v or layout == 'split' else 'none'
-        width = '88%' if is_v else '36%'
-        max_h = '38%' if is_v else '70%'
-        title_fs = '4.6cqw' if is_v else '1.9cqw'
-        fallback_html = f"""
-        <div class="clip" data-start="{start_time}" data-duration="{duration}">
-            <div class="glass-card" data-plate="1" style="position: absolute; top: {top_pos}; left: {left_pos}; transform: {transform}; background: rgba(15, 15, 30, 0.85); border: 1px solid rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); padding: var(--plate-pad, 2cqw 2.4cqw); border-radius: 24px; text-align: left; width: {width}; max-width: var(--plate-max-w); max-height: {max_h}; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.5); box-sizing: border-box;">
-                <h2 style="font-size: {title_fs}; font-weight: 800; color: #ffffff; margin: 0 0 0.6em 0; font-family: 'Unbounded', sans-serif; line-height: 1.15;">{concept_prompt}</h2>
-                <div style="width: 12%; height: 4px; background: #FACC15; border-radius: 2px;"></div>
-            </div>
-        </div>
-        """
+        _emit_progress(f"LLM не ответил корректно — ставлю fallback. ({e})", status="running", progress=0.83)
+        if kind == "title" or mode == "full_broll":
+            fallback_html = _kinetic_title_fallback(concept_prompt, start_time, duration, aspect_ratio, look=look)
+            explanation = "Кинетический TITLE на весь кадр (fallback)"
+        elif kind == "abstract":
+            fallback_html = _abstract_accent_fallback(concept_prompt, start_time, duration, aspect_ratio, layout, look=look)
+            explanation = "Optical Cut: слово + риски"
+        else:
+            fallback_html = _clean_overlay_fallback(concept_prompt, start_time, duration, aspect_ratio, layout, look=look)
+            explanation = "Чистая плашка: заголовок + ключ"
         return {
             "html_content": clean_html_fragment(
-                fallback_html, start_time, duration, mode=mode, aspect_ratio=aspect_ratio
+                fallback_html, start_time, duration, mode=mode, aspect_ratio=aspect_ratio, look=look
             ),
-            "explanation": "Стеклянная карточка-акцент (fallback)",
+            "explanation": explanation,
             "design_aspect": aspect_ratio,
         }
 

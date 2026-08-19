@@ -33,9 +33,18 @@ class TimelineState:
         self.edits.append(edit)
         return edit
 
-    def add_broll(self, start: float, end: float, query: str, layout: str = "full") -> Dict[str, Any]:
-        """Insert a B-roll clip from stock database."""
-        # Remove any existing conflicting visual layers (B-roll, scenes, html overlays)
+    def add_broll(
+        self,
+        start: float,
+        end: float,
+        query: str,
+        layout: str = "full",
+        resolved_path: Optional[str] = None,
+        asset_id: Optional[str] = None,
+        media_type: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Insert a B-roll clip from user library or stock."""
         self.remove_visual_collisions(start, end)
         
         edit = {
@@ -45,6 +54,14 @@ class TimelineState:
             "query": query.strip(),
             "layout": layout
         }
+        if resolved_path:
+            edit["resolved_path"] = resolved_path
+        if asset_id:
+            edit["asset_id"] = asset_id
+        if media_type:
+            edit["media_type"] = media_type
+        if source:
+            edit["source"] = source
         self.edits.append(edit)
         return edit
 
@@ -95,7 +112,11 @@ class TimelineState:
         active_scale: Optional[float] = None,
         x: Optional[float] = None,
         y: Optional[float] = None,
-        behind_speaker: Optional[bool] = None
+        behind_speaker: Optional[bool] = None,
+        subtitle_preset: Optional[str] = None,
+        caption_look: Optional[str] = None,
+        box_color: Optional[str] = None,
+        outline_width: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Apply global kinetic typography configurations (all style parameters, incremental merge)."""
         # Find existing subtitles edit or create a default one
@@ -118,6 +139,10 @@ class TimelineState:
             self.edits.append(edit)
 
         # Merge only non-None arguments to preserve state on incremental tool calls
+        if subtitle_preset is not None:
+            from app.services.resolve_subtitle_pack import preset_to_subtitle_fields
+            for key, value in preset_to_subtitle_fields(subtitle_preset).items():
+                edit[key] = value
         if font is not None: edit["font"] = font
         if font_size is not None: edit["font_size"] = font_size
         if font_color is not None: edit["font_color"] = font_color
@@ -139,6 +164,9 @@ class TimelineState:
         if x is not None: edit["x"] = x
         if y is not None: edit["y"] = y
         if behind_speaker is not None: edit["behind_speaker"] = behind_speaker
+        if caption_look is not None: edit["caption_look"] = caption_look
+        if box_color is not None: edit["box_color"] = box_color
+        if outline_width is not None: edit["outline_width"] = outline_width
 
         return edit
 
@@ -152,14 +180,15 @@ class TimelineState:
         }
         if end is not None:
             edit["end"] = round(end, 2)
-            
+
         if is_bgm:
+            edit["is_bgm"] = True
             # BGM is exclusive at start 0, remove other full BGMs
             self.edits = [
                 e for e in self.edits 
                 if not (e.get("action") == "add_asset" and e.get("start") == 0.0 and "sfx" not in e.get("asset_query", "").lower() and "click" not in e.get("asset_query", "").lower() and "whoosh" not in e.get("asset_query", "").lower() and "impact" not in e.get("asset_query", "").lower())
             ]
-            
+
         self.edits.append(edit)
         return edit
 
@@ -201,6 +230,7 @@ class TimelineState:
             "mode": normalized_mode,
             "layout": layout or normalized_mode,
             "design_aspect": design_aspect or "16:9",
+            "graphic_kind": "title" if normalized_mode == "full_broll" else ("split" if normalized_mode == "split" else "overlay"),
         }
         if type == "semantic_scene":
             edit["scene_data"] = data

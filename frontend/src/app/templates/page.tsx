@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { getApiUrl } from "@/utils/api";
+import { apiFetch, getApiUrl } from "@/utils/api";
 import Sidebar from "@/components/Sidebar";
 import { 
   Sparkles, 
@@ -29,7 +29,7 @@ export default function TemplatesPage() {
 
   // Load templates from API
   useEffect(() => {
-    fetch(`${API_URL}/api/templates`)
+    apiFetch("/api/templates")
       .then(res => res.json())
       .then(data => {
         setTemplates(data || []);
@@ -64,7 +64,7 @@ export default function TemplatesPage() {
     formData.append("file", file);
 
     try {
-      const response = await fetch(`${API_URL}/api/video/upload`, {
+      const response = await apiFetch("/api/video/upload", {
         method: "POST",
         body: formData,
       });
@@ -88,10 +88,10 @@ export default function TemplatesPage() {
       <div className="max-w-6xl mx-auto">
         <header className="mb-10">
           <h1 className="text-[32px] md:text-[40px] font-semibold tracking-tight text-neutral-100 mb-2 flex items-center gap-3">
-            Aesthetic Templates
+            Instagram Reels
           </h1>
           <p className="text-[15px] text-neutral-400">
-            Выберите готовый стиль Apple (Minimal & Expensive) под формат вашего видео.
+            Единственный формат продукта: автомонтаж talking-head под Instagram Reels 9:16.
           </p>
         </header>
 

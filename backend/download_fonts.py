@@ -22,6 +22,7 @@ FONTS = {
     "PlayfairDisplay-Bold.ttf": "https://github.com/google/fonts/raw/main/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf",
     # Latin-forward accent (avoid for primary Cyrillic titles)
     "Lobster-Regular.ttf": "https://github.com/google/fonts/raw/main/ofl/lobster/Lobster-Regular.ttf",
+    "MarckScript-Regular.ttf": "https://github.com/google/fonts/raw/main/ofl/marckscript/MarckScript-Regular.ttf",
     "BebasNeue-Regular.ttf": "https://github.com/google/fonts/raw/main/ofl/bebasneue/BebasNeue-Regular.ttf",
 }
 

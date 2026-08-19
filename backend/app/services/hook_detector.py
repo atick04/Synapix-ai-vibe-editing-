@@ -36,7 +36,7 @@ async def detect_hook_phrase(transcript_words: List[Dict[str, Any]]) -> Dict[str
     transcript_context = "\n".join(word_entries)
 
     system_prompt = (
-        "Ты — эксперт по удержанию внимания (retention) и видеомонтажу в социальных сетях (TikTok, Instagram Reels, YouTube Shorts).\n"
+        "Ты — эксперт по удержанию внимания в Instagram Reels.\n"
         "Твоя задача — проанализировать первые 15 секунд транскрипта видео и найти ОДНУ самую цепляющую, яркую и ключевую фразу-хук (hook), которая завлекает зрителя с первых секунд.\n\n"
         "Хук должен быть:\n"
         "1. Естественным, непрерывным фрагментом из транскрипта.\n"

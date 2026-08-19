@@ -46,6 +46,9 @@ class ToolExecutor:
             "add_soundtrack":       "search_and_add_music",
             "add_music":            "search_and_add_music",
             "add_bgm":              "select_bgm",
+            "design_audio":         "design_sound",
+            "sound_design":         "design_sound",
+            "add_sound_design":     "design_sound",
             "add_background_music": "search_and_add_music",
             "set_music":            "search_and_add_music",
             "add_sfx":              "search_and_add_music",
@@ -184,6 +187,14 @@ class ToolExecutor:
                             arguments.get("query")
                         )
 
+
+                elif name == "design_sound":
+                    if not arguments.get("mood"):
+                        arguments["mood"] = (
+                            arguments.get("asset_query")
+                            or arguments.get("query")
+                            or arguments.get("style")
+                        )
 
             # Validate schema
             validated_args = schema(**arguments).model_dump()

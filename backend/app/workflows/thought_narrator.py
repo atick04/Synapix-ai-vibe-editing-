@@ -180,6 +180,13 @@ def narrate_thought(
             "status": status or "running",
         }
 
+    if "design_sound" in raw_l or "саунд-дизайн" in raw_l or "sound design" in raw_l:
+        return {
+            "text": "Собираю кровать и точечные SFX под склейки и графику…",
+            "phase": "audio",
+            "status": status or "running",
+        }
+
     if "bgm" in raw_l or "саундтрек" in raw_l or "музык" in raw_l or "select_bgm" in raw_l:
         return {
             "text": "Подбираю фоновую музыку под настроение речи…",

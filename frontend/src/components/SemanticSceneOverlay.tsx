@@ -4,7 +4,6 @@ import { AnimatedList } from "@/components/magicui/AnimatedList";
 import { BentoGrid, BentoCard } from "@/components/magicui/BentoGrid";
 import { Meteors } from "./magicui/Meteors";
 import { Confetti } from "./magicui/Confetti";
-import { Particles } from "./magicui/Particles";
 import { BlurFade } from "./magicui/BlurFade";
 import {
   RainbowButton,
@@ -101,7 +100,6 @@ export function SemanticSceneOverlay({
       {/* Background ambient animations */}
       {(sceneTemplate === "meteors" || sceneData?.background_effect === "meteors") && <Meteors number={30} />}
       {(sceneTemplate === "confetti" || sceneData?.background_effect === "confetti") && <Confetti />}
-      {(sceneTemplate === "particles" || sceneData?.background_effect === "particles") && <Particles color={palette.glow} quantity={40} />}
 
       {/* 1. Neon Glowing SVG arrows and relation lines */}
       <svg className="absolute inset-0 w-full h-full pointer-events-none">

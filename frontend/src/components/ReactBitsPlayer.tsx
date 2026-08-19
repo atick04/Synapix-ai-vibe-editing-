@@ -19,7 +19,10 @@ export const ReactBitsPlayer: React.FC<ReactBitsPlayerProps> = ({
 }) => {
   if (currentTime < start || currentTime >= end) return null;
 
-  const text = props.text || props.title || props.phrase || 'VIBE EDIT AI';
+  const text = (props.text || props.title || props.phrase || "").trim();
+  // Never show the old placeholder "VIBE EDIT AI" — empty presets are a no-op
+  if (!text) return null;
+
   const color = props.color || props.font_color || '#FFFFFF';
   const fontSize = props.font_size || props.fontSize || 64;
 
