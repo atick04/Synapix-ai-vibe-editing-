@@ -235,6 +235,43 @@ def graphic_ass_mute_windows(edits: Optional[List[Dict[str, Any]]] = None) -> Li
     return windows
 
 
+REMOTION_FPS = 30
+REMOTION_MAX_FRAMES = 900  # 30s — HtmlGraphicsScene durationInFrames
+
+
+def graphic_overlay_frame_count(start: float, end: float, fps: int = REMOTION_FPS, max_frames: int = REMOTION_MAX_FRAMES) -> int:
+    """Match preview: 30 fps for the full graphic window, not a 24 fps / 36-frame stub."""
+    dur = max(0.2, float(end) - float(start))
+    return int(min(max_frames, max(fps, round(dur * fps))))
+
+
+def is_idea_map_html(html: str) -> bool:
+    h = html or ""
+    return bool(
+        "data-idea-visual" in h
+        or "idea-rail" in h
+        or "idea-split" in h
+        or "idea-stack" in h
+        or "idea-thesis" in h
+    )
+
+
+def wrap_graphic_html_for_export(edit_item: Optional[Dict[str, Any]], html: str) -> str:
+    """Apply the same host translate (and scale attrs) the preview iframe uses."""
+    raw = html or ""
+    item = edit_item or {}
+    ox = float(item.get("offset_x") or 0.0)
+    oy = float(item.get("offset_y") or 0.0)
+    sx = float(item.get("scale_x") or 1.0)
+    sy = float(item.get("scale_y") or 1.0)
+    idea = "1" if is_idea_map_html(raw) else "0"
+    return (
+        f'<div class="clip-transform" data-plate-sx="{sx}" data-plate-sy="{sy}" data-idea="{idea}" '
+        f'style="position:absolute;inset:0;transform:translate({ox}%,{oy}%);pointer-events:none;">'
+        f"{raw}</div>"
+    )
+
+
 def resolve_fonts_dir() -> Optional[str]:
     """Locate backend/fonts regardless of process cwd."""
     here = os.path.dirname(os.path.abspath(__file__))
@@ -1247,14 +1284,6 @@ def render_video(
     height = height if height % 2 == 0 else height - 1
     print(f"[Render] Display dimensions: {width}x{height}, duration={duration:.1f}s")
 
-    # Cap zooms on fast exports — each zoompan re-encodes a segment
-    if export_quality == "fast" and len(zoom_edits) > 2:
-        print(f"[Zoom] Capping {len(zoom_edits)} → 2 zooms for fast export")
-        zoom_edits = zoom_edits[:2]
-    elif export_quality == "medium" and len(zoom_edits) > 4:
-        print(f"[Zoom] Capping {len(zoom_edits)} → 4 zooms for medium export")
-        zoom_edits = zoom_edits[:4]
-
     print(f"[Render] Step 1: Speed ramp edits={len(speed_edits)}")
     # CRITICAL: never mutate the original upload. Remotion/zoom/color used to
     # os.replace() into working_path — when that was input_path, the source
@@ -1668,9 +1697,6 @@ def render_video(
 
     # --- Step 4.25: Motion Graphics via Remotion (Premium Quality) ---
     motion_edits = [e for e in edits if e.get("action") == "add_motion_graphic"]
-    if len(motion_edits) > remotion_max_graphics:
-        print(f"[MotionGraphic] Capping {len(motion_edits)} → {remotion_max_graphics}")
-        motion_edits = motion_edits[:remotion_max_graphics]
     if motion_edits:
         for me in motion_edits:
             text = me.get("text", "Info")
@@ -1693,7 +1719,7 @@ def render_video(
             }
             pos_expr = pos_map.get(position, pos_map["top-right"])
             duration_sec = end - start
-            duration_frames = min(89, remotion_max_frames, max(24, int(duration_sec * 24)))
+            duration_frames = graphic_overlay_frame_count(start, end)
 
             # Remotion dir
             remotion_dir = os.path.abspath(
@@ -1813,7 +1839,7 @@ def render_video(
                 continue
 
             duration_sec = end - start
-            duration_frames = min(89, remotion_max_frames, max(24, int(duration_sec * 24)))
+            duration_frames = graphic_overlay_frame_count(start, end)
 
             remotion_dir = os.path.abspath(
                 os.path.join(os.path.dirname(__file__), "..", "..", "..", "remotion")
@@ -1892,9 +1918,6 @@ def render_video(
     # --- Step 4.4: Remotion HTML Canvas & Semantic Scenes ---
     GRAPHIC_HTML_ACTIONS = ("hyperframes_html", "canvas_overlay", "add_hyperframes_graphics", "add_motion_graphic", "add_dynamic_graphic")
     hyperframes_edits = [e for e in edits if e.get("action") in GRAPHIC_HTML_ACTIONS and (e.get("html_content") or e.get("html"))]
-    if len(hyperframes_edits) > remotion_max_graphics:
-        print(f"[Remotion] Capping HTML graphics {len(hyperframes_edits)} → {remotion_max_graphics} for speed")
-        hyperframes_edits = hyperframes_edits[:remotion_max_graphics]
     semantic_edits = [e for e in edits if e.get("action") == "semantic_scene" and e.get("scene_data")]
     if skip_semantic and semantic_edits:
         print(f"[Remotion] Skipping {len(semantic_edits)} semantic WebGL scenes (fast/medium export)")
@@ -2377,7 +2400,7 @@ def render_video(
                 scene_data = se.get("scene_data", {})
                 
                 duration_sec = end - start
-                duration_frames = min(149, remotion_max_frames, max(24, int(duration_sec * 24)))
+                duration_frames = graphic_overlay_frame_count(start, end)
                 
                 # Write props JSON (avoids Windows quote-escaping issues)
                 props_file = os.path.join(remotion_dir, "props", f"_render_props_semantic_{idx}.json")
@@ -2501,10 +2524,11 @@ def render_video(
                     )
                     return cleaned
                 
-                html_content = force_python_transparency(html_content)
+                html_content = wrap_graphic_html_for_export(he, force_python_transparency(html_content))
                 
                 duration_sec = end - start
-                duration_frames = min(299, remotion_max_frames, max(24, int(duration_sec * 24)))
+                duration_frames = graphic_overlay_frame_count(start, end)
+                graphic_timeout = max(int(remotion_timeout), 60 + int(duration_frames / 4))
                 
                 props_file = os.path.join(remotion_dir, "props", f"_render_props_graphics_{idx}.json")
                 os.makedirs(os.path.dirname(props_file), exist_ok=True)
@@ -2512,6 +2536,7 @@ def render_video(
                 with open(props_file, "w", encoding="utf-8") as _f:
                     _json.dump({
                         "htmlContent": html_content,
+                        "clipStart": 0,
                         "transparent": True,
                     }, _f, ensure_ascii=False)
                 
@@ -2539,7 +2564,7 @@ def render_video(
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         shell=True,
-                        timeout=remotion_timeout,
+                        timeout=graphic_timeout,
                     )
                 except subprocess.TimeoutExpired:
                     print(f"[GraphicsRenderer] ⏰ Remotion render timed out for graphics {idx}, skipping")

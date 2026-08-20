@@ -179,7 +179,7 @@ function Field({
 }
 
 const inputClass =
-  "w-full h-11 px-3.5 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 text-[14px] outline-none transition-colors focus:border-neutral-400 dark:focus:border-neutral-600";
+  "w-full h-11 px-3.5 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 text-[16px] sm:text-[14px] outline-none transition-colors focus:border-neutral-400 dark:focus:border-neutral-600";
 
 export default function AccountPage() {
   const { user, ready, updateProfile, logout, refresh } = useAuth();
@@ -246,11 +246,11 @@ export default function AccountPage() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="max-w-2xl mx-auto px-6 py-10">
-        <div className="mb-8">
+    <div className="flex-1 overflow-y-auto pb-mobile-nav lg:pb-0">
+      <div className="max-w-2xl mx-auto px-4 py-6 sm:px-6 sm:py-10">
+        <div className="mb-6 sm:mb-8">
           <p className="text-[12px] uppercase tracking-[0.16em] text-neutral-400 mb-2">Кабинет</p>
-          <h1 className="text-[28px] font-semibold tracking-tight">Профиль</h1>
+          <h1 className="text-[24px] sm:text-[28px] font-semibold tracking-tight">Профиль</h1>
           <p className="mt-1 text-[14px] text-neutral-500">Имя, контакты и пароль для вашего аккаунта Synapix.</p>
         </div>
 
@@ -394,7 +394,7 @@ export default function AccountPage() {
             </div>
           )}
 
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-3 pb-4">
             <button
               type="button"
               onClick={logout}
@@ -405,7 +405,7 @@ export default function AccountPage() {
             <button
               type="submit"
               disabled={saving}
-              className="h-11 px-5 rounded-xl bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-[14px] font-semibold cursor-pointer disabled:opacity-60 flex items-center gap-2"
+              className="h-11 px-5 rounded-xl bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-[14px] font-semibold cursor-pointer disabled:opacity-60 flex items-center justify-center gap-2"
             >
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <Check className="w-4 h-4" /> : null}
               {saved ? "Сохранено" : "Сохранить"}

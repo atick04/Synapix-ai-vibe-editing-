@@ -1920,7 +1920,7 @@ export default function VideoTimeline({
                 >
                     {/* Time ruler row */}
                     <div className="flex h-10 shrink-0 sticky top-0 z-50 border-b border-border bg-card">
-                        <div className="w-24 md:w-36 shrink-0 sticky left-0 z-[60] bg-[#161618] border-r border-white/5 flex items-center gap-1.5 px-2.5 font-sans">
+                        <div className="w-12 sm:w-24 md:w-36 shrink-0 sticky left-0 z-[60] bg-[#161618] border-r border-white/5 flex items-center gap-1.5 px-2.5 font-sans">
                             <button type="button" className="w-7 h-7 rounded-md bg-[#222224]/80 hover:bg-[#2c2c2e] border border-white/5 flex items-center justify-center text-zinc-400 hover:text-white transition-colors cursor-pointer shadow-sm">
                                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.2">
                                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
@@ -1958,7 +1958,7 @@ export default function VideoTimeline({
                         {/* S1 (Scenes) Track */}
                         {isS1Visible && (
                             <div className="flex h-12 shrink-0 w-full">
-                                <div className="w-24 md:w-36 shrink-0 sticky left-0 z-40 border-b border-white/5 bg-[#1a1420] flex items-center gap-2 px-2.5 select-none border-l-[3px] border-l-purple-500 border-r border-white/5 font-sans">
+                                <div className="w-12 sm:w-24 md:w-36 shrink-0 sticky left-0 z-40 border-b border-white/5 bg-[#1a1420] flex items-center gap-2 px-2.5 select-none border-l-[3px] border-l-purple-500 border-r border-white/5 font-sans">
                                     <span className="text-[9px] font-mono font-bold text-purple-300/90 bg-purple-500/15 px-1.5 py-0.5 rounded shrink-0">S1</span>
                                     <span className="hidden md:inline text-[11px] text-purple-200/90 font-semibold tracking-wide truncate">Тайтлы</span>
                                 </div>
@@ -2017,7 +2017,7 @@ export default function VideoTimeline({
                         {/* G1 (Graphics) Track */}
                         {isG1Visible && (
                             <div className="flex h-12 shrink-0 w-full">
-                                <div className="w-24 md:w-36 shrink-0 sticky left-0 z-40 border-b border-white/5 bg-[#1a1218] flex items-center gap-2 px-2.5 select-none border-l-[3px] border-l-fuchsia-500 border-r border-white/5 font-sans">
+                                <div className="w-12 sm:w-24 md:w-36 shrink-0 sticky left-0 z-40 border-b border-white/5 bg-[#1a1218] flex items-center gap-2 px-2.5 select-none border-l-[3px] border-l-fuchsia-500 border-r border-white/5 font-sans">
                                     <span className="text-[9px] font-mono font-bold text-fuchsia-300/90 bg-fuchsia-500/15 px-1.5 py-0.5 rounded shrink-0">G1</span>
                                     <span className="hidden md:inline text-[11px] text-fuchsia-200/90 font-semibold tracking-wide truncate">Графика</span>
                                 </div>
@@ -2101,7 +2101,7 @@ export default function VideoTimeline({
                         {/* T1 (Subtitles) Track */}
                         {isT1Visible && (
                             <div className="flex h-12 shrink-0 w-full">
-                                <div className="w-24 md:w-36 shrink-0 sticky left-0 z-40 border-b border-white/5 bg-[#121820] flex items-center gap-2 px-2.5 select-none border-l-[3px] border-l-blue-500 border-r border-white/5 font-sans">
+                                <div className="w-12 sm:w-24 md:w-36 shrink-0 sticky left-0 z-40 border-b border-white/5 bg-[#121820] flex items-center gap-2 px-2.5 select-none border-l-[3px] border-l-blue-500 border-r border-white/5 font-sans">
                                     <span className="text-[9px] font-mono font-bold text-blue-300/90 bg-blue-500/15 px-1.5 py-0.5 rounded shrink-0">T1</span>
                                     <span className="hidden md:inline text-[11px] text-blue-200/90 font-semibold tracking-wide truncate">Субтитры</span>
                                 </div>
@@ -2200,7 +2200,7 @@ export default function VideoTimeline({
                         {/* V2 (B-ROLL) Track */}
                         {isV2Visible && (
                             <div className="flex h-20 shrink-0 w-full">
-                                <div className="w-24 md:w-36 shrink-0 sticky left-0 z-40 border-b border-white/5 bg-[#121618] flex items-center gap-2 px-2.5 select-none border-l-[3px] border-l-cyan-500 border-r border-white/5 font-sans">
+                                <div className="w-12 sm:w-24 md:w-36 shrink-0 sticky left-0 z-40 border-b border-white/5 bg-[#121618] flex items-center gap-2 px-2.5 select-none border-l-[3px] border-l-cyan-500 border-r border-white/5 font-sans">
                                     <span className="text-[9px] font-mono font-bold text-cyan-300/90 bg-cyan-500/15 px-1.5 py-0.5 rounded shrink-0">V2</span>
                                     <span className="hidden md:inline text-[11px] text-cyan-200/90 font-semibold tracking-wide truncate">B-roll</span>
                                 </div>
@@ -2275,7 +2275,7 @@ export default function VideoTimeline({
                         {/* C1 (Color Correction) Track */}
                         {isC1Visible && (
                             <div className="flex h-12 shrink-0 w-full">
-                                <div className="w-24 md:w-36 shrink-0 sticky left-0 z-40 border-b border-white/5 bg-[#18160f] flex items-center gap-2 px-2.5 select-none border-l-[3px] border-l-amber-500 border-r border-white/5 font-sans">
+                                <div className="w-12 sm:w-24 md:w-36 shrink-0 sticky left-0 z-40 border-b border-white/5 bg-[#18160f] flex items-center gap-2 px-2.5 select-none border-l-[3px] border-l-amber-500 border-r border-white/5 font-sans">
                                     <span className="text-[9px] font-mono font-bold text-amber-300/90 bg-amber-500/15 px-1.5 py-0.5 rounded shrink-0">C1</span>
                                     <span className="hidden md:inline text-[11px] text-amber-200/90 font-semibold tracking-wide truncate">Цветокор</span>
                                 </div>
@@ -2331,7 +2331,7 @@ export default function VideoTimeline({
 
                         {/* V1 (Main Video) Track */}
                         <div className="flex h-20 shrink-0 w-full">
-                            <div className="w-24 md:w-36 shrink-0 sticky left-0 z-40 border-b border-white/5 bg-[#141416] flex items-center gap-2 px-2.5 select-none border-l-[3px] border-l-zinc-400 border-r border-white/5 font-sans">
+                            <div className="w-12 sm:w-24 md:w-36 shrink-0 sticky left-0 z-40 border-b border-white/5 bg-[#141416] flex items-center gap-2 px-2.5 select-none border-l-[3px] border-l-zinc-400 border-r border-white/5 font-sans">
                                 <span className="text-[9px] font-mono font-bold text-zinc-300 bg-zinc-500/15 px-1.5 py-0.5 rounded shrink-0">V1</span>
                                 <span className="hidden md:inline text-[11px] text-zinc-200 font-semibold tracking-wide truncate">Видео</span>
                             </div>
@@ -2418,13 +2418,13 @@ export default function VideoTimeline({
 
                         {/* Premiere Pro style separator */}
                         <div className="flex h-1 shrink-0 w-full">
-                            <div className="w-24 md:w-36 shrink-0 sticky left-0 z-40 bg-[#161618] border-y border-white/5 border-r border-white/5" />
+                            <div className="w-12 sm:w-24 md:w-36 shrink-0 sticky left-0 z-40 bg-[#161618] border-y border-white/5 border-r border-white/5" />
                             <div className="flex-1 min-w-0 h-1 bg-neutral-900 border-y border-neutral-800/30 relative" />
                         </div>
 
                         {/* A1 (Main Audio) Track */}
                         <div className="flex h-14 shrink-0 w-full">
-                            <div className="w-24 md:w-36 shrink-0 sticky left-0 z-40 border-b border-white/5 bg-[#0f1614] flex items-center gap-2 px-2.5 select-none border-l-[3px] border-l-emerald-500 border-r border-white/5 font-sans">
+                            <div className="w-12 sm:w-24 md:w-36 shrink-0 sticky left-0 z-40 border-b border-white/5 bg-[#0f1614] flex items-center gap-2 px-2.5 select-none border-l-[3px] border-l-emerald-500 border-r border-white/5 font-sans">
                                 <span className="text-[9px] font-mono font-bold text-emerald-300/90 bg-emerald-500/15 px-1.5 py-0.5 rounded shrink-0">A1</span>
                                 <span className="hidden md:inline text-[11px] text-emerald-200/90 font-semibold tracking-wide truncate">Аудио</span>
                             </div>
@@ -2496,7 +2496,7 @@ export default function VideoTimeline({
                         {/* SFX (Assets) Track */}
                         {isSFXVisible && (
                             <div className="flex h-14 shrink-0 w-full">
-                                <div className="w-24 md:w-36 shrink-0 sticky left-0 z-40 border-b border-white/5 bg-[#0f1614] flex items-center gap-2 px-2.5 select-none border-l-[3px] border-l-teal-500 border-r border-white/5 font-sans">
+                                <div className="w-12 sm:w-24 md:w-36 shrink-0 sticky left-0 z-40 border-b border-white/5 bg-[#0f1614] flex items-center gap-2 px-2.5 select-none border-l-[3px] border-l-teal-500 border-r border-white/5 font-sans">
                                     <span className="text-[9px] font-mono font-bold text-teal-300/90 bg-teal-500/15 px-1.5 py-0.5 rounded shrink-0">SFX</span>
                                     <span className="hidden md:inline text-[11px] text-teal-200/90 font-semibold tracking-wide truncate">SFX</span>
                                 </div>
@@ -2560,7 +2560,7 @@ export default function VideoTimeline({
                         {/* M1 (Music/BGM) Track */}
                         {isM1Visible && (
                             <div className="flex h-14 shrink-0 w-full">
-                                <div className="w-24 md:w-36 shrink-0 sticky left-0 z-40 border-b border-white/5 bg-[#18140c] flex items-center gap-2 px-2.5 select-none border-l-[3px] border-l-orange-500 border-r border-white/5 font-sans">
+                                <div className="w-12 sm:w-24 md:w-36 shrink-0 sticky left-0 z-40 border-b border-white/5 bg-[#18140c] flex items-center gap-2 px-2.5 select-none border-l-[3px] border-l-orange-500 border-r border-white/5 font-sans">
                                     <span className="text-[9px] font-mono font-bold text-orange-300/90 bg-orange-500/15 px-1.5 py-0.5 rounded shrink-0">M1</span>
                                     <span className="hidden md:inline text-[11px] text-orange-200/90 font-semibold tracking-wide truncate">Музыка</span>
                                 </div>

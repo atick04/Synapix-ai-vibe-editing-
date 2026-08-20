@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch, getApiUrl } from "@/utils/api";
-import Sidebar from "@/components/Sidebar";
 import { 
   Sparkles, 
   Loader2, 
@@ -84,10 +83,10 @@ export default function TemplatesPage() {
   };
 
   return (
-    <div className="flex-1 bg-[#070709] text-white overflow-y-auto p-6 md:p-10 scrollbar-hide">
+    <div className="flex-1 bg-[#070709] text-white overflow-y-auto p-4 sm:p-6 md:p-10 pb-mobile-nav lg:pb-10 scrollbar-hide">
       <div className="max-w-6xl mx-auto">
-        <header className="mb-10">
-          <h1 className="text-[32px] md:text-[40px] font-semibold tracking-tight text-neutral-100 mb-2 flex items-center gap-3">
+        <header className="mb-6 sm:mb-10">
+          <h1 className="text-[26px] sm:text-[32px] md:text-[40px] font-semibold tracking-tight text-neutral-100 mb-2 flex items-center gap-3">
             Instagram Reels
           </h1>
           <p className="text-[15px] text-neutral-400">
@@ -117,8 +116,8 @@ export default function TemplatesPage() {
                   <div className="absolute inset-0 bg-gradient-to-t from-neutral-950 via-transparent to-transparent" />
                   
                   {/* Select button overlay */}
-                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40 backdrop-blur-[2px]">
-                    <div className="bg-amber-500 hover:bg-amber-400 text-black px-4 py-2 rounded-xl text-[12px] font-bold flex items-center gap-1.5 active:scale-95 transition-all">
+                  <div className="absolute inset-0 flex items-center justify-center opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity bg-black/30 md:bg-black/40 backdrop-blur-[2px]">
+                    <div className="bg-amber-500 hover:bg-amber-400 text-black px-4 py-2.5 min-h-10 rounded-xl text-[12px] font-bold flex items-center gap-1.5 active:scale-95 transition-all">
                       <Play className="w-3.5 h-3.5 fill-black" />
                       Использовать стиль
                     </div>
@@ -163,8 +162,8 @@ export default function TemplatesPage() {
 
         {/* Upload Modal Overlay */}
         {selectedTemplate && (
-          <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-4">
-            <div className="bg-neutral-900 border border-neutral-800 rounded-3xl w-full max-w-xl p-6 relative flex flex-col shadow-2xl animate-fadeIn">
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+            <div className="bg-neutral-900 border border-neutral-800 rounded-t-3xl sm:rounded-3xl w-full max-w-xl p-5 sm:p-6 relative flex flex-col shadow-2xl animate-fadeIn max-h-[92dvh] overflow-y-auto pb-[max(1.5rem,env(safe-area-inset-bottom))]">
               <button 
                 onClick={() => { setSelectedTemplate(null); setFile(null); }}
                 className="absolute top-4 right-4 w-7 h-7 rounded-full bg-neutral-800 hover:bg-neutral-700 flex items-center justify-center text-neutral-400 hover:text-white transition-colors cursor-pointer"
@@ -233,17 +232,17 @@ export default function TemplatesPage() {
               </div>
 
               {/* Action bar */}
-              <div className="mt-6 flex items-center justify-end gap-3 pt-4 border-t border-neutral-850">
+              <div className="mt-6 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2 sm:gap-3 pt-4 border-t border-neutral-850">
                 <button
                   onClick={() => { setSelectedTemplate(null); setFile(null); }}
-                  className="px-4 py-2 rounded-xl text-[12px] font-semibold text-neutral-400 hover:text-white transition-colors cursor-pointer"
+                  className="min-h-11 px-4 py-2 rounded-xl text-[12px] font-semibold text-neutral-400 hover:text-white transition-colors cursor-pointer"
                 >
                   Отмена
                 </button>
                 <button
                   onClick={handleUpload}
                   disabled={!file || uploading}
-                  className={`px-5 py-2 rounded-xl text-[12px] font-bold flex items-center gap-2 transition-all ${
+                  className={`min-h-11 px-5 py-2 rounded-xl text-[12px] font-bold flex items-center justify-center gap-2 transition-all ${
                     file && !uploading
                       ? "bg-amber-500 hover:bg-amber-400 text-black shadow-sm active:scale-95 cursor-pointer"
                       : "bg-neutral-800 text-neutral-500 cursor-not-allowed"

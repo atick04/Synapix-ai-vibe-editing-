@@ -272,9 +272,31 @@
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
   }
   html {
     @apply font-sans;
+    overflow-x: hidden;
+    max-width: 100%;
+  }
+}
+
+/* ═══════════════════════════════════════════
+   MOBILE / SAFE-AREA
+═══════════════════════════════════════════ */
+:root {
+  --app-mobile-nav: calc(56px + env(safe-area-inset-bottom, 0px));
+}
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+@media (max-width: 1023px) {
+  .pb-mobile-nav {
+    padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
   }
 }
 

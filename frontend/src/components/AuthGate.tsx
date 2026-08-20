@@ -189,17 +189,17 @@ export default function AuthGate() {
     }
   };
 
-  const fieldClass =
-    "w-full h-12 pl-11 pr-4 rounded-2xl bg-white/[0.05] border border-white/10 text-[14px] text-white placeholder:text-white/30 outline-none transition-colors duration-200 focus:border-white/25 focus:bg-white/[0.07]";
+    const fieldClass =
+    "w-full h-12 pl-11 pr-4 rounded-2xl bg-white/[0.05] border border-white/10 text-[16px] sm:text-[14px] text-white placeholder:text-white/30 outline-none transition-colors duration-200 focus:border-white/25 focus:bg-white/[0.07]";
 
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-[#0B0D12] px-4">
-      <div className="relative w-full max-w-[420px] rounded-[28px] border border-white/10 bg-[#14161C] p-8 text-white">
-        <div className="text-center mb-7">
-          <div className="w-[68px] h-[68px] rounded-full overflow-hidden border border-white/15 mx-auto mb-4 bg-neutral-800">
+    <div className="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center bg-[#0B0D12] px-3 sm:px-4 py-0 sm:py-6 overflow-y-auto">
+      <div className="relative w-full max-w-[420px] rounded-t-[28px] sm:rounded-[28px] border border-white/10 bg-[#14161C] p-5 sm:p-8 text-white my-0 sm:my-auto max-h-[100dvh] overflow-y-auto pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+        <div className="text-center mb-5 sm:mb-7">
+          <div className="w-[56px] h-[56px] sm:w-[68px] sm:h-[68px] rounded-full overflow-hidden border border-white/15 mx-auto mb-4 bg-neutral-800">
             <img src="/main-logo.jpg" alt="Synapix" className="w-full h-full object-cover" />
           </div>
-          <h2 className="text-[26px] font-semibold tracking-tight">Synapix</h2>
+          <h2 className="text-[22px] sm:text-[26px] font-semibold tracking-tight">Synapix</h2>
           <p className="mt-1.5 text-[13px] text-white/45">
             {mode === "login" && "Войдите в свою студию"}
             {mode === "register" && "Создайте аккаунт и откройте студию"}
@@ -317,7 +317,7 @@ export default function AuthGate() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full h-12 rounded-2xl bg-white text-neutral-950 text-[14px] font-semibold cursor-pointer transition-all duration-200 hover:bg-white/90 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            className="w-full h-12 rounded-2xl bg-white text-neutral-950 text-[16px] sm:text-[14px] font-semibold cursor-pointer transition-all duration-200 hover:bg-white/90 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
             {loading && <Loader2 className="w-4 h-4 animate-spin" />}
             {mode === "login" && "Войти"}

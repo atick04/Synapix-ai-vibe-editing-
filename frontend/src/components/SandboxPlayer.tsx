@@ -5323,7 +5323,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
 
             {/* ── Cinematic Scrubber ── */}
             {/* ── Player Controls ── */}
-            <div className="absolute bottom-0 left-0 right-0 px-5 pb-4 pt-16 flex flex-col gap-3 z-[250]" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 100%)' }}>
+            <div className="absolute bottom-0 left-0 right-0 px-3 pb-3 md:px-5 md:pb-4 pt-16 flex flex-col gap-3 z-[250]" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 100%)' }}>
                 
                 {/* Scrubber track */}
                 <div

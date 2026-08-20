@@ -6,6 +6,7 @@ import AuthGate from "@/components/AuthGate";
 import PaywallModal from "@/components/PaywallModal";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import TimelineEditor from "@/components/TimelineEditor";
 import VideoTimeline from "@/components/VideoTimeline";
 import ExportModal from "@/components/ExportModal";
@@ -518,8 +519,23 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     const [isResizing, setIsResizing] = useState(false);
 
     // Responsive Mobile Views State
-    const [activeMobileTab, setActiveMobileTab] = useState<'chat' | 'editor' | 'library'>('editor');
+    const [activeMobileTab, setActiveMobileTab] = useState<'chat' | 'editor' | 'library' | 'tools'>('editor');
     const [isMobile, setIsMobile] = useState(false);
+
+    const closeEditorPanels = useCallback(() => {
+        setIsChatOpen(false);
+        setIsLibraryOpen(false);
+        setIsTextOpen(false);
+        setIsGraphicsOpen(false);
+        setIsMusicOpen(false);
+        setIsMaskingOpen(false);
+        setIsTransitionsOpen(false);
+    }, []);
+
+    const editorPanelClass = isMobile
+        ? "rainbow-glow-container fixed inset-x-0 z-40 flex flex-col min-h-0 top-12 bottom-[var(--app-mobile-nav)] px-1.5 pb-1.5"
+        : "rainbow-glow-container w-full md:w-[330px] h-full min-h-0 flex-shrink-0 transition-all duration-300 z-10";
+    const anyToolOpen = isTextOpen || isGraphicsOpen || isMusicOpen || isMaskingOpen || isTransitionsOpen;
 
     useEffect(() => {
         const handleResize = () => {
@@ -533,6 +549,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             if (detail) {
                 setFocusedClipId(detail);
                 setIsLibraryOpen(true);
+                setActiveMobileTab('library');
             }
         };
         window.addEventListener('select_clip_focus', handleSelectFocus);
@@ -1816,7 +1833,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     };
 
     return (
-        <div className="h-screen w-full bg-[#111111] text-neutral-200 flex flex-col font-sans overflow-hidden">
+        <div className="h-full w-full bg-[#111111] text-neutral-200 flex flex-col font-sans overflow-hidden">
             {isMounted && authReady && !user && <AuthGate />}
             <PaywallModal open={showPaywall} onClose={() => setShowPaywall(false)} />
             {projectForbidden && user && (
@@ -1832,31 +1849,42 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             )}
             
             {/* ── Top Navigation Bar ── */}
-            <header className="h-[56px] flex items-center px-6 justify-between z-20 shrink-0 select-none bg-[#1C1C1E] border-b border-white/5">
+            <header className="h-12 md:h-[56px] flex items-center px-2.5 md:px-6 justify-between z-20 shrink-0 select-none bg-[#1C1C1E] border-b border-white/5 gap-2">
                 {/* Left: Project Info */}
-                <div className="flex items-center gap-6">
-                    <button className="flex items-center gap-2 text-sm text-neutral-300 hover:text-white transition-colors">
-                        Мой проект
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <div className="flex items-center gap-2 md:gap-6 min-w-0">
+                    <Link
+                        href="/"
+                        className="flex items-center justify-center w-9 h-9 md:w-auto md:h-auto md:gap-2 rounded-lg text-neutral-300 hover:text-white hover:bg-white/5 transition-colors shrink-0"
+                        aria-label="На главную"
+                    >
+                        <svg className="w-4 h-4 md:hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                        </svg>
+                        <span className="hidden md:inline text-sm">Мой проект</span>
+                        <svg className="hidden md:block w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                         </svg>
-                    </button>
+                    </Link>
+                    <span className="md:hidden text-[13px] font-medium text-white truncate max-w-[140px]">
+                        {filename || "Проект"}
+                    </span>
 
-                    <div className="flex items-center gap-2 text-xs text-neutral-500 ml-2">
+                    <div className="hidden md:flex items-center gap-2 text-xs text-neutral-500 ml-2">
                         <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>
-                        Сохранено в 12:48
+                        Сохранено
                     </div>
                 </div>
 
                 {/* Right: Actions */}
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-1.5 md:gap-4 shrink-0">
 
                     {/* Undo/Redo History Controls */}
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-0.5 md:gap-2">
                         <button
                             onClick={handleUndo}
                             disabled={!canUndo}
-                            className={`p-1.5 rounded transition-colors ${canUndo ? 'text-neutral-300 hover:text-white hover:bg-white/10' : 'text-neutral-600 cursor-not-allowed'}`}
+                            className={`p-2 md:p-1.5 rounded transition-colors ${canUndo ? 'text-neutral-300 hover:text-white hover:bg-white/10' : 'text-neutral-600 cursor-not-allowed'}`}
+                            aria-label="Отменить"
                         >
                             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
@@ -1865,7 +1893,8 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                         <button
                             onClick={handleRedo}
                             disabled={!canRedo}
-                            className={`p-1.5 rounded transition-colors ${canRedo ? 'text-neutral-300 hover:text-white hover:bg-white/10' : 'text-neutral-600 cursor-not-allowed'}`}
+                            className={`p-2 md:p-1.5 rounded transition-colors ${canRedo ? 'text-neutral-300 hover:text-white hover:bg-white/10' : 'text-neutral-600 cursor-not-allowed'}`}
+                            aria-label="Повторить"
                         >
                             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10H11a8 8 0 00-8 8v2m18-10l-6 6m6-6l-6-6" />
@@ -1873,9 +1902,9 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                         </button>
                     </div>
 
-                    <div className="h-4 w-px bg-white/10 mx-1" />
+                    <div className="hidden md:block h-4 w-px bg-white/10 mx-1" />
 
-                    <button className="flex items-center gap-2 px-3 py-1.5 rounded text-sm font-medium text-neutral-300 hover:text-white hover:bg-white/5 transition-colors border border-white/10">
+                    <button className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded text-sm font-medium text-neutral-300 hover:text-white hover:bg-white/5 transition-colors border border-white/10">
                         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -1886,9 +1915,9 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     <button
                         onClick={() => setShowExportModal(true)}
                         disabled={isExporting}
-                        className="flex items-center gap-2 px-4 py-1.5 rounded text-sm font-semibold text-black bg-sky-400 hover:bg-sky-300 transition-colors shadow-[0_0_15px_rgba(56,189,248,0.3)]"
+                        className="flex items-center gap-1.5 min-h-9 px-3 md:px-4 py-1.5 rounded text-[13px] md:text-sm font-semibold text-black bg-sky-400 hover:bg-sky-300 transition-colors shadow-[0_0_15px_rgba(56,189,248,0.3)]"
                     >
-                        {isExporting ? "Экспорт..." : "Экспорт"}
+                        {isExporting ? "…" : "Экспорт"}
                     </button>
                 </div>
             </header>
@@ -1976,16 +2005,16 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                         {/* Timeline Panel */}
                         <div
                             className="flex-shrink-0 flex flex-col overflow-hidden relative bg-[#161618] border border-white/5 rounded-2xl"
-                            style={{ height: isMobile ? "220px" : timelineHeight }}
+                            style={{ height: isMobile ? "min(180px, 32dvh)" : timelineHeight }}
                         >
                             {/* Timeline toolbar */}
-                            <div className="h-10 flex items-center px-4 justify-between shrink-0 border-b border-white/5 bg-[#1C1C1E]">
+                            <div className="h-10 flex items-center px-2 md:px-4 justify-between shrink-0 border-b border-white/5 bg-[#1C1C1E]">
                                 <div className="flex bg-[#161618] p-1 rounded-lg border border-white/5 gap-1">
                                     {(['text', 'video'] as const).map(tab => (
                                         <button
                                             key={tab}
                                             onClick={() => setActiveTab(tab)}
-                                            className={`px-3 py-1 rounded-md text-[10px] font-semibold tracking-wide uppercase transition-all ${
+                                            className={`px-3 py-1.5 min-h-8 rounded-md text-[10px] font-semibold tracking-wide uppercase transition-all ${
                                                 activeTab === tab 
                                                     ? "bg-[#2C2C2E] text-white shadow-sm" 
                                                     : "text-neutral-500 hover:text-neutral-300"
@@ -1998,13 +2027,13 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                                 {activeTab === 'text' && (
                                     <button
                                         onClick={handleDirectRender}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-orange-500/10 text-orange-500 border border-orange-500/20 hover:bg-orange-500/20 transition-colors"
+                                        className="flex items-center gap-1.5 min-h-8 px-2.5 md:px-3 py-1.5 rounded-lg text-xs font-medium bg-orange-500/10 text-orange-500 border border-orange-500/20 hover:bg-orange-500/20 transition-colors"
                                     >
                                         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                                         </svg>
-                                        <span>Рендер</span>
+                                        <span className="hidden sm:inline">Рендер</span>
                                     </button>
                                 )}
                             </div>
@@ -2051,8 +2080,8 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                 )}
 
                 {/* ── Right Sidebars Area ── */}
-                {isChatOpen && (
-                    <div className="rainbow-glow-container w-full md:w-[330px] h-full min-h-0 flex-shrink-0 transition-all duration-300 z-10">
+                {isChatOpen && (!isMobile || activeMobileTab === 'chat') && (
+                    <div className={editorPanelClass}>
                         <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
                             <ChatSidebar 
                                 chat={chat} 
@@ -2075,14 +2104,17 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     </div>
                 )}
 
-                {isLibraryOpen && (
-                    <div className="rainbow-glow-container w-full md:w-[330px] h-full min-h-0 flex-shrink-0 transition-all duration-300 z-10">
+                {isLibraryOpen && (!isMobile || activeMobileTab === 'library') && (
+                    <div className={editorPanelClass}>
                         <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
                             <ReferencesSidebar 
                                 activeEdits={activeEdits} 
                                 onActiveEditsChange={setActiveEdits} 
                                 duration={duration} 
-                                onClose={isMobile ? undefined : () => setIsLibraryOpen(false)}
+                                onClose={() => {
+                                    setIsLibraryOpen(false);
+                                    if (isMobile) setActiveMobileTab('editor');
+                                }}
                                 isMobile={isMobile}
                                 fileId={id as string}
                                 mediaLibrary={mediaLibrary}
@@ -2109,8 +2141,8 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     </div>
                 )}
 
-                {isTextOpen && (
-                    <div className="rainbow-glow-container w-full md:w-[330px] h-full min-h-0 flex-shrink-0 transition-all duration-300 z-10">
+                {isTextOpen && (!isMobile || activeMobileTab === 'tools') && (
+                    <div className={editorPanelClass}>
                         <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
                             <TextSidebar
                                 fontStyle={fontStyle}
@@ -2130,8 +2162,8 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     </div>
                 )}
 
-                {isGraphicsOpen && (
-                    <div className="rainbow-glow-container w-full md:w-[330px] h-full min-h-0 flex-shrink-0 transition-all duration-300 z-10">
+                {isGraphicsOpen && (!isMobile || activeMobileTab === 'tools') && (
+                    <div className={editorPanelClass}>
                         <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
                             <GraphicsSidebar
                                 activeEdits={activeEdits}
@@ -2143,8 +2175,8 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     </div>
                 )}
 
-                {isMusicOpen && (
-                    <div className="rainbow-glow-container w-full md:w-[330px] h-full min-h-0 flex-shrink-0 transition-all duration-300 z-10">
+                {isMusicOpen && (!isMobile || activeMobileTab === 'tools') && (
+                    <div className={editorPanelClass}>
                         <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
                             <MusicSidebar
                                 activeEdits={activeEdits}
@@ -2155,8 +2187,8 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     </div>
                 )}
 
-                {isMaskingOpen && (
-                    <div className="rainbow-glow-container w-full md:w-[330px] h-full min-h-0 flex-shrink-0 transition-all duration-300 z-10">
+                {isMaskingOpen && (!isMobile || activeMobileTab === 'tools') && (
+                    <div className={editorPanelClass}>
                         <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
                             <MaskingSidebar
                                 activeEdits={activeEdits}
@@ -2167,8 +2199,8 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     </div>
                 )}
 
-                {isTransitionsOpen && (
-                    <div className="rainbow-glow-container w-full md:w-[330px] h-full min-h-0 flex-shrink-0 transition-all duration-300 z-10">
+                {isTransitionsOpen && (!isMobile || activeMobileTab === 'tools') && (
+                    <div className={editorPanelClass}>
                         <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
                             <TransitionsSidebar
                                 activeEdits={activeEdits}
@@ -2177,6 +2209,32 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                                 currentTime={videoRef.current ? videoRef.current.currentTime : 0}
                                 fileId={id}
                             />
+                        </div>
+                    </div>
+                )}
+
+                {isMobile && activeMobileTab === 'tools' && !anyToolOpen && (
+                    <div className={editorPanelClass}>
+                        <div className="w-full h-full rounded-[15px] bg-[#161618] border border-white/10 overflow-hidden flex flex-col p-4">
+                            <p className="text-[11px] uppercase tracking-wider text-neutral-500 mb-3">Инструменты</p>
+                            <div className="grid grid-cols-2 gap-2">
+                                {[
+                                    { label: "Текст", run: () => { closeEditorPanels(); setIsTextOpen(true); } },
+                                    { label: "Графика", run: () => { closeEditorPanels(); setIsGraphicsOpen(true); } },
+                                    { label: "Музыка", run: () => { closeEditorPanels(); setIsMusicOpen(true); } },
+                                    { label: "Маскинг", run: () => { closeEditorPanels(); setIsMaskingOpen(true); } },
+                                    { label: "Переходы", run: () => { closeEditorPanels(); setIsTransitionsOpen(true); } },
+                                ].map((tool) => (
+                                    <button
+                                        key={tool.label}
+                                        type="button"
+                                        onClick={tool.run}
+                                        className="min-h-14 rounded-xl border border-white/10 bg-white/[0.04] text-[13px] font-medium text-neutral-200 active:bg-white/[0.08]"
+                                    >
+                                        {tool.label}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
                     </div>
                 )}
@@ -2292,49 +2350,71 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             {/* 4. Bottom Mobile Navigation Bar */}
             {isMobile && (
                 <div 
-                    className="h-[60px] border-t border-white/5 flex items-center justify-around shrink-0 z-30 font-sans shadow-lg"
+                    className="shrink-0 z-30 font-sans border-t border-white/5"
                     style={{
-                        background: "rgba(20,20,20,0.65)",
+                        background: "rgba(20,20,20,0.92)",
                         backdropFilter: "blur(20px)",
                         WebkitBackdropFilter: "blur(20px)",
+                        paddingBottom: "env(safe-area-inset-bottom, 0px)",
                     }}
                 >
+                    <div className="h-[56px] flex items-stretch justify-around">
                     <button
                         onClick={() => {
+                            closeEditorPanels();
                             setActiveMobileTab('chat');
                             setIsChatOpen(true);
                         }}
-                        className="flex flex-col items-center justify-center gap-1 py-1 cursor-pointer transition-all active:scale-95 flex-1"
-                        style={{ color: activeMobileTab === 'chat' ? '#3B82F6' : '#5A6478' }}
+                        className="flex flex-col items-center justify-center gap-0.5 cursor-pointer transition-all active:scale-95 flex-1 min-h-[44px]"
+                        style={{ color: activeMobileTab === 'chat' ? '#38BDF8' : '#6B7280' }}
                     >
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                         </svg>
-                        <span className="text-[13px] font-semibold uppercase tracking-wider">ИИ Чат</span>
+                        <span className="text-[10px] font-semibold uppercase tracking-wider">Чат</span>
                     </button>
                     <button
-                        onClick={() => setActiveMobileTab('editor')}
-                        className="flex flex-col items-center justify-center gap-1 py-1 cursor-pointer transition-all active:scale-95 flex-1"
-                        style={{ color: activeMobileTab === 'editor' ? '#3B82F6' : '#5A6478' }}
+                        onClick={() => {
+                            closeEditorPanels();
+                            setActiveMobileTab('editor');
+                        }}
+                        className="flex flex-col items-center justify-center gap-0.5 cursor-pointer transition-all active:scale-95 flex-1 min-h-[44px]"
+                        style={{ color: activeMobileTab === 'editor' ? '#38BDF8' : '#6B7280' }}
                     >
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 022 2z" />
                         </svg>
-                        <span className="text-[13px] font-semibold uppercase tracking-wider">Монтаж</span>
+                        <span className="text-[10px] font-semibold uppercase tracking-wider">Монтаж</span>
                     </button>
                     <button
                         onClick={() => {
+                            closeEditorPanels();
                             setActiveMobileTab('library');
                             setIsLibraryOpen(true);
                         }}
-                        className="flex flex-col items-center justify-center gap-1 py-1 cursor-pointer transition-all active:scale-95 flex-1"
-                        style={{ color: activeMobileTab === 'library' ? '#3B82F6' : '#5A6478' }}
+                        className="flex flex-col items-center justify-center gap-0.5 cursor-pointer transition-all active:scale-95 flex-1 min-h-[44px]"
+                        style={{ color: activeMobileTab === 'library' ? '#38BDF8' : '#6B7280' }}
                     >
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
                         </svg>
-                        <span className="text-[13px] font-semibold uppercase tracking-wider">Библиотека</span>
+                        <span className="text-[10px] font-semibold uppercase tracking-wider">Медиа</span>
                     </button>
+                    <button
+                        onClick={() => {
+                            setIsChatOpen(false);
+                            setIsLibraryOpen(false);
+                            setActiveMobileTab('tools');
+                        }}
+                        className="flex flex-col items-center justify-center gap-0.5 cursor-pointer transition-all active:scale-95 flex-1 min-h-[44px]"
+                        style={{ color: activeMobileTab === 'tools' ? '#38BDF8' : '#6B7280' }}
+                    >
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                        </svg>
+                        <span className="text-[10px] font-semibold uppercase tracking-wider">Ещё</span>
+                    </button>
+                    </div>
                 </div>
             )}
 

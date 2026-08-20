@@ -126,14 +126,14 @@ export default function TimelineEditor({
 
     return (
         <div className="flex flex-col gap-3 h-full font-sans select-none">
-            <div className="flex justify-between items-center mb-2 sticky top-0 bg-transparent z-10 py-1.5 border-b border-black/5 dark:border-white/5">
-                <h3 className="text-[12px] font-semibold text-neutral-600 dark:text-neutral-400 uppercase tracking-widest flex items-center gap-2">
-                    <svg className="w-4 h-4 text-neutral-600 dark:text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div className="flex justify-between items-center mb-2 sticky top-0 bg-transparent z-10 py-1.5 border-b border-black/5 dark:border-white/5 gap-2">
+                <h3 className="text-[11px] md:text-[12px] font-semibold text-neutral-600 dark:text-neutral-400 uppercase tracking-widest flex items-center gap-2 truncate">
+                    <svg className="w-4 h-4 shrink-0 text-neutral-600 dark:text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M14 10l-2 1m0 0l-2-1m2 1v2.5M20 7l-2 1m2-1l-2-1m2 1v2.5M14 4l-2-1-2 1M4 7l2-1M4 7l2 1M4 7v2.5M12 21l-2-1m2 1l2-1m-2 1v-2.5M6 18l-2-1v-2.5M18 18l2-1v-2.5" />
                     </svg>
-                    Transcript Timeline
+                    <span className="truncate">Transcript</span>
                 </h3>
-                <span className="text-[12px] text-neutral-600 dark:text-neutral-400 bg-neutral-50/50 dark:bg-neutral-950/50 px-4 py-1 border border-black/5 dark:border-white/5 flex items-center gap-2 rounded-lg">
+                <span className="hidden sm:flex text-[12px] text-neutral-600 dark:text-neutral-400 bg-neutral-50/50 dark:bg-neutral-950/50 px-4 py-1 border border-black/5 dark:border-white/5 items-center gap-2 rounded-lg shrink-0">
                     <span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block animate-pulse"></span>
                     Click word to cut | Drag to select subtitles
                 </span>

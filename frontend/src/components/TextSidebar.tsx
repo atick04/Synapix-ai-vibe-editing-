@@ -66,7 +66,7 @@ export default function TextSidebar({
     <div className="flex flex-col h-full bg-transparent w-full">
       <div className="h-14 flex items-center justify-between px-4 border-b border-white/[0.06]">
         <h3 className="text-sm font-semibold text-white">Стили субтитров</h3>
-        <button onClick={onClose} className="text-neutral-400 hover:text-white transition-colors text-xs cursor-pointer">
+        <button onClick={onClose} className="min-h-9 px-2 text-neutral-400 hover:text-white transition-colors text-xs cursor-pointer">
           Закрыть
         </button>
       </div>

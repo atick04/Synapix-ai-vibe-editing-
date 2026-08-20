@@ -933,7 +933,7 @@ export default function ReferencesSidebar({
                     {onClose && (
                         <button 
                             onClick={onClose}
-                            className="w-6 h-6 rounded-full flex items-center justify-center text-[11px] text-zinc-400 hover:text-white hover:bg-white/10 transition-all cursor-pointer bg-white/5 border border-white/10 shadow-sm"
+                            className="w-9 h-9 rounded-full flex items-center justify-center text-[13px] text-zinc-400 hover:text-white hover:bg-white/10 transition-all cursor-pointer bg-white/5 border border-white/10 shadow-sm"
                             title="Скрыть"
                         >
                             ✕
@@ -944,20 +944,20 @@ export default function ReferencesSidebar({
                 <div className="flex bg-black/45 p-0.5 rounded-full border border-white/5 shadow-inner gap-0.5">
                     <button 
                         onClick={() => setSidebarTab('media')}
-                        className={`flex-1 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all duration-250 flex items-center justify-center gap-1.5 cursor-pointer ${sidebarTab === 'media' ? 'bg-white/10 text-white border border-white/5 shadow-sm' : 'text-zinc-455 hover:text-zinc-200'}`}
+                        className={`flex-1 min-h-9 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all duration-250 flex items-center justify-center gap-1.5 cursor-pointer ${sidebarTab === 'media' ? 'bg-white/10 text-white border border-white/5 shadow-sm' : 'text-zinc-455 hover:text-zinc-200'}`}
                     >
                         <span>ассеты</span>
                     </button>
                     <button 
                         onClick={() => setSidebarTab('color')}
-                        className={`flex-1 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all duration-250 flex items-center justify-center gap-1.5 cursor-pointer ${sidebarTab === 'color' ? 'bg-white/10 text-white border border-white/5 shadow-sm' : 'text-zinc-455 hover:text-zinc-200'}`}
+                        className={`flex-1 min-h-9 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all duration-250 flex items-center justify-center gap-1.5 cursor-pointer ${sidebarTab === 'color' ? 'bg-white/10 text-white border border-white/5 shadow-sm' : 'text-zinc-455 hover:text-zinc-200'}`}
                     >
                         <span>луты</span>
                     </button>
                     {focusedClipId && (
                         <button 
                             onClick={() => setSidebarTab('inspect')}
-                            className={`flex-1 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all duration-250 flex items-center justify-center gap-1.5 cursor-pointer ${sidebarTab === 'inspect' ? 'bg-white/10 text-blue-400 border border-white/5 shadow-sm' : 'text-zinc-455 hover:text-zinc-200'}`}
+                            className={`flex-1 min-h-9 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all duration-250 flex items-center justify-center gap-1.5 cursor-pointer ${sidebarTab === 'inspect' ? 'bg-white/10 text-blue-400 border border-white/5 shadow-sm' : 'text-zinc-455 hover:text-zinc-200'}`}
                         >
                             <span>свойства</span>
                         </button>

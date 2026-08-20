@@ -77,7 +77,7 @@ const Root: React.FC = () => {
       <Composition
         id="HtmlGraphicsScene"
         component={HtmlGraphicsComposition}
-        durationInFrames={300}
+        durationInFrames={900}
         fps={30}
         width={1080}
         height={1920}

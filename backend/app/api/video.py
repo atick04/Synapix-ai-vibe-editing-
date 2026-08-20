@@ -155,6 +155,16 @@ async def process_video_pipeline(video_path: str, audio_path: str, file_id: str)
     except Exception as look_err:
         log_progress(file_id, f"⚠️ Content look пропущен: {look_err}")
 
+    try:
+        from app.services.object_store import persist as r2_persist, enabled as r2_enabled
+        if r2_enabled():
+            r2_persist(video_path)
+            r2_persist(proxy_path)
+            r2_persist(audio_path)
+            log_progress(file_id, "☁️ Медиа сохранено в R2.")
+    except Exception as r2_err:
+        log_progress(file_id, f"⚠️ R2: {r2_err}")
+
 @router.post("/upload")
 async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = File(...), user=Depends(validate_user_access_key)):
     ext = os.path.splitext(file.filename)[1].lower()
@@ -176,6 +186,8 @@ async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
     log_progress(file_id, "📥 Файл загружен на сервер.")
     
     audio_path = os.path.join(UPLOAD_DIR, f"{file_id}.mp3")
+    from app.services.object_store import persist as r2_persist
+    background_tasks.add_task(r2_persist, file_path)
     background_tasks.add_task(process_video_pipeline, file_path, audio_path, file_id)
     register_project(user, file_id, file.filename or filename)
     
@@ -448,6 +460,9 @@ async def upload_additional_video(file_id: str, background_tasks: BackgroundTask
     if media_type == "video":
         audio_path = os.path.join(UPLOAD_DIR, f"{file_id}_{asset_id}.mp3")
         background_tasks.add_task(process_video_pipeline, file_path, audio_path, f"{file_id}_{asset_id}")
+    else:
+        from app.services.object_store import persist as r2_persist
+        background_tasks.add_task(r2_persist, file_path)
 
     return await get_media_library(file_id, user)
 
@@ -463,9 +478,9 @@ async def get_video_status(file_id: str, user=Depends(validate_user_access_key))
         with open(log_path, "r", encoding="utf-8") as f:
             logs = f.read().strip().split("\n")
     
-    # If a render lock file exists, render is actively in progress
+    from app.services.object_store import available as r2_available
     is_rendering = os.path.exists(render_lock_path)
-    is_ready = os.path.exists(rendered_path) and not is_rendering
+    is_ready = r2_available(rendered_path) and not is_rendering
     updated_at = os.stat(rendered_path).st_mtime if os.path.exists(rendered_path) else 0
     
     if is_rendering:
@@ -537,9 +552,9 @@ QUALITY_MAP = {
     "fast": {
         "crf": 26,
         "preset": "ultrafast",
-        "remotion_max_frames": 36,
-        "remotion_max_graphics": 2,
-        "remotion_timeout": 60,
+        "remotion_max_frames": 900,
+        "remotion_max_graphics": 64,
+        "remotion_timeout": 120,
         "enable_masking": False,
         "loudnorm": False,
         "skip_semantic": True,
@@ -549,9 +564,9 @@ QUALITY_MAP = {
     "medium": {
         "crf": 23,
         "preset": "veryfast",
-        "remotion_max_frames": 60,
-        "remotion_max_graphics": 4,
-        "remotion_timeout": 90,
+        "remotion_max_frames": 900,
+        "remotion_max_graphics": 64,
+        "remotion_timeout": 150,
         "enable_masking": False,
         "loudnorm": False,
         "skip_semantic": True,
@@ -560,11 +575,11 @@ QUALITY_MAP = {
     },
     "high": {
         "crf": 18,
-        "preset": "veryfast",  # was "fast" — still good for Reels, much quicker
-        "remotion_max_frames": 90,
-        "remotion_max_graphics": 6,
-        "remotion_timeout": 120,
-        "enable_masking": True,  # only if cached RVM mask already exists
+        "preset": "veryfast",
+        "remotion_max_frames": 900,
+        "remotion_max_graphics": 64,
+        "remotion_timeout": 180,
+        "enable_masking": True,
         "loudnorm": True,
         "skip_semantic": False,
         "mid_preset": "veryfast",
@@ -580,18 +595,13 @@ async def run_export_task(file_id: str, settings: ExportSettings):
     log_progress(
         file_id,
         f"🎬 Экспорт Reels: {settings.resolution} / {settings.quality} "
-        f"(графика≤{profile['remotion_max_graphics']}, "
+        f"(графика как в превью, "
         f"маска={'да' if profile['enable_masking'] else 'нет'})",
     )
 
     try:
-        source = None
-        for f in os.listdir(UPLOAD_DIR):
-            if f.startswith(file_id) and not any(x in f for x in ["_rendered", "_transcript", "_visual", ".log", ".mp3", ".rendering", ".ass", "_worksrc", "_proxy", "_rvm", "_restore", "_corrupted", "_diag"]):
-                ext_lower = os.path.splitext(f)[1].lower()
-                if ext_lower in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
-                    source = os.path.join(UPLOAD_DIR, f)
-                    break
+        from app.services.object_store import find_source_video, persist as r2_persist
+        source = find_source_video(file_id)
 
         if not source:
             log_progress(file_id, "❌ Исходный видеофайл не найден.")
@@ -660,6 +670,7 @@ async def run_export_task(file_id: str, settings: ExportSettings):
                 except OSError:
                     pass
             return
+        r2_persist(out_path)
         log_progress(file_id, f"✅ Экспорт завершён! Reel готов к скачиванию.")
     except Exception as e:
         log_progress(file_id, f"❌ Ошибка экспорта: {e}")
@@ -708,6 +719,11 @@ async def download_asset(req: DownloadAssetReq, user=Depends(validate_user_acces
     local_path = download_stock_asset(req.asset_id, req.url)
     if not local_path:
         raise HTTPException(status_code=500, detail="Не удалось скачать ассет")
+    try:
+        from app.services.object_store import persist as r2_persist
+        r2_persist(local_path)
+    except Exception:
+        pass
     
     if req.file_id:
         # Register in media library
@@ -934,6 +950,8 @@ async def upload_brand_font(brand_id: str, file: UploadFile = File(...), user=De
     try:
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+        from app.services.object_store import persist as r2_persist
+        r2_persist(file_path)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save font: {str(e)}")
         

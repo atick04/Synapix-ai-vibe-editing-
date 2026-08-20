@@ -19,7 +19,7 @@ import { useAuth } from "@/context/AuthContext";
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const { lang, theme, setTheme } = useTheme() as any;
+  const { theme, setTheme } = useTheme();
   const { lang: appLang } = useLanguage();
   const { user, logout } = useAuth();
   const [mounted, setMounted] = useState(false);
@@ -35,6 +35,8 @@ export default function Sidebar() {
 
   if (pathname?.startsWith('/admin')) return null;
 
+  const isEditor = pathname?.startsWith('/editor');
+
   const menuItems = [
     { id: "studio", icon: Video, label: appLang === 'ru' ? "Студия" : "Studio", href: lastProjectId ? `/editor/${lastProjectId}` : "/" },
     { id: "commercials", icon: Wand2, label: appLang === 'ru' ? "ИИ Реклама" : "AI Ads", href: "/ai-commercials" },
@@ -43,8 +45,16 @@ export default function Sidebar() {
     { id: "account", icon: Settings, label: appLang === 'ru' ? "Кабинет" : "Account", href: "/account" },
   ];
 
+  const mobileItems = [
+    { id: "projects", icon: FolderClock, label: appLang === 'ru' ? "Студия" : "Studio", href: "/" },
+    { id: "studio", icon: Video, label: appLang === 'ru' ? "Монтаж" : "Edit", href: lastProjectId ? `/editor/${lastProjectId}` : "/" },
+    { id: "templates", icon: LayoutTemplate, label: appLang === 'ru' ? "Стили" : "Styles", href: "/templates" },
+    { id: "account", icon: Settings, label: appLang === 'ru' ? "Кабинет" : "Account", href: "/account" },
+  ];
+
   return (
-    <aside className="hidden lg:flex flex-col w-[64px] hover:w-[200px] m-2 p-3.5 rounded-[16px] bg-white/65 dark:bg-neutral-900/65 backdrop-blur-[20px] border border-neutral-200/50 dark:border-neutral-800/50 shadow-sm z-50 shrink-0 h-[calc(100vh-32px)] transition-all duration-300 group overflow-hidden">
+    <>
+    <aside className="hidden lg:flex flex-col w-[64px] hover:w-[200px] m-2 p-3.5 rounded-[16px] bg-white/65 dark:bg-neutral-900/65 backdrop-blur-[20px] border border-neutral-200/50 dark:border-neutral-800/50 shadow-sm z-50 shrink-0 h-[calc(100dvh-32px)] transition-all duration-300 group overflow-hidden">
       {/* Logo — icon only, no duplicate text */}
       <div className="flex items-center gap-3 mb-6 px-1 mt-1">
         <div className="w-8 h-8 shrink-0 rounded-full overflow-hidden bg-neutral-900 dark:bg-neutral-100 flex items-center justify-center">
@@ -115,5 +125,36 @@ export default function Sidebar() {
         )}
       </div>
     </aside>
+
+    {!isEditor && (
+      <nav
+        className="lg:hidden fixed bottom-0 inset-x-0 z-50 flex items-stretch border-t border-white/10 dark:border-white/10 bg-[#111111]/92 backdrop-blur-xl"
+        style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+      >
+        {mobileItems.map((item) => {
+          const isActive =
+            item.id === "studio"
+              ? pathname.startsWith("/editor")
+              : item.id === "account"
+                ? pathname.startsWith("/account")
+                : item.id === "templates"
+                  ? pathname.startsWith("/templates")
+                  : pathname === "/";
+          return (
+            <Link
+              key={item.id}
+              href={item.href}
+              className={`flex-1 min-h-[56px] flex flex-col items-center justify-center gap-0.5 text-[10px] font-semibold tracking-wide ${
+                isActive ? "text-sky-400" : "text-neutral-500"
+              }`}
+            >
+              <item.icon className="w-5 h-5" />
+              {item.label}
+            </Link>
+          );
+        })}
+      </nav>
+    )}
+    </>
   );
 }

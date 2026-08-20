@@ -41,6 +41,11 @@ async def lifespan(app: FastAPI):
         from app.billing.config import dodo_configured, dodo_environment
         print(f"[boot] dodo={'on:' + dodo_environment() if dodo_configured() else 'OFF — set DODO_PAYMENTS_API_KEY'}")
         print(f"[boot] env={'prod' if is_production() else 'dev'} cors={','.join(cors_origins())}")
+        from app.services.object_store import enabled as r2_enabled, bucket_name as r2_bucket, ping as r2_ping
+        if r2_enabled():
+            print(f"[boot] r2={'ok' if r2_ping() else 'FAIL'} bucket={r2_bucket()}")
+        else:
+            print("[boot] r2=OFF — set R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET_NAME")
     except Exception as e:
         print(f"[boot] ensure_data_dirs failed: {e}")
 
@@ -101,6 +106,34 @@ app.include_router(admin.router)
 app.include_router(auth.router)
 app.include_router(billing.router)
 
+def _stream_r2(key: str, request: Request, meta: dict, file_headers: dict):
+    from app.services.object_store import iter_object
+
+    file_size = int(meta.get("ContentLength") or 0)
+    mime_type = meta.get("ContentType") or mimetypes.guess_type(key)[0] or "application/octet-stream"
+    if request.method == "HEAD":
+        from fastapi.responses import Response
+        return Response(
+            status_code=200,
+            headers={**file_headers, "Content-Length": str(file_size), "Content-Type": mime_type},
+        )
+    range_header = request.headers.get("range")
+    start, end = 0, file_size - 1 if file_size else 0
+    status = 200
+    if range_header and file_size:
+        range_match = re.match(r"bytes=(\d+)-(\d*)", range_header)
+        if range_match:
+            start = int(range_match.group(1))
+            end = int(range_match.group(2)) if range_match.group(2) else file_size - 1
+            end = min(end, file_size - 1)
+            status = 206
+    chunks, slice_len, ctype = iter_object(key, start, end if status == 206 or start > 0 else None)
+    headers = {**file_headers, "Content-Length": str(slice_len or (end - start + 1))}
+    if status == 206:
+        headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+    return StreamingResponse(chunks, status_code=status, headers=headers, media_type=ctype or mime_type)
+
+
 def _cors_file_headers(request: Request) -> dict:
     origin = (request.headers.get("origin") or "").rstrip("/")
     headers = {"Vary": "Origin", "Accept-Ranges": "bytes"}
@@ -136,6 +169,7 @@ async def get_upload_file(path: str, request: Request):
         raise HTTPException(status_code=400, detail="Invalid path")
 
     _authorize_upload(safe_path, request)
+    file_headers = _cors_file_headers(request)
         
     try:
         from app.core.paths import UPLOAD_DIR
@@ -148,9 +182,13 @@ async def get_upload_file(path: str, request: Request):
         if os.path.exists(fallback_path) and os.path.isfile(fallback_path):
             file_path = fallback_path
         else:
+            from app.services.object_store import enabled as r2_enabled, head_object
+            if r2_enabled():
+                meta = head_object(safe_path.replace("\\", "/"))
+                if meta:
+                    return _stream_r2(safe_path.replace("\\", "/"), request, meta, file_headers)
             raise HTTPException(status_code=404, detail="File not found")
 
-    file_headers = _cors_file_headers(request)
     if request.method == "HEAD":
         return FileResponse(file_path, headers=file_headers)
     range_header = request.headers.get("range")
@@ -208,11 +246,13 @@ async def health_check():
         from app.core.paths import DATA_DIR, ADMIN_STORE_PATH, rvm_weights_path, ensure_data_dirs
         ensure_data_dirs()
         weights = rvm_weights_path()
+        from app.services.object_store import enabled as r2_enabled, ping as r2_ping
         return {
             "status": "healthy",
             "data_dir": str(DATA_DIR),
             "admin_store": ADMIN_STORE_PATH.exists(),
             "rvm_weights": weights.exists() and weights.stat().st_size > 1024 * 1024,
+            "r2": (r2_ping() if r2_enabled() else False),
         }
     except Exception as e:
         return {"status": "healthy", "warning": str(e)}

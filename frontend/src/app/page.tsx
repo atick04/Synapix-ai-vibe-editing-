@@ -186,16 +186,16 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="h-full w-full overflow-hidden bg-transparent font-sans relative text-neutral-800 dark:text-neutral-200">
+    <div className="h-full w-full overflow-y-auto overflow-x-hidden lg:overflow-hidden bg-transparent font-sans relative text-neutral-800 dark:text-neutral-200">
       {/* Three.js Interactive 3D Audio-Reactive Floating Glass Logo Background */}
       <Background3D ref={bg3dRef} onAudioStateChange={setIsAudioPlaying} />
 
       {/* 3D Slogan & 5s Rotating Product Feature Callouts Overlay */}
-      <div className={`fixed inset-x-0 bottom-12 md:bottom-16 pointer-events-none flex flex-col items-center justify-center transition-all duration-1000 z-20 ${
+      <div className={`fixed inset-x-0 bottom-24 md:bottom-16 pointer-events-none flex flex-col items-center justify-center transition-all duration-1000 z-20 ${
         isAudioPlaying ? "opacity-100 scale-100 translate-y-0" : "opacity-0 scale-95 translate-y-4"
       }`}>
-        <div className="flex flex-col items-center text-center space-y-2 max-w-3xl px-6">
-          <h2 className="font-montserrat text-[44px] sm:text-[58px] md:text-[72px] font-normal text-white tracking-[0.03em] drop-shadow-[0_0_25px_rgba(255,255,255,0.45)]">
+        <div className="flex flex-col items-center text-center space-y-2 max-w-3xl px-4 sm:px-6">
+          <h2 className="font-montserrat text-[32px] sm:text-[58px] md:text-[72px] font-normal text-white tracking-[0.03em] drop-shadow-[0_0_25px_rgba(255,255,255,0.45)]">
             Synapix
           </h2>
 
@@ -224,8 +224,8 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Floating Header Audio Bar - Always accessible so user can toggle music back off */}
-      <div className="fixed top-5 right-5 lg:right-12 z-50 flex items-center gap-3">
+      {/* Floating Header Audio Bar — desktop only; on mobile it sits in the page header */}
+      <div className="hidden md:flex fixed top-5 right-5 lg:right-12 z-50 items-center gap-3">
         <div className="flex items-center gap-1.5 p-0.5 px-1 rounded-full liquid-glass border border-white/10 text-[11px] font-semibold shadow-xl">
           <button
             type="button"
@@ -285,35 +285,35 @@ export default function Dashboard() {
 
       {isMounted && authReady && !user && <AuthGate />}
       
-      <main className={`w-full h-full p-4 lg:p-6 xl:px-12 flex flex-col mx-auto max-w-[2500px] transition-all duration-1000 ease-in-out ${
+      <main className={`w-full min-h-full lg:h-full p-4 pb-mobile-nav lg:pb-6 lg:p-6 xl:px-12 flex flex-col mx-auto max-w-[2500px] transition-all duration-1000 ease-in-out ${
         isAudioPlaying ? "opacity-0 pointer-events-none scale-95" : "opacity-100 pointer-events-auto scale-100"
       }`}>
-        <div className="max-w-[1800px] mx-auto w-full h-full flex flex-col">
-          <header className="mb-4 lg:mb-6 mt-2 shrink-0 text-center md:text-left flex flex-col md:flex-row md:items-end justify-between gap-4">
-            <div>
-              <h1 className="text-[32px] md:text-[38px] font-semibold tracking-tight leading-tight mb-1">
+        <div className="max-w-[1800px] mx-auto w-full lg:h-full flex flex-col">
+          <header className="mb-4 lg:mb-6 mt-1 md:mt-2 shrink-0 text-left flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+            <div className="min-w-0">
+              <h1 className="text-[22px] sm:text-[32px] md:text-[38px] font-semibold tracking-tight leading-tight mb-1">
                 <span className="text-neutral-900 dark:text-white">{t.heroTitlePrefix}</span>
                 <span className="bg-clip-text text-transparent bg-gradient-to-r from-sky-400 via-cyan-300 to-white font-bold">{t.heroTitleHighlight}</span>
               </h1>
-              <p className="text-[14px] text-neutral-500 dark:text-neutral-400 max-w-xl leading-relaxed">
+              <p className="text-[13px] sm:text-[14px] text-neutral-500 dark:text-neutral-400 max-w-xl leading-relaxed">
                 {t.heroSubtitle}<strong className="text-neutral-300 font-semibold">{t.heroSubtitleBold}</strong>{t.heroSubtitleSuffix}
               </p>
             </div>
             
-            <div className="flex items-center gap-3 self-center md:self-auto pr-36">
+            <div className="flex items-center gap-2 sm:gap-3 self-start sm:self-auto shrink-0">
               {/* Sleek Minimalist Language Switcher Pill */}
               <div className="flex items-center p-0.5 rounded-full liquid-glass border border-white/10 text-[11px] font-semibold">
                 <button 
                   type="button"
                   onClick={() => setLang('en')}
-                  className={`px-3 py-1 rounded-full transition-all cursor-pointer ${lang === 'en' ? 'bg-sky-400 text-black shadow-sm font-bold' : 'text-neutral-400 hover:text-white'}`}
+                  className={`min-h-9 px-3 py-1 rounded-full transition-all cursor-pointer ${lang === 'en' ? 'bg-sky-400 text-black shadow-sm font-bold' : 'text-neutral-400 hover:text-white'}`}
                 >
                   EN
                 </button>
                 <button 
                   type="button"
                   onClick={() => setLang('ru')}
-                  className={`px-3 py-1 rounded-full transition-all cursor-pointer ${lang === 'ru' ? 'bg-sky-400 text-black shadow-sm font-bold' : 'text-neutral-400 hover:text-white'}`}
+                  className={`min-h-9 px-3 py-1 rounded-full transition-all cursor-pointer ${lang === 'ru' ? 'bg-sky-400 text-black shadow-sm font-bold' : 'text-neutral-400 hover:text-white'}`}
                 >
                   RU
                 </button>
@@ -323,13 +323,26 @@ export default function Dashboard() {
                 <Sparkles className="w-3.5 h-3.5 text-sky-400" />
                 <span className="text-[12px] font-medium text-neutral-200">{t.engineVersion}</span>
               </div>
+
+              <div className="md:hidden flex items-center gap-1 p-0.5 rounded-full liquid-glass border border-white/10">
+                <button
+                  type="button"
+                  onClick={() => bg3dRef.current?.toggleAudio()}
+                  className={`min-h-9 min-w-9 px-2.5 rounded-full flex items-center justify-center ${
+                    isAudioPlaying ? "bg-sky-400/20 text-sky-400" : "text-neutral-400"
+                  }`}
+                  aria-label={isAudioPlaying ? "Mute music" : "Play music"}
+                >
+                  {isAudioPlaying ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
           </header>
 
           <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-6 pb-4">
             
-            {/* Left Column: History & Tips */}
-            <div className="lg:col-span-4 flex flex-col gap-4 lg:gap-6 min-h-0">
+            {/* Left Column: History & Tips — after upload on phones */}
+            <div className="lg:col-span-4 flex flex-col gap-4 lg:gap-6 min-h-0 order-2 lg:order-1">
               
               {/* Dynamic Tips Card */}
               <div className="relative group rounded-[20px] overflow-hidden shrink-0">
@@ -354,7 +367,7 @@ export default function Dashboard() {
               </div>
 
               {/* Recent Projects */}
-              <div className="liquid-glass-card rounded-[20px] p-5.5 flex flex-col flex-1 min-h-0">
+              <div className="liquid-glass-card rounded-[20px] p-4 sm:p-5.5 flex flex-col flex-1 min-h-[200px] lg:min-h-0">
                 <div className="flex items-center justify-between mb-3.5 shrink-0">
                   <h3 className="text-[15px] font-semibold text-neutral-900 dark:text-white tracking-tight">{t.recentProjects}</h3>
                   <button className="w-7 h-7 rounded-full liquid-glass-pill flex items-center justify-center hover:scale-105 transition-all cursor-pointer">
@@ -379,7 +392,7 @@ export default function Dashboard() {
                             <p className="text-[10.5px] text-neutral-500 mt-0.5">{new Date(p.date).toLocaleDateString()}</p>
                           </div>
                           <button 
-                            className="p-1 rounded-full hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity"
+                            className="p-2 rounded-full hover:bg-white/10 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                             onClick={(e) => {
                               e.stopPropagation();
                               const newProjects = recentProjects.filter(rp => rp.id !== p.id);
@@ -406,10 +419,10 @@ export default function Dashboard() {
             </div>
 
             {/* Right Column: Upload & How it works */}
-            <div className="lg:col-span-8 flex flex-col gap-4 lg:gap-6 min-h-0">
+            <div className="lg:col-span-8 flex flex-col gap-4 lg:gap-6 min-h-0 order-1 lg:order-2">
               
               {/* Main Upload Card */}
-              <div className="liquid-glass-card rounded-[20px] overflow-hidden flex flex-col transition-all duration-300 flex-1 min-h-[280px]">
+              <div className="liquid-glass-card rounded-[20px] overflow-hidden flex flex-col transition-all duration-300 flex-1 min-h-[220px] sm:min-h-[280px]">
                 <div className="p-5.5 flex-1 flex flex-col relative min-h-0">
                   
                   {/* Subtle Glow Circle */}
@@ -419,7 +432,7 @@ export default function Dashboard() {
                     onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
                     onDragLeave={() => setIsDragging(false)}
                     onDrop={handleDrop}
-                    className={`flex-1 flex flex-col items-center justify-center border border-dashed rounded-[18px] transition-all duration-300 relative group p-6 min-h-0 ${
+                    className={`flex-1 flex flex-col items-center justify-center border border-dashed rounded-[18px] transition-all duration-300 relative group p-4 sm:p-6 min-h-[180px] sm:min-h-0 ${
                       isDragging 
                         ? "border-sky-400 bg-sky-500/10 scale-[1.005]" 
                         : file 
@@ -474,7 +487,7 @@ export default function Dashboard() {
                 </div>
 
                 {/* Action Bar */}
-                <div className="liquid-glass border-t border-white/10 px-5.5 py-3.5 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
+                <div className="liquid-glass border-t border-white/10 px-4 sm:px-5.5 py-3.5 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
                   <div className="flex items-center gap-2">
                     <div className={`w-2 h-2 rounded-full ${file ? 'bg-sky-400 shadow-[0_0_8px_rgba(56,189,248,0.8)] animate-pulse' : 'bg-neutral-600'}`}></div>
                     <span className="text-[12.5px] font-medium text-neutral-400">
@@ -485,7 +498,7 @@ export default function Dashboard() {
                   <button
                     onClick={handleUpload}
                     disabled={!file || uploading}
-                    className={`w-full sm:w-auto px-5.5 py-2 rounded-[14px] text-[13.5px] font-semibold flex items-center justify-center gap-2 transition-all duration-300 cursor-pointer ${
+                    className={`w-full sm:w-auto min-h-11 px-5.5 py-2.5 rounded-[14px] text-[13.5px] font-semibold flex items-center justify-center gap-2 transition-all duration-300 cursor-pointer ${
                       file && !uploading
                         ? "liquid-glass-pill text-white hover:scale-[1.02] active:scale-[0.98] border-sky-400/40"
                         : "bg-neutral-800 text-neutral-500 cursor-not-allowed border-transparent"

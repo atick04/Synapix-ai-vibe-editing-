@@ -94,7 +94,7 @@ export default function ChatSidebar({
                         <span className="w-1 h-1 rounded-full bg-black" />
                         <span className="w-1 h-1 rounded-full bg-black" />
                     </div>
-                    <span className="text-xs font-semibold text-white tracking-wide">Synapix Vibe Engine</span>
+                    <span className="text-xs font-semibold text-white tracking-wide truncate">Synapix</span>
                 </div>
                 <div className="flex items-center gap-2">
                     {isProcessing && (
@@ -297,7 +297,7 @@ export default function ChatSidebar({
             )}
 
             {/* GlassMorphic Input Bar */}
-            <div className="p-4 bg-black/20 backdrop-blur-xl border-t border-white/[0.08] shrink-0">
+            <div className="p-3 sm:p-4 bg-black/20 backdrop-blur-xl border-t border-white/[0.08] shrink-0">
                 <form onSubmit={onSubmit} className="relative flex flex-col bg-[#161618]/90 border border-white/10 focus-within:border-sky-400/50 rounded-2xl p-3.5 shadow-2xl transition-all duration-300 backdrop-blur-2xl">
                     {focusedItem && (
                         <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.06] border border-white/10 text-[10px] text-neutral-300 w-fit mb-2.5">
@@ -341,7 +341,7 @@ export default function ChatSidebar({
                                 <button 
                                     type="button"
                                     onClick={onStopAgent}
-                                    className="w-7 h-7 rounded-full bg-rose-600 hover:bg-rose-500 text-white flex items-center justify-center transition-all cursor-pointer shadow-lg animate-pulse"
+                                    className="w-10 h-10 md:w-7 md:h-7 rounded-full bg-rose-600 hover:bg-rose-500 text-white flex items-center justify-center transition-all cursor-pointer shadow-lg animate-pulse"
                                     title="Остановить"
                                 >
                                     <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
@@ -352,7 +352,7 @@ export default function ChatSidebar({
                                 <button 
                                     type="submit"
                                     disabled={!input.trim() || isProcessing}
-                                    className={`w-7 h-7 rounded-full flex items-center justify-center transition-all cursor-pointer shadow-lg
+                                    className={`w-10 h-10 md:w-7 md:h-7 rounded-full flex items-center justify-center transition-all cursor-pointer shadow-lg
                                         ${input.trim() && !isProcessing 
                                             ? "bg-primary text-black hover:scale-105" 
                                             : "bg-white/5 text-neutral-600 cursor-not-allowed"}`}

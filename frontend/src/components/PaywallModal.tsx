@@ -46,8 +46,8 @@ export default function PaywallModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 px-4">
-      <div className="w-full max-w-[420px] rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-6 text-neutral-900 dark:text-white">
+    <div className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center bg-black/60 px-0 sm:px-4">
+      <div className="w-full max-w-[420px] rounded-t-2xl sm:rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 sm:p-6 text-neutral-900 dark:text-white max-h-[92dvh] overflow-y-auto pb-[max(1.5rem,env(safe-area-inset-bottom))]">
         <h2 className="text-[18px] font-semibold">Бесплатный ролик уже использован</h2>
         <p className="mt-2 text-[13px] text-neutral-500 leading-relaxed">
           Один Reel можно собрать бесплатно. Чтобы монтировать дальше, привяжите карту — пробный период начнётся сразу.

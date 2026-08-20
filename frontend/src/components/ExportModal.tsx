@@ -24,9 +24,9 @@ type Quality = "high" | "medium" | "fast";
 type Resolution = "1080p" | "720p";
 
 const QUALITY_OPTIONS: { value: Quality; label: string; hint: string }[] = [
-  { value: "fast", label: "Быстрое", hint: "~1 мин · без ротоскопа" },
-  { value: "medium", label: "Обычное", hint: "Баланс скорость / качество" },
-  { value: "high", label: "Высокое", hint: "Дольше · маска если уже есть" },
+  { value: "fast", label: "Быстрое", hint: "Ниже битрейт · вся графика" },
+  { value: "medium", label: "Обычное", hint: "Как в превью" },
+  { value: "high", label: "Высокое", hint: "Как в превью · маска если есть" },
 ];
 
 const RESOLUTION_OPTIONS: { value: Resolution; label: string; hint: string }[] = [
@@ -51,7 +51,7 @@ export default function ExportModal({
 }: ExportModalProps) {
   const [mounted, setMounted] = useState(false);
   const [resolution, setResolution] = useState<Resolution>("1080p");
-  const [quality, setQuality] = useState<Quality>("fast");
+  const [quality, setQuality] = useState<Quality>("high");
   const [isExporting, setIsExporting] = useState(false);
   const [exportDone, setExportDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -167,7 +167,7 @@ export default function ExportModal({
 
   return createPortal(
     <div
-      className="fixed inset-0 flex items-center justify-center p-4 sm:p-6"
+      className="fixed inset-0 flex items-end sm:items-center justify-center p-0 sm:p-4 sm:p-6"
       style={{
         zIndex: 100000,
         background: "rgba(0,0,0,0.78)",
@@ -179,7 +179,7 @@ export default function ExportModal({
       }}
     >
       <div
-        className="relative w-full max-w-[420px] rounded-2xl overflow-hidden border border-white/10 bg-[#121214] shadow-[0_24px_80px_rgba(0,0,0,0.55)]"
+        className="relative w-full max-w-[420px] rounded-t-2xl sm:rounded-2xl overflow-hidden border border-white/10 bg-[#121214] shadow-[0_24px_80px_rgba(0,0,0,0.55)] max-h-[92dvh] flex flex-col"
         style={{ zIndex: 100001 }}
       >
         <div className="flex items-start justify-between px-5 pt-5 pb-4 border-b border-white/5">
@@ -202,7 +202,7 @@ export default function ExportModal({
           </button>
         </div>
 
-        <div className="px-5 py-5 space-y-5">
+        <div className="px-5 py-5 space-y-5 overflow-y-auto flex-1 min-h-0">
           <div>
             <label className="block text-[12px] font-medium text-neutral-400 mb-2">Разрешение</label>
             <div className="grid grid-cols-2 gap-2">
@@ -310,12 +310,12 @@ export default function ExportModal({
           )}
         </div>
 
-        <div className="px-5 py-4 border-t border-white/5 flex items-center justify-between gap-3 bg-black/20">
+        <div className="px-5 py-4 border-t border-white/5 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-2 sm:gap-3 bg-black/20 pb-[max(1rem,env(safe-area-inset-bottom))] sm:pb-4">
           <button
             type="button"
             onClick={onClose}
             disabled={isExporting}
-            className="px-4 py-2.5 text-[13px] text-neutral-400 hover:text-white transition-colors disabled:opacity-40"
+            className="min-h-11 px-4 py-2.5 text-[13px] text-neutral-400 hover:text-white transition-colors disabled:opacity-40"
           >
             {exportDone ? "Закрыть" : "Отмена"}
           </button>
@@ -324,7 +324,7 @@ export default function ExportModal({
               type="button"
               disabled={isExporting}
               onClick={handleExport}
-              className="flex items-center justify-center gap-2 min-w-[160px] px-5 py-2.5 rounded-xl bg-sky-400 hover:bg-sky-300 disabled:opacity-50 text-black text-[13px] font-semibold transition-colors shadow-[0_0_24px_rgba(56,189,248,0.25)]"
+              className="flex items-center justify-center gap-2 min-h-11 min-w-0 sm:min-w-[160px] px-5 py-2.5 rounded-xl bg-sky-400 hover:bg-sky-300 disabled:opacity-50 text-black text-[13px] font-semibold transition-colors shadow-[0_0_24px_rgba(56,189,248,0.25)]"
             >
               {isExporting ? (
                 <>

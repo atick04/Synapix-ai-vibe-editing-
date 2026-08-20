@@ -594,6 +594,12 @@ export const HtmlGraphicsComposition: React.FC<{ htmlContent: string; clipStart?
       max-height: 18% !important;
       min-width: 0 !important;
     }
+    .clip [data-idea-visual] .plate-content,
+    .clip [data-idea-visual] [data-plate-content] {
+      width: 100% !important;
+      max-width: 100% !important;
+      height: auto !important;
+    }
     .clip [data-idea-visual] .idea-pane,
     .clip [data-idea-visual] .rail-text,
     .clip [data-idea-visual] .stack-chip,
@@ -622,6 +628,19 @@ export const HtmlGraphicsComposition: React.FC<{ htmlContent: string; clipStart?
     }
     window.addEventListener('resize',scaleRoot);
     scaleRoot();
+    (function applyExportPlateBox(){
+      var wrap = document.querySelector('.clip-transform');
+      if (!wrap || wrap.getAttribute('data-idea') === '1') return;
+      var sx = parseFloat(wrap.getAttribute('data-plate-sx') || '1');
+      var sy = parseFloat(wrap.getAttribute('data-plate-sy') || '1');
+      if (!isFinite(sx) || !isFinite(sy) || (Math.abs(sx - 1) < 0.01 && Math.abs(sy - 1) < 0.01)) return;
+      var plate = document.querySelector('[data-plate], .glass-card, .plate, .card');
+      if (!plate || plate.getAttribute('data-idea-visual')) return;
+      var w = Math.max(8, plate.offsetWidth * sx);
+      var h = Math.max(8, plate.offsetHeight * sy);
+      plate.style.setProperty('width', w + 'px', 'important');
+      plate.style.setProperty('height', h + 'px', 'important');
+    })();
 
     window.addEventListener('message', (event) => {
       if (event.data && (event.data.type === 'sync_time' || event.data.type === 'sync_scene')) {
@@ -651,7 +670,7 @@ export const HtmlGraphicsComposition: React.FC<{ htmlContent: string; clipStart?
   </style>
 </body>
 </html>`;
-  }, [htmlContent, designW, designH]);
+  }, [htmlContent]);
 
   useEffect(() => {
     if (iframeRef.current?.contentWindow) {

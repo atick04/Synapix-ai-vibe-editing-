@@ -120,7 +120,7 @@ export default function AdminPage() {
       }}>
         <div style={{
           background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)',
-          borderRadius: 20, padding: '44px 40px', width: 380,
+          borderRadius: 20, padding: '32px 24px', width: 'min(380px, calc(100% - 32px))',
           boxShadow: '0 24px 64px rgba(0,0,0,0.5)',
         }}>
           <div style={{ textAlign: 'center', marginBottom: 32 }}>
@@ -183,7 +183,7 @@ export default function AdminPage() {
       {/* Header */}
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '0 32px', height: 56,
+        padding: '8px 16px', minHeight: 56, gap: 12, flexWrap: 'wrap',
         background: 'rgba(255,255,255,0.03)',
         borderBottom: '1px solid rgba(255,255,255,0.07)',
       }}>
@@ -205,11 +205,11 @@ export default function AdminPage() {
         >↻ Обновить</button>
       </div>
 
-      <div style={{ padding: '32px' }}>
+      <div style={{ padding: '16px', overflowX: 'auto' }}>
         {/* ─── DASHBOARD TAB ─── */}
         {activeTab === 'dashboard' && stats && (
           <div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 32 }}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-8">
               <StatCard label="Всего пользователей" value={stats.total_users} gradient="linear-gradient(135deg,#7C3AED,#3B82F6)" />
               <StatCard label="Онлайн сейчас" value={stats.online_users} sub="за последние 5 мин" gradient="linear-gradient(135deg,#10B981,#06B6D4)" />
               <StatCard label="Проектов" value={stats.active_projects} gradient="linear-gradient(135deg,#F59E0B,#EF4444)" />
@@ -236,12 +236,12 @@ export default function AdminPage() {
         {/* ─── USERS TAB ─── */}
         {activeTab === 'users' && (
           <div>
-            <div style={{ display: 'flex', gap: 16, marginBottom: 24 }}>
+            <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
               <StatCard label="Всего зарегистрировано" value={stats?.total_users ?? '—'} gradient="linear-gradient(135deg,#7C3AED,#3B82F6)" />
               <StatCard label="Онлайн прямо сейчас" value={stats?.online_users ?? '—'} sub="активны < 5 мин назад" gradient="linear-gradient(135deg,#10B981,#06B6D4)" />
             </div>
-            <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 14, overflow: 'hidden' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 14, overflow: 'auto' }}>
+              <table style={{ width: '100%', minWidth: 720, borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
                     {['Аккаунт', 'Способ входа', 'План', 'Токены', 'Зарегистрирован', 'Последний визит', 'Статус'].map(h => (
