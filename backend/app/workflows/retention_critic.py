@@ -103,9 +103,12 @@ class RetentionCritic:
         ]
         titles = [
             e for e in html_graphics
-            if e.get("graphic_kind") == "title" or e.get("mode") in ("full_broll", "fullscreen")
+            if e.get("graphic_kind") == "title" or (
+                e.get("mode") in ("full_broll", "fullscreen") and e.get("graphic_kind") not in ("map", "diagram")
+            )
         ]
-        overlays = [e for e in html_graphics if e not in titles]
+        maps = [e for e in html_graphics if e.get("graphic_kind") in ("map", "diagram")]
+        overlays = [e for e in html_graphics if e not in titles and e not in maps]
         if duration >= 20 and overlays and not titles:
             title_beats = [b for b in ((beat_sheet or {}).get("beats") or []) if b.get("job") == "title"]
             if title_beats:
@@ -154,6 +157,17 @@ class RetentionCritic:
                 )
                 if not hit and duration >= 12:
                     issues.append(f"Бит {b.get('id')} job=title пустой — нужен fullscreen TITLE «{b.get('concept')}».")
+                    score -= 8
+            for b in beats:
+                if b.get("job") != "diagram":
+                    continue
+                bs, be = float(b["start"]), float(b["end"])
+                hit = any(
+                    max(bs, float(g.get("start") or 0)) < min(be, float(g.get("end") or 0))
+                    for g in maps
+                )
+                if not hit and duration >= 12:
+                    issues.append(f"Бит {b.get('id')} job=diagram пустой — нужна карта мысли «{b.get('concept')}».")
                     score -= 8
 
         score = max(10, min(100, score))
@@ -257,8 +271,11 @@ class RetentionCritic:
         ]
         titles = [
             e for e in html_graphics
-            if e.get("graphic_kind") == "title" or e.get("mode") in ("full_broll", "fullscreen")
+            if e.get("graphic_kind") == "title" or (
+                e.get("mode") in ("full_broll", "fullscreen") and e.get("graphic_kind") not in ("map", "diagram")
+            )
         ]
+        maps = [e for e in html_graphics if e.get("graphic_kind") in ("map", "diagram")]
         if duration >= 20 and html_graphics and not titles:
             title_beats = [b for b in ((beat_sheet or {}).get("beats") or []) if b.get("job") == "title"]
             tb = title_beats[0] if title_beats else None
@@ -275,7 +292,9 @@ class RetentionCritic:
             job = b.get("job")
             if job == "title":
                 hit = any(
-                    e.get("mode") in ("full_broll", "fullscreen") or e.get("graphic_kind") == "title"
+                    (e.get("graphic_kind") == "title" or (
+                        e.get("mode") in ("full_broll", "fullscreen") and e.get("graphic_kind") not in ("map", "diagram")
+                    ))
                     for e in html_graphics
                     if max(bs, float(e.get("start") or 0)) < min(be, float(e.get("end") or 0))
                 )
@@ -287,6 +306,22 @@ class RetentionCritic:
                         "start": bs,
                         "end": be,
                         "description": f"TITLE «{b.get('concept')}»",
+                    })
+            if job == "diagram":
+                hit = any(
+                    e.get("graphic_kind") in ("map", "diagram")
+                    for e in html_graphics
+                    if max(bs, float(e.get("start") or 0)) < min(be, float(e.get("end") or 0))
+                )
+                if not hit:
+                    fixes.append({
+                        "issue": f"Empty diagram beat {b.get('id')}",
+                        "recommendation": "create_scene",
+                        "layout": "overlay",
+                        "scene_template": "idea_map",
+                        "start": bs,
+                        "end": be,
+                        "description": f"карта мысли «{b.get('concept')}»",
                     })
             if job == "face" and b.get("zoom"):
                 zhit = any(

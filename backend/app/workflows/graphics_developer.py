@@ -117,12 +117,15 @@ GRAPHICS_DEVELOPER_PROMPT = """Ты — Motion Designer студии Synapix.
 
 Зритель не успевает прочитать больше двух строк. Перегруз = провал.
 
-**На экране РОВНО:**
+**На экране РОВНО (кроме IDEA MAP):**
 1. Один заголовок (2–6 слов)
 2. Один ключевой момент (цифра **или** 2–6 слов)
 3. Опционально одна абстрактная иконка (геометрия / 1 glyph, не набор эмодзи)
 
-**ЗАПРЕЩЕНО:** bento, сетки 2×2, process steps, списки «3 причины», абзацы, графики, таймлайны, стрелки между карточками, 2+ карточки, нижние подписи-эссе, бейджи+лейблы+капшены сразу.
+**IDEA MAP (fullscreen cutaway):** 2–4 коротких узла + одна draw-on линия. Без карточек.
+
+**ЗАПРЕЩЕНО:** bento, сетки 2×2, списки «3 причины», абзацы, 2+ карточки, нижние подписи-эссе, бейджи+лейблы+капшены сразу.
+**IDEA MAP — исключение:** SVG-схема мысли РАЗРЕШЕНА. Запрещены glass-card и повтор речи целиком.
 
 ---
 ## 3 ТИПА СЦЕН (как Odysser: элемент за элементом, не «просто плашка»)
@@ -147,6 +150,16 @@ Safe-zone: top 5–12% или bottom 8–14% (9:16); left/right 5% (16:9). Ли�
 
 ### 4. BIG STAT — только если ключ это число
 Лейбл мелкий + огромная цифра. Без progress-bar и второй подписи.
+
+### 5. IDEA MAP (fullscreen cutaway) — карта мысли спикера
+Это НЕ TITLE и НЕ плашка. Лицо скрыто полем `--look-field`. На кадре рисуется СХЕМА этой фразы:
+- 2–4 узла — короткие лейблы ИЗ КОНЦЕПТА `MAP:kind | A → B → C` (не выдумывай другие слова)
+- kind=path/steps: ломаная линия, узлы по очереди
+- kind=compare: два полюса, волосяная черта между ними, микро VS
+- kind=cause: A → B стрелка draw-on
+- kind=funnel: 2–3 сужающихся контура
+Анимация: сначала чертится path (strokeDashoffset), потом точки, потом подписи stagger. Выход power2.in.
+L-риски по углам. Без glass-card, без bento, без абзаца транскрипта.
 
 ---
 ## GSAP СИНХРОНИЗАЦИЯ — ОБЯЗАТЕЛЬНО
@@ -195,7 +208,8 @@ tl.fromTo("#arrow-path",
 - `safe_zone="right"`  → `left: 50%; width: 44%; bottom: 8%; max-height: 80%;`
 - `safe_zone="top"`    → `top: 6%; left: 50%; transform: translateX(-50%); width: 88%; max-height: 35%;`
 - `safe_zone="bottom"` → `bottom: 8%; left: 6%; width: 88%; max-height: 75%;` (ОБЯЗАТЕЛЬНО якорить через `bottom: 8%`, НЕ через `top: 68%`, чтобы карточка не срезалась снизу!)
-- `mode="full_broll"` / `layout="fullscreen"` → TITLE на весь кадр: огромные 2–5 слов, непрозрачный фон, без glass-card
+- `mode="full_broll"` / `layout="fullscreen"` + kinetic_title → TITLE на весь кадр
+- `scene_template="idea_map"` → мысль спикера КАК ОВЕРЛЕЙ. Формат выбирает движок: rail / split / stack / thesis. Лицо видно. Не лестница на весь кадр.
 
 ---
 ## МАППИНГ: КОНЦЕПТ → ШАБЛОН
@@ -206,8 +220,9 @@ tl.fromTo("#arrow-path",
 | цифра / % / сумма | Plate или BIG STAT |
 | термин / закон / имя | Plate: заголовок + ключ |
 | главный хук ролика | Fullscreen kinetic TITLE (2–5 слов) |
+| механизм / путь / vs / причина (`MAP:`) | IDEA MAP overlay: rail / split / stack / thesis по kind |
 
-Шаги/причины/хронология → одна фраза + геометрия. Не рисуй список.
+Шаги → рельс справа. VS/причина → две карточки снизу. Одна мысль → thesis. Не fullscreen-лестница.
 
 ---
 ## АНТИ-ПАТТЕРНЫ — НИКОГДА
@@ -221,8 +236,9 @@ tl.fromTo("#arrow-path",
 ❌ Выход элементов за Safe Area (`bottom < 6%` или `top < 4%`)
 ❌ Перекрытие зоны лица (25%-70% высоты)
 ❌ Более 2 текстовых блоков на плашке (заголовок + ключ — потолок)
-❌ Bento / process steps / списки / графики / таймлайны / 2+ карточки
-❌ Абзац или подпись длиннее 6 слов
+❌ Bento / 2+ карточки / абзац длиннее 6 слов (кроме IDEA MAP split: ровно 2 панели)
+❌ IDEA MAP как kinetic TITLE или fullscreen-лестница с линией через текст
+❌ Абзац или подпись длиннее 6 слов (узлы карты — до 3 слов каждый)
 ❌ Более 3 акцентных цветов в одной сцене
 ❌ Анимации без ease параметра
 ❌ Статичные элементы без анимации входа/выхода
@@ -328,10 +344,13 @@ def _pick_scene_kind(
     scene_template: str,
     concept_prompt: str,
 ) -> str:
-    """title | plate | abstract — Odysser-style mix, not plates-only."""
+    """title | plate | abstract | map"""
     mode_l = (mode or "").lower()
     layout_l = (layout or "").lower()
     st = (scene_template or "").lower().replace(" ", "_")
+    concept = (concept_prompt or "").strip()
+    if st in ("idea_map", "diagram", "map", "thought_map") or concept.upper().startswith("MAP:"):
+        return "map"
     if mode_l == "full_broll" or layout_l in ("fullscreen", "cover", "full", "full_broll"):
         return "title"
     if st in ("kinetic_title", "title", "fullscreen"):
@@ -368,9 +387,13 @@ def _abstract_accent_fallback(concept_prompt: str, start_time: float, duration: 
     ar_l = (aspect_ratio or "9:16").lower()
     is_v = "9:16" in ar_l or "vertical" in ar_l or "portrait" in ar_l
     variant = sum(ord(c) for c in (headline + key)) % 3
-    top = "58%" if layout == "split" else ("8%" if is_v else "14%")
     left = "50%" if is_v or layout == "split" else "6%"
     transform = "translateX(-50%)" if is_v or layout == "split" else "none"
+    if layout == "split":
+        place = f"bottom:8%;top:auto;left:{left};transform:{transform}"
+    else:
+        top = "8%" if is_v else "14%"
+        place = f"top:{top};left:{left};transform:{transform}"
     title_fs = "5.2cqw" if is_v else "2.1cqw"
     key_fs = "3.4cqw" if is_v else "1.45cqw"
     hold = max(0.85, float(duration) - 0.7)
@@ -399,7 +422,7 @@ def _abstract_accent_fallback(concept_prompt: str, start_time: float, duration: 
   {ticks}
   {ring}
   <div class="abs-copy" data-plate="1" id="card"
-       style="position:absolute;top:{top};left:{left};transform:{transform};overflow:visible;">
+       style="position:absolute;{place};overflow:visible;">
     <div class="plate-content" data-plate-content="1">
       <div class="headline" id="abs-head">{headline}</div>
       {stroke}
@@ -462,9 +485,13 @@ def _clean_overlay_fallback(concept_prompt: str, start_time: float, duration: fl
     headline = headline.upper()
     ar_l = (aspect_ratio or "9:16").lower()
     is_v = "9:16" in ar_l or "vertical" in ar_l or "portrait" in ar_l
-    top_pos = "55%" if layout == "split" else ("6%" if is_v else "12%")
     left_pos = "50%" if is_v or layout == "split" else "5%"
     transform = "translateX(-50%)" if is_v or layout == "split" else "none"
+    if layout == "split":
+        place = f"bottom:8%;top:auto;left:{left_pos};transform:{transform}"
+    else:
+        top_pos = "6%" if is_v else "12%"
+        place = f"top:{top_pos};left:{left_pos};transform:{transform}"
     title_fs = "4.4cqw" if is_v else "1.85cqw"
     key_fs = "6.2cqw" if is_v else "2.6cqw"
     if key and re.search(r"[\d%]", key):
@@ -478,7 +505,7 @@ def _clean_overlay_fallback(concept_prompt: str, start_time: float, duration: fl
     return f"""
 <div class="clip" data-start="{start_time}" data-duration="{duration}">
   <div class="glass-card" data-plate="1" id="card"
-       style="position:absolute;top:{top_pos};left:{left_pos};transform:{transform};
+       style="position:absolute;{place};
               width:max-content;max-width:var(--plate-max-w,90%);
               overflow:visible;box-sizing:border-box;padding:var(--plate-pad,3cqw 3.6cqw);
               background:{field}ee;border:1px solid {accent}55;
@@ -608,6 +635,28 @@ def _proportional_tokens_css(aspect_ratio: str, mode: str = "overlay", look: dic
     overflow-wrap: normal !important;
     word-break: normal !important;
   }}
+  .clip [data-idea-visual],
+  .clip .idea-rail, .clip .idea-split, .clip .idea-stack, .clip .idea-thesis {{
+    top: auto !important;
+    bottom: 8% !important;
+    height: auto !important;
+    max-height: 18% !important;
+    min-width: 0 !important;
+  }}
+  .clip [data-idea-visual] .plate-content,
+  .clip [data-idea-visual] [data-plate-content] {{
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+  }}
+  .clip [data-idea-visual] .idea-pane,
+  .clip [data-idea-visual] .rail-text,
+  .clip [data-idea-visual] .stack-chip,
+  .clip [data-idea-visual] .thesis-head {{
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }}
   /* Soft default for a single absolute card without plate class */
   .clip > div[style*="position"][style*="absolute"] {{
     overflow: visible;
@@ -729,6 +778,7 @@ async def generate_custom_graphics_code(
     activity_step: str = None,
     scene_template: str = None,
     look: dict | None = None,
+    idea_map: dict | None = None,
 ) -> Dict[str, Any]:
     """Generates custom animated HTML code based on narrative requirements, graphics mode, and layout directives."""
     logger.info(f"🎨 Graphics Developer Agent initiated for concept: '{concept_prompt}' (Mode: {mode}, Layout: {layout})")
@@ -750,10 +800,32 @@ async def generate_custom_graphics_code(
             pass
 
     kind = _pick_scene_kind(mode, layout, scene_template or "", concept_prompt)
+    if kind == "map":
+        from app.services.idea_map import parse_idea_map, fallback_html as idea_map_fallback
+        map_spec = idea_map if isinstance(idea_map, dict) and idea_map.get("nodes") else parse_idea_map(concept_prompt, look)
+        spec = map_spec or {
+            "kind": "path", "visual": "rail", "nodes": ["МЫСЛЬ", "СМЫСЛ"], "seed": 0, "family": "ink",
+        }
+        visual = spec.get("visual") or "rail"
+        _emit_progress(
+            f"Карта мысли «{(concept_prompt or '')[:70]}» — {spec.get('kind')}/{visual}, без LLM",
+            progress=0.8,
+        )
+        html_code = idea_map_fallback(spec, start_time, duration, aspect_ratio, look=look)
+        cleaned_html = clean_html_fragment(
+            html_code, start_time, duration, mode=mode, aspect_ratio=aspect_ratio, look=look
+        )
+        return {
+            "html_content": cleaned_html,
+            "explanation": f"Карта мысли ({spec.get('kind')}/{visual})",
+            "design_aspect": aspect_ratio,
+        }
+
     mode_ru = {
         "title": "кинетический TITLE",
         "plate": "стеклянная плашка",
         "abstract": "абстрактный акцент (Odysser)",
+        "map": "карта мысли",
     }.get(kind, mode)
     _emit_progress(
         f"Пишу HTML/GSAP для «{(concept_prompt or '')[:70]}» — тип: {mode_ru}, {aspect_ratio}…",
@@ -761,13 +833,30 @@ async def generate_custom_graphics_code(
     )
     
     style_hint = ""
-    if kind == "abstract":
+    map_spec = None
+    if kind == "map":
+        from app.services.idea_map import parse_idea_map, fallback_html as idea_map_fallback
+        map_spec = idea_map if isinstance(idea_map, dict) and idea_map.get("nodes") else parse_idea_map(concept_prompt, look)
+        style_hint = " Optical Cut IDEA MAP: нарисуй отношение из узлов, не плашку и не TITLE."
+    elif kind == "abstract":
         style_hint = " Optical Cut: слово + L-риски / линия, БЕЗ glass-card."
     elif kind == "plate":
         style_hint = " Компактная плашка под look, Unbounded на акценте, лицо спикера видно."
 
     mode_instruction = ""
-    if kind == "title" or mode == "full_broll":
+    if kind == "map":
+        nodes = (map_spec or {}).get("nodes") or []
+        map_kind = (map_spec or {}).get("kind") or "path"
+        visual = (map_spec or {}).get("visual") or "rail"
+        node_line = " → ".join(str(n) for n in nodes) or concept_prompt
+        mode_instruction = f"""
+        - ТИП СЦЕНЫ: IDEA MAP overlay (visual={visual}, kind={map_kind}).
+        - Узлы СТРОГО: {node_line}
+        - rail: колонка справа 01/02/03. split: две панели снизу + VS/→. stack: чипы снизу. thesis: фраза снизу.
+        - Фон `.clip` = transparent. Лицо 25–70% свободно. Не fullscreen, не SVG-лестница.
+        - ЗАПРЕЩЕНО: glass-card как TITLE, kinetic TITLE, линия через текст.
+        """
+    elif kind == "title" or mode == "full_broll":
         is_v = "9:16" in (aspect_ratio or "").lower() or "vertical" in (aspect_ratio or "").lower() or "portrait" in (aspect_ratio or "").lower()
         hero = "var(--font-hero-916, 9cqw)" if is_v else "var(--font-hero-169, 4.4cqw)"
         mode_instruction = f"""
@@ -864,7 +953,15 @@ async def generate_custom_graphics_code(
             raise ValueError("Could not extract any valid HTML code block from LLM output")
 
         # Fullscreen must be a title plate, not a leftover glass card
-        if kind == "title" and re.search(r"glass-card", html_code, re.I):
+        if kind == "map":
+            from app.services.idea_map import fallback_html as idea_map_fallback, parse_idea_map
+            spec = map_spec or parse_idea_map(concept_prompt, look) or {
+                "kind": "path", "visual": "rail", "nodes": ["МЫСЛЬ", "СМЫСЛ"], "seed": 0, "family": "ink",
+            }
+            if not re.search(r"idea-rail|idea-split|idea-stack|idea-thesis", html_code, re.I):
+                logger.info("Idea map HTML missing overlay visual — using map fallback")
+                html_code = idea_map_fallback(spec, start_time, duration, aspect_ratio, look=look)
+        elif kind == "title" and re.search(r"glass-card", html_code, re.I):
             if not re.search(r"kinetic-hero|kinetic-accent|font-hero", html_code, re.I):
                 logger.info("Fullscreen HTML looked like an overlay card — using kinetic title fallback")
                 html_code = _kinetic_title_fallback(concept_prompt, start_time, duration, aspect_ratio, look=look)
@@ -892,7 +989,14 @@ async def generate_custom_graphics_code(
     except Exception as e:
         logger.error(f"⚠️ Graphics Developer code generation failed: {e}")
         _emit_progress(f"LLM не ответил корректно — ставлю fallback. ({e})", status="running", progress=0.83)
-        if kind == "title" or mode == "full_broll":
+        if kind == "map":
+            from app.services.idea_map import fallback_html as idea_map_fallback, parse_idea_map
+            spec = map_spec or parse_idea_map(concept_prompt, look) or {
+                "kind": "path", "nodes": ["МЫСЛЬ", "СМЫСЛ"], "seed": 0, "family": "ink",
+            }
+            fallback_html = idea_map_fallback(spec, start_time, duration, aspect_ratio, look=look)
+            explanation = "Карта мысли (графический B-roll)"
+        elif kind == "title" or mode == "full_broll":
             fallback_html = _kinetic_title_fallback(concept_prompt, start_time, duration, aspect_ratio, look=look)
             explanation = "Кинетический TITLE на весь кадр (fallback)"
         elif kind == "abstract":

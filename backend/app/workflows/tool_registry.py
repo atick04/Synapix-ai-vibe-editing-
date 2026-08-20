@@ -34,20 +34,24 @@ class AddBrollArgs(BaseModel):
 class CreateSceneArgs(BaseModel):
     start_time: float = Field(description="Таймкод начала сцены в секундах")
     duration: float = Field(description="Длительность сцены в секундах. Overlay: 2–4с. Fullscreen TITLE: 2–4с (макс 5с).")
-    scene_template: Optional[str] = Field(default=None, description="Шаблон: 'abstract' — слово + геометрия вокруг лица без плашки (дефолт Odysser). 'stat_card'/'headline' — стеклянная плашка для цифры/имени. 'kinetic_title' — fullscreen TITLE. Не process_steps / bento.")
+    scene_template: Optional[str] = Field(default=None, description="Шаблон: 'abstract' — слово + геометрия вокруг лица. 'stat_card' — плашка для цифры. 'kinetic_title' — fullscreen TITLE. 'idea_map' — overlay мысли (rail/split/stack/thesis). Не bento.")
     mood: str = Field(default="neutral", description="Настроение сцены (например: 'analytical', 'energetic', 'dramatic', 'cozy') для подбора Apple-style палитры")
     energy: float = Field(default=0.5, description="Уровень энергии от 0.0 до 1.0")
     entities: Optional[List[Dict[str, Any]]] = Field(default=None, description="Максимум 2 текстовых сущности: headline + ключ (stat или короткая фраза) и опционально icon. Не списки и не сетки.")
     relations: Optional[List[Dict[str, str]]] = Field(default=None, description="Не используй на overlay: стрелки перегружают. Оставь пустым, кроме редкого split.")
     style_profile: Optional[Dict[str, Any]] = Field(default=None, description="Профиль стилей: 'font_family' (кириллические шрифты: 'Inter', 'Montserrat', 'Rubik', 'Manrope', 'Unbounded', 'Comfortaa', 'JetBrains Mono', 'Playfair Display'), 'bg_color' (полупрозрачный фон Apple-glass, например 'rgba(20,20,25,0.65)'), 'border_color' ('rgba(255,255,255,0.15)'), 'color_accent' (цвет полосы загрузки/акцентов, например '#0A84FF')")
-    concept_prompt: Optional[str] = Field(default=None, description="Overlay abstract: 'ФРАЗА | ключ'. Plate: 'ЗАГОЛОВОК | 80%'. Fullscreen: 2–5 слов тайтла. Без абзацев и списков.")
+    concept_prompt: Optional[str] = Field(default=None, description="Overlay: 'ФРАЗА | ключ'. Plate: 'ЗАГОЛОВОК | 80%'. TITLE: 2–5 слов. idea_map: 'MAP:path | узел → узел' — схема мысли, не плашка.")
     layout: Optional[str] = Field(
         default=None,
-        description="ОБЯЗАТЕЛЬНО. 'overlay' — акцент поверх лица (abstract по умолчанию, плашка только для цифры). 'fullscreen' — TITLE на весь кадр. 'split' — лицо сверху / графика снизу."
+        description="ОБЯЗАТЕЛЬНО. 'overlay' — акцент поверх лица (в т.ч. idea_map). 'fullscreen' — TITLE на весь кадр. 'split' — лицо сверху / графика снизу."
     )
     mode: Optional[str] = Field(
         default=None,
         description="Синоним layout для совместимости: 'overlay' | 'full_broll' | 'fullscreen' | 'split'. Если задан layout — layout приоритетнее при отсутствии mode."
+    )
+    idea_map: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Спека карты мысли: {kind, nodes, seed}. Если задана — scene_template=idea_map, узлы из речи ЭТОГО ролика.",
     )
 
 class KineticTypographyArgs(BaseModel):
@@ -413,7 +417,15 @@ async def create_scene(timeline: TimelineState, memory: ProductionMemory, args: 
     start = args["start_time"]
     duration = args["duration"]
     layout = args.get("layout") or args.get("mode") or "overlay"
-    if layout in ("fullscreen", "cover", "full", "full_broll"):
+    tmpl = str(args.get("scene_template") or "").lower().replace(" ", "_")
+    concept = str(args.get("concept_prompt") or "")
+    is_idea_map = tmpl in ("idea_map", "diagram", "map", "thought_map") or concept.upper().startswith("MAP:")
+    if is_idea_map:
+        duration = max(2.6, min(float(duration), 4.6))
+        args["scene_template"] = "idea_map"
+        layout = "overlay"
+        args["layout"] = "overlay"
+    elif layout in ("fullscreen", "cover", "full", "full_broll"):
         duration = max(2.0, min(float(duration), 5.0))
         if not args.get("scene_template"):
             args["scene_template"] = "kinetic_title"
@@ -472,7 +484,19 @@ async def create_scene(timeline: TimelineState, memory: ProductionMemory, args: 
         current_scene_info = f"Речь рядом: «{transcript_snippet}»."
     if mood and current_scene_info:
         current_scene_info = f"{current_scene_info} Настроение: {mood}."
-    
+
+    look = memory.get_content_look() if hasattr(memory, "get_content_look") else None
+    idea_spec = args.get("idea_map") if isinstance(args.get("idea_map"), dict) else None
+    if is_idea_map:
+        from app.services.idea_map import parse_idea_map, build_idea_map, concept_from_map
+        if not (idea_spec and idea_spec.get("nodes")):
+            idea_spec = parse_idea_map(concept_prompt or "", look) or build_idea_map(
+                transcript_snippet or concept_prompt or "", look
+            )
+        if idea_spec:
+            args["idea_map"] = idea_spec
+            concept_prompt = concept_from_map(idea_spec)
+
     mode = args.get("mode") or args.get("scene_mode")
     if not mode:
         if layout in ("fullscreen", "cover", "full", "full_broll"):
@@ -494,6 +518,8 @@ async def create_scene(timeline: TimelineState, memory: ProductionMemory, args: 
         "full_broll": "полноэкранный графический B-roll",
         "split": "split-композиция (лицо + графика)",
     }.get(mode, mode)
+    if is_idea_map:
+        mode_label = "карта мысли (графический B-roll)"
     short_concept = (concept_prompt or "сцена")[:90]
     if len(concept_prompt or "") > 90:
         short_concept += "…"
@@ -535,7 +561,8 @@ async def create_scene(timeline: TimelineState, memory: ProductionMemory, args: 
         mode=mode,
         activity_step=activity_step,
         scene_template=args.get("scene_template"),
-        look=memory.get_content_look() if hasattr(memory, "get_content_look") else None,
+        look=look,
+        idea_map=idea_spec,
     )
     html_content = graphics_res.get("html_content", "")
     explanation = graphics_res.get("explanation", "Анимационная сцена сгенерирована ИИ.")
@@ -544,6 +571,7 @@ async def create_scene(timeline: TimelineState, memory: ProductionMemory, args: 
     timeline.add_graphics(
         start, duration, html_content, "hyperframes_html",
         mode=mode, layout=layout, design_aspect=aspect_ratio,
+        graphic_kind="map" if is_idea_map else None,
     )
 
     done_details = (
@@ -1191,7 +1219,7 @@ def add_motion_preset(timeline: TimelineState, memory: ProductionMemory, args: D
 _TOOL_DESCRIPTIONS = {
     "cut_clip": "Вырезает тишину, паузы или неудачные дубли из видео в указанном временном диапазоне.",
     "add_broll": "Накладывает B-roll: сначала свои загруженные клипы (asset_id), иначе сток по query.",
-    "create_scene": "Создает семантическую структуру визуальной сцены (инфографики), описывая сущности (entities), их роли и связи (relations) между ними.",
+    "create_scene": "Создает графическую сцену: overlay-акцент, TITLE или idea_map — overlay мысли (rail/split/stack/thesis) из речи этого бита.",
     "build_kinetic_typography": "Настраивает стилистику, шрифт, размер, цвет и анимацию кинетических субтитров.",
     "select_bgm": "Выбирает фоновый саундтрек из каталога и настраивает уровень его громкости. Только точечно («добавь музыку»). Для полного автомонтажа используй design_sound.",
     "design_sound": "Один проход саунд-дизайна в конце автомонтажа: кровать BGM на весь ролик, редкие SFX на склейки/плашки/TITLE/сток (не на зумы) и ducking под голос. Не указывай таймкоды — агент читает таймлайн. Не вызывай вместе с пачкой build_transition.",

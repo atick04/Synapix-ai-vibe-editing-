@@ -2026,6 +2026,28 @@ def render_video(
           overflow-wrap: normal !important;
           word-break: normal !important;
       }}
+      .clip [data-idea-visual],
+      .clip .idea-rail, .clip .idea-split, .clip .idea-stack, .clip .idea-thesis {{
+          top: auto !important;
+          bottom: 8% !important;
+          height: auto !important;
+          max-height: 18% !important;
+          min-width: 0 !important;
+      }}
+      .clip [data-idea-visual] .plate-content,
+      .clip [data-idea-visual] [data-plate-content] {{
+          width: 100% !important;
+          max-width: 100% !important;
+          height: auto !important;
+      }}
+      .clip [data-idea-visual] .idea-pane,
+      .clip [data-idea-visual] .rail-text,
+      .clip [data-idea-visual] .stack-chip,
+      .clip [data-idea-visual] .thesis-head {{
+          white-space: nowrap !important;
+          overflow: hidden !important;
+          text-overflow: ellipsis !important;
+      }}
     </style>
     <script>
       tailwind.config = {{
@@ -2280,6 +2302,7 @@ def render_video(
         var sy = wrap ? parseFloat(wrap.getAttribute('data-plate-sy') || '1') : 1;
         var plate = document.querySelector('[data-plate], .glass-card, .plate, .card');
         if (!plate) return;
+        if (plate.getAttribute('data-idea-visual') || /(?:^|\\s)idea-(?:rail|split|stack|thesis)(?:\\s|$)/.test(plate.className || '')) return;
         if (!plate.querySelector(':scope > .plate-content')) {{
           var content = document.createElement('div');
           content.className = 'plate-content';
@@ -2298,8 +2321,12 @@ def render_video(
         var body = plate.querySelector('.plate-content');
         var cw = body ? body.offsetWidth : plate.offsetWidth;
         var ch = body ? body.offsetHeight : plate.offsetHeight;
-        plate.style.setProperty('width', Math.max(cw, cw * sx) + 'px', 'important');
-        plate.style.setProperty('height', Math.max(ch, ch * sy) + 'px', 'important');
+        var baseW = plate.offsetWidth || cw;
+        var baseH = plate.offsetHeight || ch;
+        plate.style.setProperty('width', Math.max(8, baseW * sx) + 'px', 'important');
+        plate.style.setProperty('height', Math.max(8, baseH * sy) + 'px', 'important');
+        plate.style.setProperty('max-width', 'none', 'important');
+        plate.style.setProperty('max-height', 'none', 'important');
         plate.style.setProperty('overflow', 'visible', 'important');
       }})();
 

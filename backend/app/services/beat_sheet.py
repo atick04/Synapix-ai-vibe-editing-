@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-JOBS = ("face", "title", "overlay", "broll")
+JOBS = ("face", "title", "overlay", "broll", "diagram")
 ROLES = ("hook", "problem", "mechanism", "proof", "turn", "payoff", "cta")
 
 PICTURE_LOCK_TOOLS = ("cut_clip", "change_format")
@@ -135,6 +135,16 @@ def _title_budget(look: Dict[str, Any]) -> int:
     return max(nums)
 
 
+def _diagram_budget(look: Dict[str, Any], n_beats: int) -> int:
+    family = look.get("family") or "ink"
+    density = str((look.get("montage") or {}).get("graphic_density") or "low")
+    if family == "raw" or density == "minimal":
+        return 1 if n_beats >= 5 else 0
+    if density == "medium" or family == "signal":
+        return 2 if n_beats >= 6 else 1
+    return 1
+
+
 def _pick_job(
     role: str,
     text: str,
@@ -142,6 +152,8 @@ def _pick_job(
     titles_left: int,
     overlays_left: int,
     has_user_broll: bool,
+    diagrams_left: int = 0,
+    idea_spec: Optional[Dict[str, Any]] = None,
 ) -> str:
     montage = look.get("montage") or {}
     density = str(montage.get("graphic_density") or "low")
@@ -160,6 +172,8 @@ def _pick_job(
         return "face"
 
     if role == "proof":
+        if diagrams_left and idea_spec:
+            return "diagram"
         allow_stock = bias in ("metaphor", "user_then_metaphor")
         allow_user = bias in ("user_first", "user_then_metaphor", "metaphor")
         if has_user_broll and allow_user:
@@ -171,11 +185,20 @@ def _pick_job(
         return "face"
 
     if role == "mechanism":
+        if diagrams_left and idea_spec:
+            return "diagram"
         if overlays_left and density != "minimal":
             return "overlay"
         return "face"
 
+    if role == "problem":
+        if diagrams_left and idea_spec and idea_spec.get("kind") in ("cause", "compare"):
+            return "diagram"
+        return "face"
+
     if role == "turn":
+        if diagrams_left and idea_spec:
+            return "diagram"
         if overlays_left and density == "medium":
             return "overlay"
         return "face"
@@ -236,25 +259,38 @@ def build_beat_sheet(
 
     titles_left = title_budget
     overlays_left = overlay_budget
+    diagrams_left = _diagram_budget(look, len(chunks))
     beats: List[Dict[str, Any]] = []
+    from app.services.idea_map import build_idea_map, concept_from_map
+
     for i, (ch, role) in enumerate(zip(chunks, roles)):
         text = (ch.get("text") or "").strip()
-        job = _pick_job(role, text, look, titles_left, overlays_left, has_user_broll)
+        idea_spec = build_idea_map(text, look) if diagrams_left else None
+        job = _pick_job(
+            role, text, look, titles_left, overlays_left, has_user_broll,
+            diagrams_left=diagrams_left, idea_spec=idea_spec,
+        )
         if job == "title":
             titles_left = max(0, titles_left - 1)
         elif job == "overlay":
             overlays_left = max(0, overlays_left - 1)
+        elif job == "diagram":
+            diagrams_left = max(0, diagrams_left - 1)
         start = round(float(ch["start"]), 2)
         end = round(float(ch["end"]), 2)
         if end - start > 8.5:
             end = round(start + 8.5, 2)
         zoom = job in ("face", "overlay") and role in ("hook", "problem", "proof", "turn")
-        concept = _headline(text)
-        if job == "overlay" and re.search(r"\d", text):
-            m = re.search(r"(\d[\d\s.,]*%?)", text)
-            if m:
-                concept = f"{concept} | {m.group(1).replace(' ', '')}"
-        beats.append({
+        if job == "diagram" and idea_spec:
+            concept = concept_from_map(idea_spec)
+        else:
+            concept = _headline(text)
+            if job == "overlay" and re.search(r"\d", text):
+                m = re.search(r"(\d[\d\s.,]*%?)", text)
+                if m:
+                    concept = f"{concept} | {m.group(1).replace(' ', '')}"
+            idea_spec = None
+        beat = {
             "id": i + 1,
             "role": role,
             "job": job,
@@ -263,7 +299,10 @@ def build_beat_sheet(
             "text": text[:180],
             "concept": concept,
             "zoom": zoom,
-        })
+        }
+        if idea_spec:
+            beat["idea_map"] = idea_spec
+        beats.append(beat)
 
     # Title not before 1.8s unless the hook really starts there
     for b in beats:
@@ -302,15 +341,20 @@ def director_beat_contract(sheet: Optional[Dict[str, Any]], *, full: bool = True
 
 ПОЛНЫЙ АВТОМОНТАЖ — СТРОГО ТРИ ФАЗЫ В ОДНОМ tool_calls:
 1) PICTURE LOCK: `cut_clip` (если просили вырезать паузы) + `create_zoom` ТОЛЬКО на битах с +zoom.
-2) COVERAGE: `create_scene` fullscreen ТОЛЬКО job=title; overlay ТОЛЬКО job=overlay; `add_broll` ТОЛЬКО job=broll.
-   concept_prompt = concept бита. start_time/end_time = границы бита (title 2–3.5с внутри бита).
+2) COVERAGE: `create_scene` fullscreen+kinetic_title ТОЛЬКО job=title;
+   overlay ТОЛЬКО job=overlay; `add_broll` ТОЛЬКО job=broll;
+   job=diagram → `create_scene` layout=overlay scene_template=idea_map.
+   Движок сам ставит visual: шаги/путь → rail справа; vs/причина → две карточки; иначе thesis/stack.
+   Не fullscreen-лестница и не TITLE. Лицо 25–70% свободно.
+   start_time = граница бита. title 2–3.5с, diagram 2.8–4.2с внутри бита.
 3) FINISH: `build_kinetic_typography` (preset из Content Look) → `apply_color_grade` (lut из Look) → `design_sound`.
 
 ЗАПРЕЩЕНО:
 - графика или B-roll на job=face;
-- два акцента (title/overlay/broll) на одном таймкоде;
+- два акцента (title/overlay/broll/diagram) на одном таймкоде;
 - TITLE раньше 1.8с;
 - сток на бите без job=broll;
+- job=diagram как kinetic_title / glass-card — это cutaway-карта мысли, узлы из речи ЭТОГО бита;
 - импровизация «закрыть скуку плашкой» вне сетки.
 """
 
@@ -321,7 +365,18 @@ def sort_tool_calls(calls: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [c for _, c in numbered]
 
 
+def _is_diagram_call(call: Dict[str, Any]) -> bool:
+    args = call.get("arguments") or {}
+    tmpl = str(args.get("scene_template") or "").lower().replace(" ", "_")
+    concept = str(args.get("concept_prompt") or "")
+    if tmpl in ("idea_map", "diagram", "map", "thought_map"):
+        return True
+    return concept.upper().startswith("MAP:")
+
+
 def _is_title_call(call: Dict[str, Any]) -> bool:
+    if _is_diagram_call(call):
+        return False
     args = call.get("arguments") or {}
     layout = str(args.get("layout") or args.get("mode") or "")
     tmpl = str(args.get("scene_template") or "")
@@ -344,15 +399,30 @@ def snap_tools_to_beats(
     titles = pool("title")
     overlays = pool("overlay")
     brolls = pool("broll")
+    diagrams = pool("diagram")
     zoom_beats = [b for b in beats if b.get("zoom")]
-    ti = oi = bi = zi = 0
+    ti = oi = bi = di = zi = 0
     out: List[Dict[str, Any]] = []
 
     for call in calls or []:
         name = call.get("name") or ""
         args = dict(call.get("arguments") or {})
         if name == "create_scene":
-            if _is_title_call(call):
+            if _is_diagram_call(call):
+                if di >= len(diagrams):
+                    if full:
+                        continue
+                else:
+                    b = diagrams[di]
+                    di += 1
+                    args["start_time"] = round(b["start"], 2)
+                    args["duration"] = round(min(4.2, max(2.6, b["end"] - b["start"])), 2)
+                    args["layout"] = "overlay"
+                    args["scene_template"] = "idea_map"
+                    args["concept_prompt"] = args.get("concept_prompt") or b.get("concept")
+                    if b.get("idea_map"):
+                        args["idea_map"] = b["idea_map"]
+            elif _is_title_call(call):
                 if ti >= len(titles):
                     if full:
                         continue
@@ -398,6 +468,20 @@ def snap_tools_to_beats(
             out.append({"name": name, "arguments": args})
         else:
             out.append(call if "arguments" in call else {"name": name, "arguments": args})
+    if full:
+        while di < len(diagrams):
+            b = diagrams[di]
+            di += 1
+            args = {
+                "start_time": round(b["start"], 2),
+                "duration": round(min(4.2, max(2.6, float(b["end"]) - float(b["start"]))), 2),
+                "layout": "overlay",
+                "scene_template": "idea_map",
+                "concept_prompt": b.get("concept") or "",
+            }
+            if b.get("idea_map"):
+                args["idea_map"] = b["idea_map"]
+            out.append({"name": "create_scene", "arguments": args})
     return out
 
 

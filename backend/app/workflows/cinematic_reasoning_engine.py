@@ -81,8 +81,8 @@ SYSTEM_INSTRUCTIONS_TEMPLATE = """Ты — РЕЖИССЁР АВТОМОНТАЖ
 
     4. РИТМ REELS — СТОРИТЕЛЛИНГ СЛОЯМИ ПО BEAT SHEET:
     Сетка битов в контексте — закон. На бит РОВНО ОДИН ход. Между акцентами лицо ≥3с.
-    Сначала picture lock (склейки, зумы), потом coverage (title/overlay/broll по job), потом звук и цвет.
-    Цель на 30–45с: ~55% talking-head, ~20% abstract accent, ~15% TITLE, ~10% сток.
+    Сначала picture lock (склейки, зумы), потом coverage (title/overlay/diagram/broll по job), потом звук и цвет.
+    Цель на 30–45с: ~50% talking-head, ~15% abstract, ~10% TITLE, ~15% карта мысли, ~10% свой/сток B-roll.
     Графика — Synapix Optical Cut (регистрационные риски + волосяная линия + один accent из Content Look).
     Не копируй чужие UI-киты. Не ставь indigo/cyan/gold, если их нет в Content Look.
 
@@ -94,10 +94,15 @@ SYSTEM_INSTRUCTIONS_TEMPLATE = """Ты — РЕЖИССЁР АВТОМОНТАЖ
        Плашка. Пример: `"ОШИБКА ДАННЫХ | 80%"`.
     C) `create_scene` + `layout='fullscreen'` + `scene_template='kinetic_title'` — TITLE на весь кадр.
        Хук / главный тезис. 2–5 слов. 2–4с (макс 5с). Первый title не раньше 2с.
-    D) `add_broll` — 1.5–3.5с. Если в медиатеке есть СВОИ клипы пользователя — ставь ИХ (`asset_id` или имя файла в `query`). Pexels только если своих нет И Content Look разрешает сток.
+    D) `create_scene` + `layout='overlay'` + `scene_template='idea_map'` — МЫСЛЬ СПИКЕРА.
+       Только job=diagram. `concept_prompt` вида `MAP:steps/rail | трафик → конверсия`.
+       Движок сам выбирает формат: rail (шаги справа), split (vs / причина снизу), stack / thesis.
+       Оверлей, лицо видно. Не лестница на весь кадр, не TITLE, не Pexels.
+    E) `add_broll` — 1.5–3.5с. Если в медиатеке есть СВОИ клипы пользователя — ставь ИХ (`asset_id` или имя файла в `query`). Pexels только если своих нет И Content Look разрешает сток.
 
     - ЗАПРЕЩЕНО: все сцены только плашками; overlay+fullscreen на одном таймкоде; fullscreen >5с.
-    - Чередуй A и C. Плашку (B) ставь редко — когда есть число.
+    - Чередуй лицо, TITLE и карту мысли. Плашку (B) ставь редко — когда есть число.
+    - На механизме («сначала… потом», «потому что», «vs») бери D, не A.
     - `concept_prompt` короткий. ⛔ списки, bento, простыни.
     - `layout='split'` — редко: лицо сверху, графика снизу.
     - КИРИЛЛИЦА: текст графики и субтитров на русском. Шрифты: Unbounded, Montserrat, Inter, Rubik, Manrope, Comfortaa, JetBrains Mono, Playfair Display, Marck Script. Не Bebas Neue / Lobster для кириллицы.
@@ -604,12 +609,12 @@ async def execute_single_tool_node(state: VideoEditingState) -> Dict[str, Any]:
     if not full:
         names = [c.get("name") for c in tool_calls_queue]
         full = sum(1 for n in names if n in ("create_scene", "add_broll", "create_zoom", "build_kinetic_typography")) >= 3
-    tool_calls_queue = sort_tool_calls(tool_calls_queue)
     tool_calls_queue = snap_tools_to_beats(
         tool_calls_queue,
         memory.get_beat_sheet() if hasattr(memory, "get_beat_sheet") else {},
         full=full,
     )
+    tool_calls_queue = sort_tool_calls(tool_calls_queue)
 
     # Map technical tool names to clean, high-fidelity Russian descriptions
     FRIENDLY_TOOL_NAMES = {

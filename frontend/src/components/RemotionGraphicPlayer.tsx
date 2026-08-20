@@ -32,6 +32,7 @@ interface RemotionGraphicPlayerProps {
     interactive?: boolean;
     selected?: boolean;
     onSelect?: () => void;
+    onDeselect?: () => void;
     onTransformChange?: (next: {
         offsetX: number;
         offsetY: number;
@@ -74,8 +75,22 @@ function measurePlateBox(iframe: HTMLIFrameElement): ContentBox | null {
         const rootRect = root.getBoundingClientRect();
         const rootArea = Math.max(1, rootRect.width * rootRect.height);
 
+        const idea = root.querySelector<HTMLElement>('[data-idea-visual]');
+        if (idea) {
+            const r = idea.getBoundingClientRect();
+            if (r.width >= 12 && r.height >= 8) {
+                const pad = 4;
+                return {
+                    left: round1(((r.left - pad) / vw) * 100),
+                    top: round1(((r.top - pad) / vh) * 100),
+                    width: round1(((r.width + pad * 2) / vw) * 100),
+                    height: round1(((r.height + pad * 2) / vh) * 100),
+                };
+            }
+        }
+
         const preferred = root.querySelectorAll<HTMLElement>(
-            '.glass-card, .card, .plate, .lower-third, [data-plate], [data-synapix-plate], [class*="glass"], [class*="bento"], [class*="Card"]'
+            '[data-idea-visual], .glass-card, .card, .plate, .lower-third, [data-plate], [data-synapix-plate], [class*="glass"], [class*="bento"], [class*="Card"]'
         );
         const nodes = preferred.length
             ? preferred
@@ -217,6 +232,7 @@ export const RemotionGraphicPlayer: React.FC<RemotionGraphicPlayerProps> = ({
     interactive = false,
     selected = false,
     onSelect,
+    onDeselect,
     onTransformChange,
     onHtmlChange,
 }) => {
@@ -238,6 +254,8 @@ export const RemotionGraphicPlayer: React.FC<RemotionGraphicPlayerProps> = ({
         originSY: number;
         width: number;
         height: number;
+        boxW: number;
+        boxH: number;
     } | null>(null);
     const API_URL = getApiUrl();
 
@@ -315,6 +333,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
     window.addEventListener('message', function(ev){
       if(!ev.data || ev.data.type !== 'sync_time') return;
       const t = ev.data.time;
+      if (typeof scaleRoot === 'function') scaleRoot();
       forceShow = !!ev.data.forceShow;
       const clipStart = ${clipStart};
       const clipEnd = ${clipEnd};
@@ -323,7 +342,8 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
       const clips = document.querySelectorAll('.clip');
       const inWindow = forceShow || (t >= clipStart - 0.05 && t <= clipEnd + 0.05);
       clips.forEach(function(clip){
-        clip.style.display = inWindow ? 'block' : 'none';
+        clip.style.opacity = inWindow ? '1' : '0';
+        clip.style.visibility = inWindow ? 'visible' : 'hidden';
         if (inWindow) {
           clip.setAttribute('data-start', String(clipStart));
           clip.setAttribute('data-duration', String(clipDur));
@@ -371,22 +391,23 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
 </html>`;
     }, [htmlContent, API_URL, clipStart, clipEnd, designW, designH, isFullBroll, plateMaxW, plateMaxH]);
 
-    const isActive = currentTime >= clipStart && currentTime < clipEnd;
+    const isActive = currentTime >= clipStart - 0.05 && currentTime <= clipEnd + 0.05;
     const isVisible = isActive || selected;
 
     const refreshContentBox = useCallback(() => {
         const iframe = iframeRef.current;
         if (!iframe) return;
-        if (!(currentTime >= clipStart && currentTime < clipEnd) && !selected) return;
+        if (!(currentTime >= clipStart - 0.05 && currentTime <= clipEnd + 0.05) && !selected) return;
         const box = measurePlateBox(iframe);
         if (box) setContentBox(box);
     }, [currentTime, clipStart, clipEnd, selected]);
 
     const postPlateLayout = useCallback((resetBase = false) => {
+        if (/data-idea-visual/.test(htmlContent || '')) return;
         const win = iframeRef.current?.contentWindow;
         if (!win) return;
         win.postMessage({ type: 'plate_layout', scaleX, scaleY, resetBase }, '*');
-    }, [scaleX, scaleY]);
+    }, [scaleX, scaleY, htmlContent]);
 
     useEffect(() => {
         if (!iframeRef.current?.contentWindow) return;
@@ -440,6 +461,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
         refreshContentBox();
         const host = hostRef.current;
         const rect = (host || captureEl).getBoundingClientRect();
+        const box = contentBox || { left: 8, top: 8, width: 40, height: 28 };
         dragRef.current = {
             pointerId: e.pointerId,
             mode,
@@ -451,6 +473,8 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
             originSY: scaleY,
             width: rect.width,
             height: rect.height,
+            boxW: Math.max(8, box.width),
+            boxH: Math.max(8, box.height),
         };
         captureEl.setPointerCapture(e.pointerId);
     };
@@ -458,14 +482,13 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
     const handlePointerMove = (e: React.PointerEvent) => {
         const drag = dragRef.current;
         if (!drag || drag.pointerId !== e.pointerId || !onTransformChange) return;
-        const { width, height, startClientX, startClientY, originX, originY, originSX, originSY, mode } = drag;
+        const { width, height, startClientX, startClientY, originX, originY, originSX, originSY, mode, boxW, boxH } = drag;
         if (width <= 0 || height <= 0) return;
 
         const dxPct = ((e.clientX - startClientX) / width) * 100;
         const dyPct = ((e.clientY - startClientY) / height) * 100;
 
         if (mode === 'move') {
-            // Keep plate mostly inside the frame (tighter than before to avoid clipping)
             onTransformChange({
                 offsetX: round1(clamp(originX + dxPct, -45, 45)),
                 offsetY: round1(clamp(originY + dyPct, -45, 45)),
@@ -475,22 +498,39 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
             return;
         }
 
-        const affectX = mode === 'resize-L' || mode === 'resize-R' || mode === 'resize-TL' || mode === 'resize-TR' || mode === 'resize-BL' || mode === 'resize-BR';
-        const affectY = mode === 'resize-T' || mode === 'resize-B' || mode === 'resize-TL' || mode === 'resize-TR' || mode === 'resize-BL' || mode === 'resize-BR';
-        const signX = mode === 'resize-TR' || mode === 'resize-BR' || mode === 'resize-R' ? 1 : -1;
-        const signY = mode === 'resize-BL' || mode === 'resize-BR' || mode === 'resize-B' ? 1 : -1;
-        const sens = contentBox ? Math.max(16, Math.min(contentBox.width, contentBox.height)) : 40;
-        let nextSX = affectX ? round1(clamp(originSX + (signX * dxPct) / sens, 0.25, 2.8)) : originSX;
-        let nextSY = affectY ? round1(clamp(originSY + (signY * dyPct) / sens, 0.25, 2.8)) : originSY;
+        const fromLeft = mode === 'resize-L' || mode === 'resize-TL' || mode === 'resize-BL';
+        const fromRight = mode === 'resize-R' || mode === 'resize-TR' || mode === 'resize-BR';
+        const fromTop = mode === 'resize-T' || mode === 'resize-TL' || mode === 'resize-TR';
+        const fromBottom = mode === 'resize-B' || mode === 'resize-BL' || mode === 'resize-BR';
+        const affectX = fromLeft || fromRight;
+        const affectY = fromTop || fromBottom;
+        const signX = fromRight ? 1 : -1;
+        const signY = fromBottom ? 1 : -1;
+        let nextSX = affectX
+            ? round1(clamp(originSX * (1 + (signX * dxPct) / boxW), 0.25, 2.8))
+            : originSX;
+        let nextSY = affectY
+            ? round1(clamp(originSY * (1 + (signY * dyPct) / boxH), 0.25, 2.8))
+            : originSY;
 
         const isCorner = mode === 'resize-TL' || mode === 'resize-TR' || mode === 'resize-BL' || mode === 'resize-BR';
         if (e.shiftKey && isCorner) {
-            const dominant = Math.abs(dxPct) >= Math.abs(dyPct) ? nextSX : nextSY;
-            const avg = round1(clamp(dominant, 0.25, 2.8));
-            nextSX = avg;
-            nextSY = avg;
+            const dominant = Math.abs(dxPct) >= Math.abs(dyPct) ? nextSX / originSX : nextSY / originSY;
+            nextSX = round1(clamp(originSX * dominant, 0.25, 2.8));
+            nextSY = round1(clamp(originSY * dominant, 0.25, 2.8));
         }
-        onTransformChange({ offsetX: originX, offsetY: originY, scaleX: nextSX, scaleY: nextSY });
+
+        // Width grows from the plate's CSS left, so pin the opposite edge via host offset.
+        const dw = boxW * (nextSX / Math.max(0.01, originSX) - 1);
+        const dh = boxH * (nextSY / Math.max(0.01, originSY) - 1);
+        const nextOX = fromLeft ? originX - dw : originX;
+        const nextOY = fromTop ? originY - dh : originY;
+        onTransformChange({
+            offsetX: round1(clamp(nextOX, -80, 80)),
+            offsetY: round1(clamp(nextOY, -80, 80)),
+            scaleX: nextSX,
+            scaleY: nextSY,
+        });
     };
 
     const handlePointerUp = (e: React.PointerEvent) => {
@@ -514,6 +554,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
     };
 
     const box: ContentBox = contentBox || { left: 8, top: 8, width: 40, height: 28 };
+    const fullFrameHit = selected && box.width >= 86 && box.height >= 86;
 
     useEffect(() => {
         if (!selected) return;
@@ -549,8 +590,9 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
             data-design-aspect={designAspect || (isLandscape ? '16:9' : '9:16')}
             className="absolute inset-0"
             style={{
-                zIndex: isFullBroll ? 200 : (selected ? 210 : 100),
-                display: isVisible ? 'block' : 'none',
+                zIndex: isVisible ? (isFullBroll ? 200 : (selected ? 210 : 100)) : 0,
+                display: 'block',
+                opacity: isVisible ? 1 : 0,
                 background: 'transparent',
                 overflow: 'visible',
                 pointerEvents: 'none',
@@ -564,6 +606,8 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
                 ref={iframeRef}
                 srcDoc={srcDoc}
                 className="w-full h-full motion-graphic-iframe"
+                data-clip-start={clipStart}
+                data-clip-end={clipEnd}
                 scrolling="no"
                 style={{ border: 'none', background: 'transparent', pointerEvents: 'none', overflow: 'visible', colorScheme: 'normal' }}
                 {...({ allowtransparency: "true" } as any)}
@@ -576,6 +620,18 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
                 }}
             />
 
+            {interactive && selected && (
+                <div
+                    data-graphic-deselect
+                    className="absolute inset-0"
+                    style={{ pointerEvents: 'auto', zIndex: 1 }}
+                    onPointerDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onDeselect?.();
+                    }}
+                />
+            )}
             {interactive && (
                 <div
                     ref={selRef}
@@ -585,7 +641,8 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[RemotionGraphicPlaye
                         top: `${box.top}%`,
                         width: `${box.width}%`,
                         height: `${box.height}%`,
-                        pointerEvents: 'auto',
+                        pointerEvents: fullFrameHit ? 'none' : 'auto',
+                        zIndex: 2,
                         cursor: selected ? 'move' : 'pointer',
                         background: selected ? 'rgba(249,115,22,0.08)' : 'transparent',
                         outline: selected ? '2px solid rgba(249,115,22,0.95)' : '1px solid transparent',

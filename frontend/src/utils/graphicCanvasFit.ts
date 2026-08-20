@@ -66,7 +66,40 @@ export const GRAPHIC_PLATE_UNCLIP_CSS = `
 }
 `;
 
-export const GRAPHIC_ANTI_CLIP_CSS = `${GRAPHIC_CANVAS_FIT_CSS}${GRAPHIC_PLATE_UNCLIP_CSS}`;
+/** Idea-map overlays live in the lower safe zone. Never max-content / grow into the face. */
+export const GRAPHIC_IDEA_SAFE_CSS = `
+.clip [data-idea-visual],
+.clip .idea-rail, .clip .idea-split, .clip .idea-stack, .clip .idea-thesis {
+  top: auto !important;
+  bottom: 8% !important;
+  height: auto !important;
+  max-height: 18% !important;
+  min-width: 0 !important;
+}
+.clip [data-idea-visual] .plate-content,
+.clip [data-idea-visual] [data-plate-content],
+.clip .idea-rail .plate-content,
+.clip .idea-split .plate-content,
+.clip .idea-stack .plate-content,
+.clip .idea-thesis .plate-content {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: auto !important;
+  flex: 1 1 auto !important;
+  transform: none !important;
+}
+.clip [data-idea-visual] .idea-pane,
+.clip [data-idea-visual] .rail-text,
+.clip [data-idea-visual] .stack-chip,
+.clip [data-idea-visual] .thesis-head {
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  min-width: 0 !important;
+}
+`;
+
+export const GRAPHIC_ANTI_CLIP_CSS = `${GRAPHIC_CANVAS_FIT_CSS}${GRAPHIC_PLATE_UNCLIP_CSS}${GRAPHIC_IDEA_SAFE_CSS}`;
 
 export const GRAPHIC_FIT_ROOT_SCRIPT = `
 function designSize(){
@@ -118,8 +151,15 @@ function scaleRoot(){
 function findPlate(){
   return document.querySelector('[data-plate], [data-synapix-plate], .glass-card, .abs-copy, .plate, .lower-third');
 }
+function isIdeaVisual(el){
+  if (!el) return false;
+  if (el.getAttribute && el.getAttribute('data-idea-visual')) return true;
+  var cls = (el.className && String(el.className)) || '';
+  return /(?:^|\\s)idea-(?:rail|split|stack|thesis)(?:\\s|$)/.test(cls);
+}
 function ensurePlateLayers(plate){
-  if (!plate || plate.getAttribute('data-layered') === '1') return plate;
+  if (!plate || isIdeaVisual(plate)) return plate;
+  if (plate.getAttribute('data-layered') === '1') return plate;
   if (plate.querySelector(':scope > .plate-content, :scope > [data-plate-content]')) {
     plate.setAttribute('data-layered', '1');
     return plate;
@@ -151,44 +191,23 @@ function ensurePlateLayers(plate){
 }
 function applyPlateBox(sx, sy){
   var plate = findPlate();
-  if (!plate) return;
+  if (!plate || isIdeaVisual(plate)) return;
   ensurePlateLayers(plate);
-  var d = designSize();
-  var content = plate.querySelector('.plate-content, [data-plate-content]');
   if (!plate.dataset.baseW) {
     plate.style.width = 'max-content';
     plate.style.height = 'max-content';
     plate.dataset.baseW = String(Math.max(1, plate.offsetWidth));
     plate.dataset.baseH = String(Math.max(1, plate.offsetHeight));
   }
-  var cw = content ? Math.max(content.scrollWidth, content.offsetWidth) : parseFloat(plate.dataset.baseW);
-  var ch = content ? Math.max(content.scrollHeight, content.offsetHeight) : parseFloat(plate.dataset.baseH);
-  var w = Math.max(cw, parseFloat(plate.dataset.baseW) * (sx || 1));
-  var h = Math.max(ch, parseFloat(plate.dataset.baseH) * (sy || 1));
-  w = Math.min(w, d.w * 0.96);
-  h = Math.min(h, d.h * 0.96);
-  plate.style.setProperty('width', Math.max(w, cw) + 'px', 'important');
-  plate.style.setProperty('height', Math.max(h, ch) + 'px', 'important');
+  var w = parseFloat(plate.dataset.baseW) * (sx || 1);
+  var h = parseFloat(plate.dataset.baseH) * (sy || 1);
+  plate.style.setProperty('width', Math.max(8, w) + 'px', 'important');
+  plate.style.setProperty('height', Math.max(8, h) + 'px', 'important');
   plate.style.setProperty('max-width', 'none', 'important');
   plate.style.setProperty('max-height', 'none', 'important');
   plate.style.setProperty('overflow', 'visible', 'important');
-  var zoom = parseFloat(document.documentElement.style.zoom) || 1;
-  var box = plate.getBoundingClientRect();
-  var left = box.left / zoom;
-  var top = box.top / zoom;
-  var pw = box.width / zoom;
-  var ph = box.height / zoom;
-  if (left + pw > d.w - 6) {
-    plate.style.left = Math.max(6, d.w - 6 - pw) + 'px';
-    plate.style.transform = 'none';
-  }
-  if (top + ph > d.h - 6) {
-    plate.style.top = Math.max(6, d.h - 6 - ph) + 'px';
-  }
-  if (left < 0) {
-    plate.style.left = '6px';
-    plate.style.transform = 'none';
-  }
+  // Keep CSS left/top. Growing width from a fixed left edge stretches right;
+  // left-handle drags compensate with host offsetX so the right edge stays put.
   unlockOverflow();
 }
 window.__applyPlateBox = applyPlateBox;

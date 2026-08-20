@@ -411,7 +411,10 @@ export default function VideoTimeline({
         type: 'left' | 'right', 
         startX: number, 
         initialTime: number,
-        pointerId: number
+        pointerId: number,
+        originStart: number,
+        originEnd: number,
+        rawIndex?: number,
     } | null>(null);
     const [previewTrim, setPreviewTrim] = useState<{time: number} | null>(null);
 
@@ -422,7 +425,8 @@ export default function VideoTimeline({
         startX: number,
         initialStart: number,
         initialEnd: number,
-        pointerId: number
+        pointerId: number,
+        rawIndex?: number,
     } | null>(null);
     const [previewDrag, setPreviewDrag] = useState<{ start: number, end: number } | null>(null);
 
@@ -657,6 +661,7 @@ export default function VideoTimeline({
 
     // Process Graphics Clips list supporting dragging + trim preview
     const isTitleBroll = (e: any) => {
+        if (e?.graphic_kind === 'map' || e?.graphic_kind === 'diagram') return false;
         const mode = String(e?.mode || e?.layout || e?.graphic_kind || '');
         return mode === 'full_broll' || mode === 'fullscreen' || e?.graphic_kind === 'title';
     };
@@ -689,6 +694,7 @@ export default function VideoTimeline({
         else if (e.action === 'add_dynamic_graphic') label = `dynamic (${e.elements?.length || 0} el)`;
         else if (e.action === 'add_text_overlay') label = `text: "${(e.text || '').slice(0, 18)}"`;
         else if (e.action === 'add_hyperframes_graphics') label = "плашка";
+        else if (e.graphic_kind === 'map' || e.graphic_kind === 'diagram') label = "карта мысли";
         else if (e.action === 'canvas_overlay' || e.action === 'hyperframes_html') {
             label = e.style ? `плашка (${e.style})` : "плашка";
         }
@@ -795,6 +801,10 @@ export default function VideoTimeline({
         e.stopPropagation();
         
         if (activeTool === 'pointer') {
+            if (movedRef.current) {
+                movedRef.current = false;
+                return;
+            }
             setSelectedClipId(id);
         } else if (activeTool === 'razor') {
             const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
@@ -863,31 +873,63 @@ export default function VideoTimeline({
     };
 
     const trimActiveRef = useRef(false);
+    const dragActiveRef = useRef(false);
+    const movedRef = useRef(false);
 
     // Trim handler
-    const handleTrimStart = (e: React.PointerEvent, track: 'v1'|'a1'|'t1'|'v2'|'m1'|'sfx'|'c1'|'g1'|'s1', clipIndex: number, type: 'left' | 'right', initialTime: number) => {
+    const handleTrimStart = (
+        e: React.PointerEvent,
+        track: 'v1'|'a1'|'t1'|'v2'|'m1'|'sfx'|'c1'|'g1'|'s1',
+        clipIndex: number,
+        type: 'left' | 'right',
+        initialTime: number,
+        originStart?: number,
+        originEnd?: number,
+        rawIndex?: number,
+    ) => {
         if (activeTool !== 'pointer') return;
         e.stopPropagation();
         e.preventDefault();
+        e.nativeEvent.stopImmediatePropagation();
         try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
         trimActiveRef.current = true;
-        setTrimState({ track, clipIndex, type, startX: e.clientX, initialTime, pointerId: e.pointerId });
+        setDragState(null);
+        setPreviewDrag(null);
+        const originS = originStart ?? initialTime;
+        const originE = originEnd ?? initialTime;
+        setTrimState({
+            track,
+            clipIndex,
+            type,
+            startX: e.clientX,
+            initialTime,
+            pointerId: e.pointerId,
+            originStart: originS,
+            originEnd: originE,
+            rawIndex,
+        });
         setPreviewTrim({ time: initialTime });
     };
 
     const handleTrimMove = (e: React.PointerEvent | PointerEvent) => {
-        if (!trimState || e.pointerId !== trimState.pointerId || !containerRef.current) return;
-        const trackWidth = containerRef.current.getBoundingClientRect().width || 1;
-        const deltaSec = ((e.clientX - trimState.startX) / trackWidth) * projectDuration;
-        const projectTime = absToProj(trimState.initialTime) + deltaSec;
+        if (!trimState || e.pointerId !== trimState.pointerId) return;
+        const lane = document.querySelector(`[data-timeline-lane="${trimState.track}"]`) as HTMLElement | null;
+        const el = lane || containerRef.current;
+        if (!el) return;
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 2 || projectDuration <= 0) return;
+        // Edge follows the cursor on this lane (not the ruler), so left/right trim stay symmetric.
+        const pct = (e.clientX - rect.left) / rect.width;
+        const projectTime = Math.max(0, Math.min(1, pct)) * projectDuration;
         let newTime = projToAbs(projectTime);
 
-        // Enforce boundary bounds for snapped tracks (v1 & a1) to prevent overlaps
         const track = trimState.track;
         const idx = trimState.clipIndex;
         let minBound = 0;
         let maxBound = duration;
         const MIN_CLIP = 0.15;
+        const originStart = trimState.originStart;
+        const originEnd = trimState.originEnd;
 
         if (track === 'v1' || track === 'a1') {
             const list = multiTrackEdl[track as 'v1' | 'a1'];
@@ -905,38 +947,16 @@ export default function VideoTimeline({
                     }
                 }
             }
-        } else if (track === 'g1') {
-            const clip = graphicClips[idx];
-            if (clip) {
-                // Use committed times (not live preview) as the opposite edge
-                const raw = activeEdits[clip.rawIndex];
-                const rawStart = raw?.start != null ? raw.start : clip.start;
-                const rawEnd = raw?.end != null ? raw.end : (rawStart + (raw?.duration ?? 3));
-                if (trimState.type === 'left') {
-                    minBound = 0;
-                    maxBound = rawEnd - MIN_CLIP;
-                } else {
-                    minBound = rawStart + MIN_CLIP;
-                    maxBound = duration;
-                }
-            }
-        } else if (track === 's1') {
-            const clip = sceneClips[idx];
-            if (clip) {
-                const raw = activeEdits[clip.rawIndex];
-                const rawStart = raw?.start != null ? raw.start : clip.start;
-                const rawEnd = raw?.end != null ? raw.end : (rawStart + (raw?.duration ?? 3));
-                if (trimState.type === 'left') {
-                    minBound = 0;
-                    maxBound = rawEnd - MIN_CLIP;
-                } else {
-                    minBound = rawStart + MIN_CLIP;
-                    maxBound = duration;
-                }
-            }
+        } else if (trimState.type === 'left') {
+            minBound = 0;
+            maxBound = originEnd - MIN_CLIP;
+        } else {
+            minBound = originStart + MIN_CLIP;
+            maxBound = duration;
         }
 
         newTime = Math.max(minBound, Math.min(newTime, maxBound));
+        if (Math.abs(e.clientX - trimState.startX) > 4) movedRef.current = true;
         setPreviewTrim({ time: newTime });
     };
 
@@ -993,12 +1013,12 @@ export default function VideoTimeline({
             }
         } else if (trim.track === 'g1') {
             if (onActiveEditsChange) {
-                const targetClip = graphicClips[trim.clipIndex];
-                if (targetClip) {
+                const rawIndex = trim.rawIndex ?? graphicClips[trim.clipIndex]?.rawIndex;
+                if (rawIndex != null) {
                     const updated = activeEdits.map((ae, i) => {
-                        if (i !== targetClip.rawIndex) return ae;
-                        const newStart = trim.type === 'left' ? preview.time : (ae.start ?? 0);
-                        const newEnd = trim.type === 'right' ? preview.time : (ae.end ?? ((ae.start ?? 0) + (ae.duration ?? 3)));
+                        if (i !== rawIndex) return ae;
+                        const newStart = trim.type === 'left' ? preview.time : trim.originStart;
+                        const newEnd = trim.type === 'right' ? preview.time : trim.originEnd;
                         return patchGraphicEditTiming(ae, newStart, newEnd);
                     });
                     onActiveEditsChange(updated);
@@ -1006,12 +1026,12 @@ export default function VideoTimeline({
             }
         } else if (trim.track === 's1') {
             if (onActiveEditsChange) {
-                const targetClip = sceneClips[trim.clipIndex];
-                if (targetClip) {
+                const rawIndex = trim.rawIndex ?? sceneClips[trim.clipIndex]?.rawIndex;
+                if (rawIndex != null) {
                     const updated = activeEdits.map((ae, i) => {
-                        if (i !== targetClip.rawIndex) return ae;
-                        const newStart = trim.type === 'left' ? preview.time : (ae.start ?? 0);
-                        const newEnd = trim.type === 'right' ? preview.time : (ae.end ?? ((ae.start ?? 0) + (ae.duration ?? 3)));
+                        if (i !== rawIndex) return ae;
+                        const newStart = trim.type === 'left' ? preview.time : trim.originStart;
+                        const newEnd = trim.type === 'right' ? preview.time : trim.originEnd;
                         return patchGraphicEditTiming(ae, newStart, newEnd);
                     });
                     onActiveEditsChange(updated);
@@ -1070,93 +1090,127 @@ export default function VideoTimeline({
     }, [trimState]);
 
     // Horizontal Clip Dragging Handlers
-    const handleDragStart = (e: React.PointerEvent, track: 'v1'|'a1'|'t1'|'v2'|'m1'|'sfx'|'g1'|'s1'|'c1', clipIndex: number, initialStart: number, initialEnd: number) => {
+    const handleDragStart = (
+        e: React.PointerEvent,
+        track: 'v1'|'a1'|'t1'|'v2'|'m1'|'sfx'|'g1'|'s1'|'c1',
+        clipIndex: number,
+        initialStart: number,
+        initialEnd: number,
+        rawIndex?: number,
+    ) => {
         if (activeTool !== 'pointer') return;
-        // Skip if trim handler was clicked
-        if ((e.target as HTMLElement).classList.contains('cursor-ew-resize')) return;
+        if (trimActiveRef.current) return;
+        const hit = e.target as HTMLElement;
+        if (hit.closest?.('[data-trim-edge]') || hit.classList.contains('cursor-ew-resize')) return;
 
         e.stopPropagation();
-        e.currentTarget.setPointerCapture(e.pointerId);
-        setDragState({ track, clipIndex, startX: e.clientX, initialStart, initialEnd, pointerId: e.pointerId });
+        e.preventDefault();
+        try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+        dragActiveRef.current = true;
+        movedRef.current = false;
+        setDragState({
+            track,
+            clipIndex,
+            startX: e.clientX,
+            initialStart,
+            initialEnd,
+            pointerId: e.pointerId,
+            rawIndex,
+        });
         setPreviewDrag({ start: initialStart, end: initialEnd });
     };
 
-    const handleDragMove = (e: React.PointerEvent) => {
-        if (!dragState || e.pointerId !== dragState.pointerId || !containerRef.current) return;
-        const trackWidth = containerRef.current.getBoundingClientRect().width || 1;
-        const deltaSec = ((e.clientX - dragState.startX) / trackWidth) * projectDuration;
-        
-        const clipDur = dragState.initialEnd - dragState.initialStart;
+    const handleDragMove = (e: React.PointerEvent | PointerEvent) => {
+        if (!dragState || e.pointerId !== dragState.pointerId) return;
+        const lane = document.querySelector(`[data-timeline-lane="${dragState.track}"]`) as HTMLElement | null;
+        const el = lane || containerRef.current;
+        if (!el) return;
+        const trackWidth = el.getBoundingClientRect().width || 1;
+        if (trackWidth < 2 || projectDuration <= 0) return;
+        const dx = e.clientX - dragState.startX;
+        if (Math.abs(dx) > 4) movedRef.current = true;
+        const deltaSec = (dx / trackWidth) * projectDuration;
+
+        const clipDur = Math.max(0.15, dragState.initialEnd - dragState.initialStart);
         const newProjStart = absToProj(dragState.initialStart) + deltaSec;
         let newStart = projToAbs(newProjStart);
-        newStart = Math.max(0, Math.min(newStart, duration - clipDur));
+        newStart = Math.max(0, Math.min(newStart, Math.max(0, duration - clipDur)));
         setPreviewDrag({ start: newStart, end: newStart + clipDur });
     };
 
-    const handleDragEnd = (e: React.PointerEvent) => {
-        if (!dragState || !previewDrag) return;
-        e.currentTarget.releasePointerCapture(e.pointerId);
+    const handleDragEnd = (e?: React.PointerEvent | PointerEvent) => {
+        if (!dragActiveRef.current || !dragState || !previewDrag) return;
+        dragActiveRef.current = false;
+        try {
+            const target = e?.currentTarget as Element | undefined;
+            if (target && 'releasePointerCapture' in target && e) {
+                (target as HTMLElement).releasePointerCapture?.(e.pointerId);
+            }
+        } catch { /* already released */ }
 
-        if (dragState.track === 'v2') {
+        const drag = dragState;
+        const preview = previewDrag;
+        setDragState(null);
+        setPreviewDrag(null);
+
+        const moved = Math.abs((preview.start ?? 0) - drag.initialStart) > 0.04;
+        if (!moved) return;
+        if (!onActiveEditsChange && (drag.track === 'g1' || drag.track === 's1')) return;
+
+        if (drag.track === 'v2') {
             if (onActiveEditsChange) {
                 const brolls = activeEdits.filter(ae => ae.action === 'add_broll');
                 const others = activeEdits.filter(ae => ae.action !== 'add_broll');
                 const updated = brolls.map((b, i) => {
-                    if (i !== dragState.clipIndex) return b;
-                    return { ...b, start: previewDrag.start, end: previewDrag.end };
+                    if (i !== drag.clipIndex) return b;
+                    return { ...b, start: preview.start, end: preview.end };
                 });
                 onActiveEditsChange([...others, ...updated]);
             }
-        } else if (dragState.track === 'm1' || dragState.track === 'sfx') {
+        } else if (drag.track === 'm1' || drag.track === 'sfx') {
             if (onActiveEditsChange) {
                 const updated = activeEdits.map((asset, i) => {
-                    if (i !== dragState.clipIndex) return asset;
-                    return { ...asset, start: previewDrag.start, end: previewDrag.end };
+                    if (i !== drag.clipIndex) return asset;
+                    return { ...asset, start: preview.start, end: preview.end };
                 });
                 onActiveEditsChange(updated);
             }
-        } else if (dragState.track === 'g1') {
+        } else if (drag.track === 'g1') {
             if (onActiveEditsChange) {
-                const targetClip = graphicClips[dragState.clipIndex];
+                const rawIndex = drag.rawIndex ?? graphicClips[drag.clipIndex]?.rawIndex;
+                if (rawIndex != null) {
+                    const updated = activeEdits.map((ae, i) =>
+                        i === rawIndex ? patchGraphicEditTiming(ae, preview.start, preview.end) : ae
+                    );
+                    onActiveEditsChange(updated);
+                }
+            }
+        } else if (drag.track === 'c1') {
+            if (onActiveEditsChange) {
+                const targetClip = colorClips[drag.clipIndex];
                 if (targetClip) {
                     const updated = activeEdits.map((ae, i) => {
                         if (i === targetClip.rawIndex) {
-                            return patchGraphicEditTiming(ae, previewDrag.start, previewDrag.end);
+                            return { ...ae, start: preview.start, end: preview.end };
                         }
                         return ae;
                     });
                     onActiveEditsChange(updated);
                 }
             }
-        } else if (dragState.track === 'c1') {
+        } else if (drag.track === 's1') {
             if (onActiveEditsChange) {
-                const targetClip = colorClips[dragState.clipIndex];
-                if (targetClip) {
-                    const updated = activeEdits.map((ae, i) => {
-                        if (i === targetClip.rawIndex) {
-                            return { ...ae, start: previewDrag.start, end: previewDrag.end };
-                        }
-                        return ae;
-                    });
+                const rawIndex = drag.rawIndex ?? sceneClips[drag.clipIndex]?.rawIndex;
+                if (rawIndex != null) {
+                    const updated = activeEdits.map((ae, i) =>
+                        i === rawIndex ? patchGraphicEditTiming(ae, preview.start, preview.end) : ae
+                    );
                     onActiveEditsChange(updated);
                 }
             }
-        } else if (dragState.track === 's1') {
+        } else if (drag.track === 't1') {
             if (onActiveEditsChange) {
-                const targetClip = sceneClips[dragState.clipIndex];
-                if (targetClip) {
-                    const updated = activeEdits.map((ae, i) => {
-                        if (i === targetClip.rawIndex) {
-                            return patchGraphicEditTiming(ae, previewDrag.start, previewDrag.end);
-                        }
-                        return ae;
-                    });
-                    onActiveEditsChange(updated);
-                }
-            }
-        } else if (dragState.track === 't1') {
-            if (onActiveEditsChange) {
-                const idx = dragState.clipIndex;
+                const idx = drag.clipIndex;
                 const chunk = subtitleChunks[idx];
                 if (chunk) {
                     const others = activeEdits.filter(ae => !(ae.action === 'subtitle_override' && ae.chunk_index === idx));
@@ -1168,22 +1222,38 @@ export default function VideoTimeline({
                         action: 'subtitle_override',
                         chunk_index: idx,
                         text: text,
-                        start: previewDrag.start,
-                        end: previewDrag.end
+                        start: preview.start,
+                        end: preview.end
                     }]);
                 }
             }
         } else {
-            const edlKey = dragState.track;
+            const edlKey = drag.track;
             const newEdl = { ...multiTrackEdl, [edlKey]: multiTrackEdl[edlKey as 'v1'|'a1'].map((clip, i) => {
-                if (i !== dragState.clipIndex) return clip;
-                return { ...clip, start: previewDrag.start, end: previewDrag.end };
+                if (i !== drag.clipIndex) return clip;
+                return { ...clip, start: preview.start, end: preview.end };
             })};
             onEdlChange(newEdl);
         }
-        setDragState(null);
-        setPreviewDrag(null);
     };
+
+    const dragMoveRef = useRef(handleDragMove);
+    const dragEndRef = useRef(handleDragEnd);
+    dragMoveRef.current = handleDragMove;
+    dragEndRef.current = handleDragEnd;
+    useEffect(() => {
+        if (!dragState) return;
+        const onMove = (e: PointerEvent) => dragMoveRef.current(e);
+        const onUp = (e: PointerEvent) => dragEndRef.current(e);
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+        window.addEventListener('pointercancel', onUp);
+        return () => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+            window.removeEventListener('pointercancel', onUp);
+        };
+    }, [dragState]);
 
     // Manual clip insertion at playhead
     const handleAddClip = (track: 's1' | 't1' | 'v2' | 'm1' | 'sfx' | 'g1' | 'c1') => {
@@ -1417,7 +1487,9 @@ export default function VideoTimeline({
                     if (!graphic) return null;
                     clipTitle = `🎨 Graphic: ${targetClip?.label || graphic.action}`;
                     clipStart = graphic.start != null ? graphic.start : 0;
-                    clipEnd = graphic.end != null ? graphic.end : duration;
+                    clipEnd = graphic.end != null
+                        ? graphic.end
+                        : clipStart + (graphic.duration != null ? graphic.duration : 3);
                     colorTheme = "border-fuchsia-850/60 text-fuchsia-400";
                 }
                 else if (selectedClipId.startsWith('C1-Color-')) {
@@ -1754,9 +1826,20 @@ export default function VideoTimeline({
 
                             <div className="flex items-center gap-1">
                                 <span className="text-zinc-500 font-mono text-[9px] md:text-[11px] uppercase font-bold">dur</span>
-                                <span className="text-zinc-300 font-mono font-bold bg-white/5 border border-white/5 rounded px-1.5 py-0.5 text-[10px] md:text-[11px] select-none">
-                                    {(clipEnd - clipStart).toFixed(1)}s
-                                </span>
+                                <input
+                                    type="number"
+                                    step="0.1"
+                                    min="0.15"
+                                    max={duration}
+                                    value={Number(Math.max(0.15, clipEnd - clipStart).toFixed(2))}
+                                    onChange={(ev) => {
+                                        const d = parseFloat(ev.target.value);
+                                        if (!Number.isFinite(d)) return;
+                                        handleManualUpdate(clipStart, clipStart + Math.max(0.15, d));
+                                    }}
+                                    className="w-10 bg-zinc-950/80 border border-white/10 rounded px-1 py-0.5 text-[10px] md:text-[11px] font-mono text-zinc-100 focus:outline-none focus:border-amber-500/40 text-center shadow-sm"
+                                />
+                                <span className="text-zinc-650 font-mono text-[9px] md:text-[11px]">s</span>
                             </div>
                         </div>
 
@@ -1880,6 +1963,7 @@ export default function VideoTimeline({
                                     <span className="hidden md:inline text-[11px] text-purple-200/90 font-semibold tracking-wide truncate">Тайтлы</span>
                                 </div>
                             <div 
+                                data-timeline-lane="s1"
                                 onDragOver={(e) => handleDragOver(e, 's1')}
                                 onDragLeave={handleDragLeave}
                                 onDrop={(e) => handleDrop(e, 's1')}
@@ -1902,23 +1986,25 @@ export default function VideoTimeline({
                                         <div
                                             key={clipId}
                                             onClick={(e) => handleClipClick(e, clipId, { start: rawStart, end: rawEnd }, i, 's1')}
-                                            onPointerDown={(e) => handleDragStart(e, 's1', i, rawStart, rawEnd)}
-                                            onPointerMove={handleDragMove}
-                                            onPointerUp={handleDragEnd}
-                                            title="click to select | drag to move | trim edges to change duration"
-                                            className={`touch-none absolute h-[calc(100%-2px)] rounded-md overflow-hidden flex items-center cursor-grab active:cursor-grabbing transition-all px-3 gap-1.5 shadow-sm ${
+                                            onPointerDown={(e) => handleDragStart(e, 's1', i, rawStart, rawEnd, clip.rawIndex)}
+                                            title="Центр — сдвиг по таймлайну · края — длительность"
+                                            className={`touch-none absolute h-[calc(100%-2px)] rounded-md overflow-visible flex items-center cursor-grab active:cursor-grabbing transition-all px-3 gap-1.5 shadow-sm ${
                                                 isSelected 
                                                     ? 'bg-[#3f2953] border border-purple-400 text-white z-10 font-bold shadow-[0_0_12px_rgba(168,85,247,0.4)]' 
                                                     : 'bg-[#2a1e35] border border-purple-500/20 hover:border-purple-500/50 text-white'
                                             }`}
-                                            style={{ left: `${(absToProj(clipStart) / projectDuration) * 100}%`, width: `${((absToProj(clipEnd) - absToProj(clipStart)) / projectDuration) * 100}%` }}
+                                            style={{ left: `${(absToProj(clipStart) / projectDuration) * 100}%`, width: `max(18px, ${((absToProj(clipEnd) - absToProj(clipStart)) / projectDuration) * 100}%)` }}
                                         >
                                             <span className="text-[9px] font-mono font-bold text-amber-300/90 pointer-events-none shrink-0">T</span>
                                             <span className="text-[10px] truncate pointer-events-none opacity-90">{clip.label}</span>
                                             {activeTool === 'pointer' && (
                                                 <>
-                                                    <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 's1', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                    <div className="touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 's1', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div data-trim-edge="left" className="touch-none absolute left-0 top-0 bottom-0 w-2.5 z-30 cursor-ew-resize flex items-center justify-start pl-[1px]" onPointerDown={(e) => handleTrimStart(e, 's1', i, 'left', rawStart, rawStart, rawEnd, clip.rawIndex)}>
+                                                        <span className="pointer-events-none w-[3px] h-[62%] rounded-full bg-purple-200/85" />
+                                                    </div>
+                                                    <div data-trim-edge="right" className="touch-none absolute right-0 top-0 bottom-0 w-2.5 z-30 cursor-ew-resize flex items-center justify-end pr-[1px]" onPointerDown={(e) => handleTrimStart(e, 's1', i, 'right', rawEnd, rawStart, rawEnd, clip.rawIndex)}>
+                                                        <span className="pointer-events-none w-[3px] h-[62%] rounded-full bg-purple-200/85" />
+                                                    </div>
                                                 </>
                                             )}
                                         </div>
@@ -1936,6 +2022,7 @@ export default function VideoTimeline({
                                     <span className="hidden md:inline text-[11px] text-fuchsia-200/90 font-semibold tracking-wide truncate">Графика</span>
                                 </div>
                             <div 
+                                data-timeline-lane="g1"
                                 onDragOver={(e) => handleDragOver(e, 'g1')}
                                 // Reuse drag end callback
                                 onDragLeave={handleDragLeave}
@@ -1961,8 +2048,11 @@ export default function VideoTimeline({
                                         <div
                                             key={clipId}
                                             onClick={(e) => {
+                                                if (movedRef.current) {
+                                                    handleClipClick(e, clipId, { start: rawStart, end: rawEnd }, i, 'g1');
+                                                    return;
+                                                }
                                                 handleClipClick(e, clipId, { start: rawStart, end: rawEnd }, i, 'g1');
-                                                // Seek into the graphic so it appears selected in the player
                                                 if (videoRef?.current) {
                                                     const t = videoRef.current.currentTime;
                                                     if (t < rawStart || t >= rawEnd) {
@@ -1971,25 +2061,31 @@ export default function VideoTimeline({
                                                     }
                                                 }
                                             }}
-                                            onPointerDown={(e) => handleDragStart(e, 'g1', i, rawStart, rawEnd)}
-                                            onPointerMove={handleDragMove}
-                                            onPointerUp={handleDragEnd}
-                                            title="Выдели — появится в плеере · drag — сдвиг по времени · края — длительность"
-                                            className={`touch-none absolute h-[calc(100%-2px)] rounded-md overflow-hidden flex items-center px-3 gap-1.5 shadow-sm ${
+                                            onPointerDown={(e) => handleDragStart(e, 'g1', i, rawStart, rawEnd, clip.rawIndex)}
+                                            title="Центр — перетащить на другой момент · края — длительность"
+                                            className={`touch-none absolute h-[calc(100%-2px)] rounded-md overflow-visible flex items-center px-3 gap-1.5 shadow-sm ${
                                                 isDraggingThis || isTrimmingThis ? 'cursor-grabbing z-20' : 'cursor-grab'
                                             } ${
                                                 isSelected 
                                                     ? 'bg-[#4a1a3a] border-2 border-fuchsia-400 text-white z-10 font-bold shadow-[0_0_14px_rgba(217,70,239,0.55)]' 
                                                     : 'bg-[#351828] border border-fuchsia-500/35 hover:border-fuchsia-400/70 text-fuchsia-50'
                                             }`}
-                                            style={{ left: `${(absToProj(clipStart) / projectDuration) * 100}%`, width: `${Math.max(0.3, ((absToProj(clipEnd) - absToProj(clipStart)) / projectDuration) * 100)}%` }}
+                                            style={{
+                                                left: `${(absToProj(clipStart) / projectDuration) * 100}%`,
+                                                width: `${Math.max(0.8, ((absToProj(clipEnd) - absToProj(clipStart)) / projectDuration) * 100)}%`,
+                                                minWidth: 56,
+                                            }}
                                         >
                                             <span className="text-[9px] font-mono font-bold text-fuchsia-300/80 pointer-events-none shrink-0">G</span>
                                             <span className="text-[10px] truncate pointer-events-none opacity-90">{clip.label}</span>
                                             {activeTool === 'pointer' && (
                                                 <>
-                                                    <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/15 z-20" onPointerDown={(e) => handleTrimStart(e, 'g1', i, 'left', rawStart)} />
-                                                    <div className="touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/15 z-20" onPointerDown={(e) => handleTrimStart(e, 'g1', i, 'right', rawEnd)} />
+                                                    <div data-trim-edge="left" className="touch-none absolute left-0 top-0 bottom-0 w-2.5 z-30 cursor-ew-resize flex items-center justify-start pl-[1px]" onPointerDown={(e) => handleTrimStart(e, 'g1', i, 'left', rawStart, rawStart, rawEnd, clip.rawIndex)}>
+                                                        <span className="pointer-events-none w-[3px] h-[62%] rounded-full bg-fuchsia-200/90" />
+                                                    </div>
+                                                    <div data-trim-edge="right" className="touch-none absolute right-0 top-0 bottom-0 w-2.5 z-30 cursor-ew-resize flex items-center justify-end pr-[1px]" onPointerDown={(e) => handleTrimStart(e, 'g1', i, 'right', rawEnd, rawStart, rawEnd, clip.rawIndex)}>
+                                                        <span className="pointer-events-none w-[3px] h-[62%] rounded-full bg-fuchsia-200/90" />
+                                                    </div>
                                                 </>
                                             )}
                                         </div>
@@ -2010,6 +2106,7 @@ export default function VideoTimeline({
                                     <span className="hidden md:inline text-[11px] text-blue-200/90 font-semibold tracking-wide truncate">Субтитры</span>
                                 </div>
                             <div 
+                                data-timeline-lane="t1"
                                 onDragOver={(e) => handleDragOver(e, 't1')}
                                 onDragLeave={handleDragLeave}
                                 onDrop={(e) => handleDrop(e, 't1')}
@@ -2089,8 +2186,8 @@ export default function VideoTimeline({
                                             ) : null}
                                             {activeTool === 'pointer' && !isEditing && (
                                                 <>
-                                                    <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 't1', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                    <div className="touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 't1', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 't1', i, 'left', rawStart, rawStart, rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 't1', i, 'right', rawEnd, rawStart, rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                                 </>                 
                                             )}
                                         </div>
@@ -2108,6 +2205,7 @@ export default function VideoTimeline({
                                     <span className="hidden md:inline text-[11px] text-cyan-200/90 font-semibold tracking-wide truncate">B-roll</span>
                                 </div>
                             <div 
+                                data-timeline-lane="v2"
                                 onDragOver={(e) => handleDragOver(e, 'v2')}
                                 onDragLeave={handleDragLeave}
                                 onDrop={(e) => handleDrop(e, 'v2')}
@@ -2163,8 +2261,8 @@ export default function VideoTimeline({
                                             
                                             {activeTool === 'pointer' && (
                                                 <>
-                                                    <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'v2', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                    <div className="touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'v2', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'v2', i, 'left', rawStart, rawStart, rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'v2', i, 'right', rawEnd, rawStart, rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                                 </>
                                             )}
                                         </div>
@@ -2182,6 +2280,7 @@ export default function VideoTimeline({
                                     <span className="hidden md:inline text-[11px] text-amber-200/90 font-semibold tracking-wide truncate">Цветокор</span>
                                 </div>
                             <div 
+                                data-timeline-lane="c1"
                                 onDragOver={(e) => handleDragOver(e, 'c1')}
                                 onDragLeave={handleDragLeave}
                                 onDrop={(e) => handleDrop(e, 'c1')}
@@ -2219,8 +2318,8 @@ export default function VideoTimeline({
                                             
                                             {activeTool === 'pointer' && (
                                                 <>
-                                                    <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'c1', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                    <div className="touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'c1', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'c1', i, 'left', rawStart, rawStart, rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'c1', i, 'right', rawEnd, rawStart, rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                                 </>
                                             )}
                                         </div>
@@ -2237,6 +2336,7 @@ export default function VideoTimeline({
                                 <span className="hidden md:inline text-[11px] text-zinc-200 font-semibold tracking-wide truncate">Видео</span>
                             </div>
                         <div 
+                            data-timeline-lane="v1"
                             onDragOver={(e) => handleDragOver(e, 'v1')}
                             onDragLeave={handleDragLeave}
                             onDrop={(e) => handleDrop(e, 'v1')}
@@ -2306,8 +2406,8 @@ export default function VideoTimeline({
 
                                         {activeTool === 'pointer' && (
                                             <>
-                                                <div className={`touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'v1', i, 'left', clip.start)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                <div className={`touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'v1', i, 'right', clip.end)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className={`touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'v1', i, 'left', clip.start, clip.start, clip.end)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className={`touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'v1', i, 'right', clip.end, clip.start, clip.end)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                             </>
                                         )}
                                     </div>
@@ -2329,6 +2429,7 @@ export default function VideoTimeline({
                                 <span className="hidden md:inline text-[11px] text-emerald-200/90 font-semibold tracking-wide truncate">Аудио</span>
                             </div>
                         <div 
+                            data-timeline-lane="a1"
                             onDragOver={(e) => handleDragOver(e, 'a1')}
                             onDragLeave={handleDragLeave}
                             onDrop={(e) => handleDrop(e, 'a1')}
@@ -2382,8 +2483,8 @@ export default function VideoTimeline({
                                         
                                         {activeTool === 'pointer' && (
                                             <>
-                                                <div className={`touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'a1', i, 'left', clip.start)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                <div className={`touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'a1', i, 'right', clip.end)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className={`touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'a1', i, 'left', clip.start, clip.start, clip.end)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                <div className={`touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 flex items-center justify-center z-20 ${trimState?.pointerId ? 'pointer-events-auto bg-white/10' : ''}`} onPointerDown={(e) => handleTrimStart(e, 'a1', i, 'right', clip.end, clip.start, clip.end)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                             </>
                                         )}
                                     </div>
@@ -2400,6 +2501,7 @@ export default function VideoTimeline({
                                     <span className="hidden md:inline text-[11px] text-teal-200/90 font-semibold tracking-wide truncate">SFX</span>
                                 </div>
                             <div 
+                                data-timeline-lane="sfx"
                                 onDragOver={(e) => handleDragOver(e, 'sfx')}
                                 onDragLeave={handleDragLeave}
                                 onDrop={(e) => handleDrop(e, 'sfx')}
@@ -2444,8 +2546,8 @@ export default function VideoTimeline({
                                             
                                             {activeTool === 'pointer' && (
                                                 <>
-                                                    <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'sfx', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                    <div className="touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'sfx', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'sfx', i, 'left', rawStart, rawStart, rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'sfx', i, 'right', rawEnd, rawStart, rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                                 </>
                                             )}
                                         </div>
@@ -2463,6 +2565,7 @@ export default function VideoTimeline({
                                     <span className="hidden md:inline text-[11px] text-orange-200/90 font-semibold tracking-wide truncate">Музыка</span>
                                 </div>
                             <div 
+                                data-timeline-lane="m1"
                                 onDragOver={(e) => handleDragOver(e, 'm1')}
                                 onDragLeave={handleDragLeave}
                                 onDrop={(e) => handleDrop(e, 'm1')}
@@ -2508,8 +2611,8 @@ export default function VideoTimeline({
                                             
                                             {activeTool === 'pointer' && (
                                                 <>
-                                                    <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'm1', i, 'left', rawStart)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
-                                                    <div className="touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'm1', i, 'right', rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute left-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'm1', i, 'left', rawStart, rawStart, rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
+                                                    <div className="touch-none absolute right-0 top-0 bottom-0 w-4 md:w-2.5 cursor-ew-resize bg-white/0 hover:bg-white/10 z-20" onPointerDown={(e) => handleTrimStart(e, 'm1', i, 'right', rawEnd, rawStart, rawEnd)} onPointerMove={handleTrimMove} onPointerUp={handleTrimEnd} />
                                                 </>
                                             )}
                                         </div>

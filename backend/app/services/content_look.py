@@ -380,8 +380,9 @@ graphics={density}, titles на ролик: {titles}, B-roll: {m.get("broll_bias
 - Графика только Optical Cut: угловые регистрационные риски, волосяная линия, Unbounded, ОДИН accent из палитры.
 - ЗАПРЕЩЕНО: indigo #6366F1, cyan #00E5FF, TikTok gold #FACC15, радужный glassmorphism, bounce/back.out.
 - GSAP ease только power2 / power3 (settle). Не back.out.
-- density=minimal/low → максимум 1 TITLE и 1 abstract. Не забивай плашками.
-- density=medium → 2–3 TITLE/abstract, всё равно не чаще чем раз в 6–8с.
+- density=minimal/low → максимум 1 TITLE, 1 abstract, 1 idea_map если в речи есть путь/причина/vs.
+- density=medium → 2–3 TITLE/abstract + до 2 карт мысли на механизм, всё равно не чаще чем раз в 6–8с.
+- job=diagram → overlay `idea_map` (rail/split/stack/thesis по мысли бита). Не TITLE и не Pexels «мозг».
 - broll_bias=none_unless_user → сток Pexels не ставь, только свои клипы.
 - broll_bias=user_first → сначала asset_id пользователя.
 - Цветокор и субтитры бери СТРОГО из этого блока, не из шаблона «cinema+gold».
@@ -400,6 +401,7 @@ accent ТОЛЬКО {p["accent"]} (accent_2 {p["accent_2"]}), текст {p["pap
 Motion: gsap power3.out вход, power2.in выход. ЗАПРЕЩЕНО back.out / bounce / elastic.
 ЗАПРЕЩЕНО: #6366F1 #00E5FF #FACC15, backdrop-filter glass как дефолт, градиентный indigo TITLE.
 TITLE fullscreen: фон {p["field"]}, без слова "TITLE" на экране, без золотого градиента на слове.
+IDEA MAP: overlay по мысли бита — rail справа, split (vs/причина), stack или thesis. Не TITLE, не glass-card, не лестница на весь кадр.
 Overlay abstract: без glass-card. Plate (цифра) — можно тёмную плашку {p["field"]} + hairline {p["accent"]}.
 CSS vars уже будут в сцене: --look-accent и т.д. Используй их.
 """

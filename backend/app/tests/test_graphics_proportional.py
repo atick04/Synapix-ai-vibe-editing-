@@ -40,6 +40,7 @@ def test_pick_scene_kind_odysser_mix():
     assert _pick_scene_kind("overlay", "overlay", "abstract", "что угодно | 12") == "abstract"
     assert _pick_scene_kind("overlay", "overlay", "", "ОШИБКА | 80%") == "plate"
     assert _pick_scene_kind("full_broll", "fullscreen", "", "ДАННЫЕ РЕШАЮТ ВСЁ") == "title"
+    assert _pick_scene_kind("full_broll", "fullscreen", "idea_map", "MAP:path | а → б") == "map"
 
 
 def test_abstract_accent_has_layers_not_plate():

@@ -586,6 +586,22 @@ export const HtmlGraphicsComposition: React.FC<{ htmlContent: string; clipStart?
       overflow-wrap: normal !important;
       word-break: normal !important;
     }
+    .clip [data-idea-visual],
+    .clip .idea-rail, .clip .idea-split, .clip .idea-stack, .clip .idea-thesis {
+      top: auto !important;
+      bottom: 8% !important;
+      height: auto !important;
+      max-height: 18% !important;
+      min-width: 0 !important;
+    }
+    .clip [data-idea-visual] .idea-pane,
+    .clip [data-idea-visual] .rail-text,
+    .clip [data-idea-visual] .stack-chip,
+    .clip [data-idea-visual] .thesis-head {
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+    }
   </style>
 </head>
 <body style="background: transparent !important; background-color: transparent !important;">

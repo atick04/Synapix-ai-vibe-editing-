@@ -591,6 +591,12 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
     // selectedGraphicEditIndex = index into `edits` (player render list)
     // Timeline G1-Graphic-N uses index into sourceEdits/activeEdits
 
+    const clearGraphicFocus = useCallback(() => {
+        setSelectedGraphicEditIndex(null);
+        setSelectedEntity(null);
+        onFocusedClipChange?.(null);
+    }, [onFocusedClipChange]);
+
     const isGraphicEdit = useCallback((e: Edit | null | undefined) => {
         if (!e) return false;
         return e.action === 'canvas_overlay' ||
@@ -635,7 +641,10 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
 
     // Timeline → player: selecting G1-Graphic-${rawIndex} highlights & enables drag in RemotionGraphicPlayer
     useEffect(() => {
-        if (!focusedClipId) return;
+        if (!focusedClipId) {
+            setSelectedGraphicEditIndex(null);
+            return;
+        }
         if (!focusedClipId.startsWith("G1-Graphic-")) {
             if (focusedClipId.startsWith("T1-") || focusedClipId.startsWith("S1-") || focusedClipId.startsWith("V2-") || focusedClipId.startsWith("C1-")) {
                 setSelectedGraphicEditIndex(null);
@@ -677,6 +686,19 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
             if (playerIdx != null) setSelectedGraphicEditIndex(playerIdx);
         }
     }, [isPlaying, focusedClipId, resolveGraphicPlayerIndex]);
+
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key !== 'Escape') return;
+            const tag = (e.target as HTMLElement | null)?.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+            if (selectedGraphicEditIndex == null && !focusedClipId?.startsWith('G1-Graphic-') && !selectedEntity) return;
+            e.preventDefault();
+            clearGraphicFocus();
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [selectedGraphicEditIndex, focusedClipId, selectedEntity, clearGraphicFocus]);
 
     const [editingEntity, setEditingEntity] = useState<{
         sceneEditIndex: number;
@@ -3983,13 +4005,19 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
 
             // Sync GSAP graphics timeline (send to all active graphics iframes to support multi-track isolated render)
             const mIframes = document.querySelectorAll('.motion-graphic-iframe') as NodeListOf<HTMLIFrameElement>;
-            mIframes.forEach((iframe, idx) => {
-                if (iframe.contentWindow) {
-                    const edit = graphicsEdits[idx];
-                    const start = edit?.start ?? 0;
-                    const relTime = t - start;
-                    iframe.contentWindow.postMessage({ type: 'sync_time', time: t, relTime: relTime }, '*');
-                }
+            mIframes.forEach((iframe) => {
+                if (!iframe.contentWindow) return;
+                const start = Number(iframe.dataset.clipStart);
+                const end = Number(iframe.dataset.clipEnd);
+                const clipStart = Number.isFinite(start) ? start : 0;
+                const clipEnd = Number.isFinite(end) ? end : clipStart + 3;
+                const inWindow = t >= clipStart - 0.05 && t <= clipEnd + 0.05;
+                iframe.contentWindow.postMessage({
+                    type: 'sync_time',
+                    time: t,
+                    relTime: t - clipStart,
+                    forceShow: inWindow,
+                }, '*');
             });
 
             // ── Scene Override detection (use ref for fresh data) ──
@@ -4373,6 +4401,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
             draggedBoxRef.current = null;
             dragModeRef.current = null;
             setSelectedEntity(null);
+            clearGraphicFocus();
         }
     };
 
@@ -4782,6 +4811,10 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
             <div
                 className="relative flex-1 flex items-center justify-center overflow-hidden"
                 style={{ minHeight: 0 }}
+                onPointerDown={(e) => {
+                    if (e.target !== e.currentTarget) return;
+                    clearGraphicFocus();
+                }}
             >
                 <div
                     className="relative flex items-center justify-center"
@@ -4970,7 +5003,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                     )}
 
                     {/* GSAP Motion Graphics overlay via RemotionGraphicPlayer (isolated, transparent, frame-sync) */}
-                    {graphicsEdits.length > 0 && videoReady && !isSceneActive && graphicsEdits.map((edit, idx) => {
+                    {graphicsEdits.length > 0 && videoReady && graphicsEdits.map((edit, idx) => {
                         const start = edit.start ?? 0;
                         const duration = edit.duration ?? (edit.end ? (edit.end - start) : 999999);
                         const end = edit.end ?? (start + duration);
@@ -4979,7 +5012,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                         const isSelected =
                             selectedGraphicEditIndex === globalIndex ||
                             focusedClipId === `G1-Graphic-${timelineRawIdx}`;
-                        const isGraphicActive = currentTime >= start && currentTime < end;
+                        const isGraphicActive = currentTime >= start - 0.05 && currentTime <= end + 0.05;
                         const interactive = !isPlaying && (isGraphicActive || isSelected);
                         return (
                             <RemotionGraphicPlayer
@@ -5001,6 +5034,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                                     setSelectedGraphicEditIndex(globalIndex);
                                     onFocusedClipChange?.(`G1-Graphic-${timelineRawIdx}`);
                                 }}
+                                onDeselect={clearGraphicFocus}
                                 onTransformChange={({ offsetX: ox, offsetY: oy, scaleX: sx, scaleY: sy }) => {
                                     if (timelineRawIdx < 0) return;
                                     setSelectedGraphicEditIndex(globalIndex);

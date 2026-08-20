@@ -201,6 +201,7 @@ class TimelineState:
         mode: str = "overlay",
         layout: Optional[str] = None,
         design_aspect: Optional[str] = None,
+        graphic_kind: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add overlay plates or fullscreen graphic B-rolls. Persists mode for preview/export."""
         end = start + duration
@@ -230,7 +231,9 @@ class TimelineState:
             "mode": normalized_mode,
             "layout": layout or normalized_mode,
             "design_aspect": design_aspect or "16:9",
-            "graphic_kind": "title" if normalized_mode == "full_broll" else ("split" if normalized_mode == "split" else "overlay"),
+            "graphic_kind": graphic_kind or (
+                "title" if normalized_mode == "full_broll" else ("split" if normalized_mode == "split" else "overlay")
+            ),
         }
         if type == "semantic_scene":
             edit["scene_data"] = data
