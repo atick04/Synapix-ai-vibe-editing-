@@ -11,6 +11,7 @@ const vertexShader = `
 
 const fragmentShader = `
   uniform sampler2D videoTexture;
+  uniform vec4 uCoverCrop; // x, y, w, h of source UVs (cover into 9:16)
   uniform float brightness; // 0.0 to 2.0 (1.0 default)
   uniform float contrast;   // 0.0 to 2.0 (1.0 default)
   uniform float saturation; // 0.0 to 2.0 (1.0 default)
@@ -37,7 +38,11 @@ const fragmentShader = `
   }
 
   void main() {
-    vec4 color = texture2D(videoTexture, vUv);
+    vec2 uv = vec2(
+      uCoverCrop.x + vUv.x * uCoverCrop.z,
+      uCoverCrop.y + vUv.y * uCoverCrop.w
+    );
+    vec4 color = texture2D(videoTexture, uv);
     vec3 rgb = color.rgb;
 
     // Apply brightness
@@ -81,6 +86,8 @@ export interface ThreeCompositorSettings {
   filmGrain: number;
   zoom: number;
   templateId?: string;
+  coverCrop?: { x: number; y: number; w: number; h: number };
+  videoLayout?: { x: number; y: number; w: number; h: number };
 }
 
 function cleanColorHex(color: string): string {
@@ -156,6 +163,7 @@ export class ThreeCompositor {
       fragmentShader,
       uniforms: {
         videoTexture: { value: this.videoTexture },
+        uCoverCrop: { value: new THREE.Vector4(0, 0, 1, 1) },
         brightness: { value: 1.0 },
         contrast: { value: 1.0 },
         saturation: { value: 1.0 },
@@ -549,6 +557,18 @@ export class ThreeCompositor {
     this.videoMaterial.uniforms.vignette.value = settings.vignette;
     this.videoMaterial.uniforms.filmGrain.value = settings.filmGrain;
     this.videoMaterial.uniforms.time.value = elapsed;
+    const crop = settings.coverCrop || { x: 0, y: 0, w: 1, h: 1 };
+    this.videoMaterial.uniforms.uCoverCrop.value.set(crop.x, crop.y, crop.w, crop.h);
+    const layout = settings.videoLayout || { x: 0, y: 0, w: 1, h: 1 };
+    this.videoMesh.scale.set(layout.w, layout.h, 1);
+    this.videoMesh.position.set(
+      (layout.x + layout.w / 2 - 0.5) * 2,
+      (0.5 - (layout.y + layout.h / 2)) * 2,
+      0,
+    );
+    this.overlayMesh.scale.set(1, 1, 1);
+    this.overlayMesh.position.set(0, 0, 0);
+    this.renderer.setClearColor(0x000000, 1);
 
     // 2. Apply camera zoom (Scale the video plane or adjust camera zoom)
     this.camera.zoom = settings.zoom;

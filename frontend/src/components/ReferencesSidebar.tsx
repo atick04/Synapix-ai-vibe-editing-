@@ -927,9 +927,9 @@ export default function ReferencesSidebar({
         <div className="w-full h-full flex flex-col overflow-hidden relative font-sans select-none text-neutral-800 dark:text-neutral-200 bg-transparent">
             
             {/* Header Tabs (Sleek Apple Segmented Control) */}
-            <div className="bg-transparent border-b border-white/[0.06] flex flex-col shrink-0 px-4 pt-4 pb-3">
+            <div className="bg-transparent border-b border-white/[0.06] flex flex-col shrink-0 px-4 pt-3 pb-3">
                 <div className="flex items-center justify-between mb-3">
-                    <h2 className="text-[11px] font-bold tracking-widest text-zinc-400 uppercase">панель управления</h2>
+                    <h2 className="text-[15px] font-semibold text-white tracking-tight">Медиа</h2>
                     {onClose && (
                         <button 
                             onClick={onClose}
@@ -1021,7 +1021,7 @@ export default function ReferencesSidebar({
                                 onDragLeave={handleDragLeave}
                                 onDrop={handleDrop}
                                 onClick={() => fileInputRef.current?.click()}
-                                className={`relative border border-dashed rounded-2xl p-4 flex flex-col items-center justify-center cursor-pointer transition-all duration-300 ${
+                                className={`relative border border-dashed rounded-2xl p-4 min-h-[88px] flex flex-col items-center justify-center cursor-pointer transition-all duration-300 ${
                                     isDragging 
                                         ? 'border-amber-500/50 bg-amber-500/5 shadow-[0_0_15px_rgba(245,158,11,0.1)]' 
                                         : 'border-white/10 bg-black/25 hover:bg-black/35 hover:border-white/20'
@@ -1137,7 +1137,7 @@ export default function ReferencesSidebar({
                                                                 triggerAddedFeedback(asset.id);
                                                             }
                                                         }}
-                                                        className={`h-6 px-2 rounded-lg bg-black border flex items-center justify-center text-[9px] font-sans font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 shrink-0 ${
+                                                        className={`min-h-9 px-2.5 rounded-lg bg-black border flex items-center justify-center text-[11px] font-sans font-bold cursor-pointer transition-all active:scale-95 shrink-0 ${
                                                             isJustAdded 
                                                                 ? 'border-emerald-500 text-emerald-400 bg-emerald-950/80' 
                                                                 : 'border-white/10 hover:border-amber-500 hover:text-amber-500 text-zinc-300'
@@ -1154,7 +1154,7 @@ export default function ReferencesSidebar({
                                                             e.stopPropagation();
                                                             insertCustomBroll(asset);
                                                         }}
-                                                        className={`h-6 px-2 rounded-lg bg-black border flex items-center justify-center text-[9px] font-sans font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 shrink-0 ${
+                                                        className={`min-h-9 px-2.5 rounded-lg bg-black border flex items-center justify-center text-[11px] font-sans font-bold cursor-pointer transition-all active:scale-95 shrink-0 ${
                                                             isJustAdded 
                                                                 ? 'border-emerald-500 text-emerald-400 bg-emerald-950/80' 
                                                                 : 'border-white/10 hover:border-amber-500 hover:text-amber-500 text-zinc-300'
@@ -1210,7 +1210,7 @@ export default function ReferencesSidebar({
                                             <div className="absolute top-1.5 right-1.5 z-10">
                                                 <button 
                                                     onClick={() => insertLibraryBroll(item)}
-                                                    className={`w-5.5 h-5.5 rounded-full bg-black/60 backdrop-blur-md border flex items-center justify-center text-[11px] font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 ${
+                                                    className={`w-9 h-9 rounded-full bg-black/60 backdrop-blur-md border flex items-center justify-center text-[16px] font-bold cursor-pointer transition-all active:scale-95 ${
                                                         isJustAdded 
                                                             ? 'border-emerald-500 text-emerald-400 bg-emerald-950/85' 
                                                             : 'border-white/15 hover:border-amber-500 hover:text-amber-500 text-zinc-200'
@@ -1221,8 +1221,8 @@ export default function ReferencesSidebar({
                                                 </button>
                                             </div>
                                             
-                                            <div className="absolute bottom-2.5 left-2.5 right-2.5 z-10 flex flex-col font-sans">
-                                                <span className="text-[11px] font-semibold text-white truncate text-shadow leading-tight">
+                                            <div className="absolute bottom-2 left-2 right-2 z-10 flex flex-col font-sans">
+                                                <span className="text-[12px] font-semibold text-white line-clamp-2 text-shadow leading-tight">
                                                     {item.name}
                                                 </span>
                                                 <span className="text-[9px] text-zinc-400 truncate mt-[2px] font-medium leading-none">
@@ -1259,7 +1259,7 @@ export default function ReferencesSidebar({
                                         >
                                             <button 
                                                 onClick={() => togglePlaySfx(item)}
-                                                className={`w-7 h-7 bg-black border rounded-full flex items-center justify-center shrink-0 cursor-pointer transition-all hover:scale-105 active:scale-95 ${isPlaying ? 'border-amber-500 text-amber-500 bg-amber-500/10' : 'border-white/10 text-zinc-400 hover:text-white hover:border-white/20'}`}
+                                                className={`w-10 h-10 bg-black border rounded-full flex items-center justify-center shrink-0 cursor-pointer transition-all active:scale-95 ${isPlaying ? 'border-amber-500 text-amber-500 bg-amber-500/10' : 'border-white/10 text-zinc-400 hover:text-white hover:border-white/20'}`}
                                             >
                                                 {isPlaying ? (
                                                     <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
@@ -1270,10 +1270,10 @@ export default function ReferencesSidebar({
                                             
                                             <div className="flex-1 min-w-0 font-sans">
                                                 <div className="flex items-center justify-between gap-2">
-                                                    <p className="text-[11.5px] font-bold text-zinc-200 truncate">{item.name}</p>
+                                                    <p className="text-[13px] font-semibold text-zinc-200 truncate">{item.name}</p>
                                                     <button 
                                                         onClick={() => insertLibrarySfx(item)}
-                                                        className={`text-[9px] font-bold px-2 py-0.5 rounded-lg border transition-all cursor-pointer shrink-0 ${
+                                                        className={`min-h-9 min-w-9 text-[13px] font-bold px-3 rounded-lg border transition-all cursor-pointer shrink-0 ${
                                                             isJustAdded 
                                                                 ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' 
                                                                 : 'text-amber-500 hover:text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/15'
@@ -1329,7 +1329,7 @@ export default function ReferencesSidebar({
                                         <div className="absolute top-1.5 right-1.5 z-10">
                                             <button 
                                                 onClick={() => insertLutPreset(item)}
-                                                className={`w-5.5 h-5.5 rounded-full bg-black/65 backdrop-blur-md border flex items-center justify-center text-[11px] font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 ${
+                                                className={`w-9 h-9 rounded-full bg-black/65 backdrop-blur-md border flex items-center justify-center text-[16px] font-bold cursor-pointer transition-all active:scale-95 ${
                                                     isJustAdded 
                                                         ? 'border-emerald-500 text-emerald-400 bg-emerald-950/85' 
                                                         : 'border-white/15 hover:border-amber-500 hover:text-amber-500 text-zinc-200'

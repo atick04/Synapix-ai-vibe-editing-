@@ -11,6 +11,18 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
+BREATH_CUT_REASONS = {"silence", "silence_start", "silence_end", "filler"}
+
+
+def is_breath_cut(edit: Dict[str, Any]) -> bool:
+    """True for pause/filler splices that should not get a whoosh."""
+    reason = str(edit.get("reason") or "").lower()
+    text = str(edit.get("text") or "").lower()
+    if reason in BREATH_CUT_REASONS:
+        return True
+    blob = f"{reason} {text}"
+    return any(k in blob for k in ("пауза", "silence", "паразит", "filler", "тишин"))
+
 TOPIC_MARKERS = {
     "итак", "теперь", "дальше", "далее", "во-первых", "во-вторых", "в-третьих",
     "кстати", "а ещё", "а еще", "перейдём", "перейдем", "переходим",
@@ -355,14 +367,15 @@ def collect_splice_points(
         for e in edits or []:
             if e.get("action") != "cut_out":
                 continue
-            # Jump-cut splice: next keep segment starts at cut.end
+            if is_breath_cut(e):
+                continue
             t = e.get("end", e.get("start"))
             if t is None:
                 continue
             points.append({
                 "time": round(float(t), 2),
                 "suggested_type": "whoosh",
-                "reason": f"splice:{e.get('reason', 'cut_out')}",
+                "reason": f"splice:{e.get('reason') or 'cut_out'}",
                 "score": 0.85,
             })
 

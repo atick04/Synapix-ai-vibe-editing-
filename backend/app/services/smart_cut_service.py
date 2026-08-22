@@ -2,11 +2,11 @@ import difflib
 import re
 from typing import List, Dict, Any
 
+# Only true parasites / vocal stalls. Content words like «это», «вот», «просто»
+# used to be cut as fillers and produced jump-cuts in the middle of a thought.
 SINGLE_FILLERS = {
-    "эээ", "ээ", "э-э", "ммм", "мм", "м-м", "ааа", "аа", "а-а", "эм", "э-эм", 
-    "ну", "типа", "короче", "просто", "собственно", "вообще", "вот", "конкретно", 
-    "значит", "слушай", "знаешь", "слышь", "наверное", "понимаешь", "практически", 
-    "фактически", "также", "это", "like", "uh", "um", "ah", "okay", "so"
+    "эээ", "ээ", "э-э", "ммм", "мм", "м-м", "ааа", "аа", "а-а", "эм", "э-эм",
+    "типа", "короче", "слышь", "like", "uh", "um", "ah", "uhm",
 }
 
 MULTI_WORD_FILLERS = {
@@ -23,7 +23,7 @@ def suggest_smart_cuts(transcript_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Analyzes transcript word timings and text content to suggest optimized cut-outs:
     - Initial and ending silences
-    - Pauses between words (> 0.6 seconds) with 0.1s padding to avoid abrupt transitions
+    - Long pauses between words (> 1.15s) with 0.28s padding so breath and cadence survive
     - Expanded list of filler words & phrases
     - Duplicate attempts, stutters, and off-screen prompter prompts.
     """
@@ -42,26 +42,26 @@ def suggest_smart_cuts(transcript_data: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     # 1. Trim silence at the very start of the video
     first_w_start = float(words[0].get("start", 0.0))
-    if first_w_start > 0.3:
+    if first_w_start > 0.55:
         suggestions.append({
             "start": 0.0,
-            "end": round(first_w_start - 0.1, 2),
+            "end": round(first_w_start - 0.22, 2),
             "reason": "silence_start",
             "text": "Начальная пауза"
         })
 
     # 2. Trim silence at the very end of the video
     last_w_end = float(words[-1].get("end", 0.0))
-    if total_duration and total_duration - last_w_end > 0.3:
+    if total_duration and total_duration - last_w_end > 0.7:
         suggestions.append({
-            "start": round(last_w_end + 0.1, 2),
+            "start": round(last_w_end + 0.22, 2),
             "end": round(total_duration, 2),
             "reason": "silence_end",
             "text": "Финальная пауза"
         })
 
     # Helper for safe padding
-    def get_safe_cut(target_start, target_end, idx_start, idx_end, padding=0.15):
+    def get_safe_cut(target_start, target_end, idx_start, idx_end, padding=0.22):
         prev_end = float(words[idx_start - 1].get("end", 0.0)) if idx_start > 0 else 0.0
         next_start = float(words[idx_end + 1].get("start", target_end)) if idx_end < n - 1 else target_end + padding
         
@@ -144,8 +144,10 @@ def suggest_smart_cuts(transcript_data: Dict[str, Any]) -> List[Dict[str, Any]]:
                         "text": f"Закадровый голос/подсказка: \"{w.get('word', '')}\""
                     })
 
-    # 4. Silence Trimming between words with smooth 0.15s padding
+    # 4. Long pauses only. 0.6–1.1s is natural breath — cutting it makes jump-cuts.
     for i in range(n - 1):
+        if i in words_to_cut_indices or (i + 1) in words_to_cut_indices:
+            continue
         w_curr = words[i]
         w_next = words[i + 1]
         
@@ -153,11 +155,10 @@ def suggest_smart_cuts(transcript_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         start_next = float(w_next.get("start", 0.0))
         
         pause_dur = start_next - end_curr
-        if pause_dur > 0.6:
-            # Cut silence leaving a 0.15s padding on each side to avoid popping
-            cut_start = end_curr + 0.15
-            cut_end = start_next - 0.15
-            if cut_end > cut_start + 0.05:
+        if pause_dur > 1.15:
+            cut_start = end_curr + 0.28
+            cut_end = start_next - 0.28
+            if cut_end > cut_start + 0.35:
                 suggestions.append({
                     "start": round(cut_start, 2),
                     "end": round(cut_end, 2),
@@ -252,6 +253,17 @@ def suggest_smart_cuts(transcript_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         else:
             i += 1
 
-    # Sort suggestions chronologically
     suggestions.sort(key=lambda x: x["start"])
-    return suggestions
+    merged: List[Dict[str, Any]] = []
+    for s in suggestions:
+        if merged and s["start"] <= merged[-1]["end"] + 0.08:
+            merged[-1]["end"] = max(merged[-1]["end"], s["end"])
+            if s.get("reason") == "duplicate":
+                merged[-1]["reason"] = "duplicate"
+            prev_text = merged[-1].get("text") or ""
+            new_text = s.get("text") or ""
+            if new_text and new_text not in prev_text:
+                merged[-1]["text"] = f"{prev_text}; {new_text}" if prev_text else new_text
+        else:
+            merged.append(dict(s))
+    return merged

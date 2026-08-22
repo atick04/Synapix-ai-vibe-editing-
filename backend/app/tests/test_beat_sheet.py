@@ -23,6 +23,48 @@ def _words(pairs):
 def test_full_montage_detects_auto_edit():
     assert is_full_montage("Сделай авто-монтаж Instagram Reels")
     assert not is_full_montage("добавь музыку lofi")
+    assert not is_full_montage("добавь субтитры")
+    assert not is_full_montage("добавь кинетические субтитры")
+    assert not is_full_montage("субтитры для reels")
+
+
+def test_subtitle_request_strips_cuts_and_sfx():
+    from app.services.beat_sheet import filter_tools_for_intent, targeted_allowlist
+    assert targeted_allowlist("Добавь субтитры") == frozenset({"build_kinetic_typography"})
+    calls = [
+        {"name": "cut_clip", "arguments": {"start_time": 1, "end_time": 2}},
+        {"name": "build_kinetic_typography", "arguments": {"subtitle_preset": "resolve_classic"}},
+        {"name": "design_sound", "arguments": {}},
+        {"name": "build_transition", "arguments": {}},
+    ]
+    kept = filter_tools_for_intent(calls, "Добавь субтитры")
+    assert [c["name"] for c in kept] == ["build_kinetic_typography"]
+    injected = filter_tools_for_intent(
+        [{"name": "cut_clip", "arguments": {"start_time": 0, "end_time": 1}}],
+        "добавь субтитры",
+    )
+    assert [c["name"] for c in injected] == ["build_kinetic_typography"]
+    assert injected[0]["arguments"].get("subtitle_preset") == "resolve_classic"
+
+    from app.services.beat_sheet import planned_calls_for_message
+    assert planned_calls_for_message("добавь субтитры")[0]["name"] == "build_kinetic_typography"
+
+
+def test_direct_subtitles_do_not_cut_or_add_sfx():
+    import asyncio
+    from app.services.direct_edit import apply_direct_intent
+
+    edits, reply = asyncio.run(apply_direct_intent(
+        "pytest-direct-subs",
+        "Добавь субтитры",
+        [{"action": "change_format", "format": "9:16", "fit": "cover"}],
+    ))
+    actions = [e.get("action") for e in edits]
+    assert "add_subtitles" in actions
+    assert "change_format" in actions
+    assert "cut_out" not in actions
+    assert not any(e.get("action") == "add_asset" for e in edits)
+    assert "субтит" in reply.lower()
 
 
 def test_beat_sheet_hook_is_title_for_ink():
@@ -47,6 +89,16 @@ def test_beat_sheet_hook_is_title_for_ink():
     assert beats[0]["job"] in ("title", "overlay")
     jobs = {b["job"] for b in beats}
     assert "face" in jobs
+    zooms = [b for b in beats if b.get("zoom")]
+    assert len(zooms) <= 2
+    assert all(b["job"] == "face" for b in zooms)
+    stacked = 0
+    prev = ""
+    for b in beats:
+        if b["job"] in ("overlay", "title", "diagram") and prev in ("overlay", "title", "diagram"):
+            stacked += 1
+        prev = b["job"]
+    assert stacked == 0
     text = director_beat_contract(sheet, full=True)
     assert "PICTURE LOCK" in text
     assert "job=face" in text

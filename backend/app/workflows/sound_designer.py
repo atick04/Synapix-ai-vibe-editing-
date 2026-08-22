@@ -18,6 +18,7 @@ from app.workflows.json_sanitizer import parse_json_blocks_from_text, safe_json_
 from app.workflows.production_memory import ProductionMemory
 from app.workflows.timeline_state import TimelineState
 from app.workflows import event_bus
+from app.services.topic_transition_service import is_breath_cut
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +158,8 @@ def collect_sound_events(
         start = float(start)
 
         if action == "cut_out":
+            if is_breath_cut(edit):
+                continue
             _add(start, "whoosh", "cut")
         elif action == "add_broll":
             _add(start, "whoosh", "broll")

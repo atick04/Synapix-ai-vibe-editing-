@@ -88,13 +88,13 @@ export default function ChatSidebar({
     return (
         <div className="flex-1 flex flex-col overflow-hidden w-full h-full bg-transparent text-neutral-200 animate-in fade-in duration-300 relative font-sans">
             {/* GlassMorphic Header */}
-            <div className="flex items-center justify-between px-5 py-3.5 shrink-0 border-b border-white/[0.08] bg-black/20 backdrop-blur-xl select-none">
-                <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-4.5 rounded-full bg-white flex items-center justify-center gap-1 shadow-sm hover:opacity-90 transition-opacity">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 shrink-0 border-b border-white/[0.08] bg-black/20 backdrop-blur-xl select-none">
+                <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-8 h-4.5 rounded-full bg-white flex items-center justify-center gap-1 shadow-sm hover:opacity-90 transition-opacity shrink-0">
                         <span className="w-1 h-1 rounded-full bg-black" />
                         <span className="w-1 h-1 rounded-full bg-black" />
                     </div>
-                    <span className="text-xs font-semibold text-white tracking-wide truncate">Synapix</span>
+                    <span className="text-sm font-semibold text-white tracking-wide truncate">{isMobile ? "Чат" : "Synapix"}</span>
                 </div>
                 <div className="flex items-center gap-2">
                     {isProcessing && (

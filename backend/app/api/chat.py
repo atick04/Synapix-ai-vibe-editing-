@@ -380,6 +380,27 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
             background_tasks.add_task(process_render_task, request.file_id, request.force_edits or [], request.edl, request.font, request.font_size, request.use_outline, request.font_color, request.template_id, False, request.brand_id)
             yield json.dumps({"type": "result", "role": "ai", "content": "Принято! Я запустил многослойный рендер (EDL). Через несколько минут результат будет готов.", "variants": []}) + "\n"
             return
+
+        # Direct commands («добавь субтитры») must not wait on the director LLM.
+        if request.message not in ("INIT_PLAN",) and not request.message.startswith("SYSTEM_EVALUATION"):
+            try:
+                from app.services.direct_edit import apply_direct_intent
+                direct = await apply_direct_intent(request.file_id, request.message, request.active_edits or [])
+            except Exception as direct_err:
+                print(f"[Chat] Direct intent failed, falling back to graph: {direct_err}")
+                direct = None
+            if direct:
+                edits, reply = direct
+                yield json.dumps({"type": "log", "message": "Применяю запрос на таймлайн…"}) + "\n"
+                yield json.dumps({
+                    "type": "result",
+                    "role": "ai",
+                    "content": reply,
+                    "variants": [],
+                    "edits": edits,
+                    "ready_to_render": False,
+                }) + "\n"
+                return
             
         yield json.dumps({"type": "log", "message": "Manager Agent: Адаптация запроса и распределение задач..."}) + "\n"
         # Seed the human thought-chain immediately (visible reasoning UI)
@@ -645,16 +666,15 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
             msg_l = request.message.lower()
             # Only apply auto-cuts if user explicitly asks to remove silences, filler words, or repeated takes
             explicit_cut_request = any(p in msg_l for p in [
-                "тишин", "пауз", "молчан", "вырез", "удал", "мусор",
-                "filler", "silence", "pause", "stutter", "повтор", "дубл", "clean",
-                "убр", "сокр", "сжат"
+                "тишин", "пауз", "молчан", "выреж", "вырезк", "удали ", "удалить", "мусор",
+                "filler", "silence", "pause", "stutter", "повтор", "дубл",
+                "убери пауз", "убери тишин", "сократ", "сожми ролик"
             ])
             # Full montage / Shorts flow also implies jump-cuts + transitions
             full_montage_request = any(p in msg_l for p in [
                 "полный монтаж", "авто-монтаж", "автомонтаж", "смонтируй", "смонтировать",
-                "монтируй", "начинай", "поехали", "сделай всё", "сделай все",
-                "shorts", "reels", "tiktok", "для соцсетей", "динамичн"
-            ])
+                "монтируй полностью", "сделай всё", "сделай все",
+            ]) or msg_l.strip() in ("начинай", "поехали", "давай", "ок", "да", "делай", "го")
             if request.message != "INIT_PLAN" and (explicit_cut_request or full_montage_request):
                 # Remove previous cut_out edits to avoid duplicates before adding fresh auto-cuts
                 all_edits = [e for e in all_edits if e.get("action") != "cut_out"]
@@ -678,7 +698,7 @@ async def chat_with_director(request: ChatRequest, background_tasks: BackgroundT
                         topic_boundaries,
                         from_cuts=True,
                         from_topics=True,
-                        min_gap_sec=2.5,
+                        min_gap_sec=4.0,
                     )
                     all_edits = timeline.get_serialized_edits()
                     if auto_logs:

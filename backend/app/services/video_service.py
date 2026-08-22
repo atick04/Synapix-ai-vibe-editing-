@@ -851,7 +851,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 def extract_audio(video_path: str, output_audio_path: str) -> str:
     try:
         stream = ffmpeg.input(video_path)
-        stream = ffmpeg.output(stream, output_audio_path, acodec='libmp3lame', q=4)
+        stream = ffmpeg.output(
+            stream, output_audio_path,
+            ac=1, ar=16000, acodec='libmp3lame', audio_bitrate='64k',
+        )
         ffmpeg.run(stream, overwrite_output=True, quiet=True)
         return output_audio_path
     except ffmpeg.Error as e:
@@ -906,11 +909,11 @@ def apply_zoom(input_path: str, output_path: str, zoom_type: str,
         elif zoom_type == "zoom_out":
             z_expr = f"{peak_s}-({peak_s}-1)*on/{max(frames - 1, 1)}"
         else:
-            # zoom_in punch: ease-ish triangle via piecewise linear (ffmpeg expr has no cubic)
+            # zoom_in punch: quadratic ease in, then ease back (no pow() — zoompan-safe)
             z_expr = (
-                f"if(lt(on/{frames},0.55),"
-                f"1+({peak_s}-1)*(on/{frames})/0.55,"
-                f"1+({peak_s}-1)*(1-(on/{frames}-0.55)/0.45))"
+                f"if(lt(on/{frames},0.62),"
+                f"1+({peak_s}-1)*(on/{frames}/0.62)*(on/{frames}/0.62),"
+                f"1+({peak_s}-1)*((1-(on/{frames}-0.62)/0.38)*((1-(on/{frames}-0.62)/0.38)))"
             )
 
         # zoompan s= must be WxH with an 'x' — colons are option separators
@@ -1540,7 +1543,7 @@ def render_video(
         if len(streams_a) > 1:
             current_a = streams_a[0]
             for next_a in streams_a[1:]:
-                current_a = ffmpeg.filter([current_a, next_a], 'acrossfade', d=0.08, c1='tri', c2='tri')
+                current_a = ffmpeg.filter([current_a, next_a], 'acrossfade', d=0.12, c1='tri', c2='tri')
             a_out = current_a
         else:
             a_out = streams_a[0]
@@ -2708,17 +2711,34 @@ def render_video(
             return False, f"FFmpeg timed out after {timeout_sec}s"
 
     try:
-        # Optional Instagram Reels target frame (9:16)
+        # Optional Instagram Reels target frame (9:16 cover crop, pan via focus)
         if target_width and target_height:
+            from app.services.reframe import layout_from_edits
             tw = int(target_width) if int(target_width) % 2 == 0 else int(target_width) - 1
             th = int(target_height) if int(target_height) % 2 == 0 else int(target_height) - 1
-            v_out = (
-                v_out
-                .filter("scale", tw, th, force_original_aspect_ratio="increase")
-                .filter("crop", tw, th)
-                .filter("setsar", "1")
-            )
-            print(f"[RenderEngine] Scaling export to Reels {tw}x{th}")
+            lay = layout_from_edits(edits)
+            fx, fy = lay["focus_x"], lay["focus_y"]
+            sc = float(lay["scale"])
+            if lay["fit"] == "contain":
+                sw = max(2, int(tw * sc) // 2 * 2)
+                sh = max(2, int(th * sc) // 2 * 2)
+                v_out = (
+                    v_out
+                    .filter("scale", sw, sh, force_original_aspect_ratio="decrease")
+                    .filter("pad", tw, th, f"(ow-iw)*{fx}", f"(oh-ih)*{fy}", color="black")
+                    .filter("setsar", "1")
+                )
+                print(f"[RenderEngine] Letterbox Reels {tw}x{th} contain scale={sc:.2f}")
+            else:
+                ztw = max(tw, int(tw * sc) // 2 * 2)
+                zth = max(th, int(th * sc) // 2 * 2)
+                v_out = (
+                    v_out
+                    .filter("scale", ztw, zth, force_original_aspect_ratio="increase")
+                    .filter("crop", tw, th, f"(in_w-{tw})*{fx}", f"(in_h-{th})*{fy}")
+                    .filter("setsar", "1")
+                )
+                print(f"[RenderEngine] Cover Reels {tw}x{th} scale={sc:.2f} focus=({fx:.2f},{fy:.2f})")
             width, height = tw, th
 
         encode_kwargs = dict(

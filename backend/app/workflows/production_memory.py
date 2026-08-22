@@ -89,11 +89,11 @@ class ProductionMemory:
         recent = self.session["used_soundtracks"][-2:] if self.session["used_soundtracks"] else []
         return track_name.strip().lower() in recent
 
-    def check_zoom_density(self, start_t: float, limit_per_10s: int = 2) -> bool:
-        """Evaluate if camera zoom actions are too densely packed together."""
+    def check_zoom_density(self, start_t: float, limit_per_10s: int = 1) -> bool:
+        """One punch-in per 12s window. Denser zooms look unmotivated."""
         recent_zooms = [
-            z for z in self.session["used_zooms"] 
-            if abs(start_t - z["time"]) < 10.0
+            z for z in self.session["used_zooms"]
+            if abs(start_t - z["time"]) < 12.0
         ]
         return len(recent_zooms) >= limit_per_10s
 

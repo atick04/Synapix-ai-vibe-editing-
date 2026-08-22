@@ -156,7 +156,11 @@ class ModifyClipArgs(BaseModel):
     y: Optional[float] = Field(default=None, description="Новая вертикальная координата текста на экране в процентах (0-100)")
 
 class ChangeFormatArgs(BaseModel):
-    format: str = Field(description="Требуемый формат видео: '9:16' (vertical/TikTok) или '16:9' (horizontal/YouTube)")
+    format: str = Field(default="9:16", description="Всегда 9:16 (Instagram Reels).")
+    fit: str = Field(default="cover", description="cover — заполнить 9:16 (обрезать бока). contain — положить 16:9 горизонтально с полями сверху и снизу.")
+    scale: float = Field(default=1.0, description="Масштаб. cover 1–2.2 (зум), contain 0.45–1 (размер полоски).")
+    focus_x: float = Field(default=0.5, description="Горизонталь 0–1.")
+    focus_y: float = Field(default=0.5, description="Вертикаль 0–1. Для contain — положение полоски.")
 
 class StitchVideoClipArgs(BaseModel):
     asset_id: str = Field(description="Уникальный ID загруженного исходного видеоролика из медиа-библиотеки (например: 'additional_uuid' или 'main')")
@@ -695,16 +699,15 @@ def create_zoom(timeline: TimelineState, memory: ProductionMemory, args: Dict[st
     z_type = args.get("type", "zoom_in")
     if args.get("intensity") is None:
         look = memory.get_content_look() if hasattr(memory, "get_content_look") else {}
-        intensity = float((look.get("montage") or {}).get("zoom_intensity") or 1.12)
+        intensity = float((look.get("montage") or {}).get("zoom_intensity") or 1.10)
     else:
-        intensity = float(args.get("intensity") or 1.14)
-    intensity = max(1.06, min(1.28, intensity))
+        intensity = float(args.get("intensity") or 1.10)
+    intensity = max(1.06, min(1.18, intensity))
     
-    # Check spacing density gate in production memory
+    # Too many punch-ins in a window → skip, don't delay into a random moment
     if memory.check_zoom_density(start):
-        logger.warning(f"Anti-Repetition Spacing Gate: zooms are too dense at {start}s. Adjusting delay.")
-        start = min(start + 1.0, dur - 0.5)
-        end = min(end + 1.0, dur)
+        logger.warning(f"Anti-Repetition Spacing Gate: skip unmotivated zoom at {start}s.")
+        return "Зум пропущен: слишком плотно к предыдущему наезду."
         
     timeline.add_zoom(start, end, z_type, intensity=intensity)
     memory.record_zoom(start, z_type)
@@ -1111,6 +1114,20 @@ def set_video_background(timeline: TimelineState, memory: ProductionMemory, args
     event_bus.emit("tool_completed", {"tool": "set_video_background", "message": msg})
     return msg
 
+
+def change_format(timeline: TimelineState, memory: ProductionMemory, args: Dict[str, Any]) -> str:
+    fx = float(args.get("focus_x", 0.5) if args.get("focus_x") is not None else 0.5)
+    fy = float(args.get("focus_y", 0.5) if args.get("focus_y") is not None else 0.5)
+    fit = str(args.get("fit") or "cover")
+    scale = float(args.get("scale") or 1.0)
+    timeline.set_format("9:16", focus_x=fx, focus_y=fy, fit=fit, scale=scale)
+    memory.session["aspect_ratio"] = "vertical"
+    memory.session["video_format"] = "9:16"
+    label = "горизонталь 16:9 в кадре" if str(fit).lower() in ("contain", "letterbox", "horizontal") else "на весь кадр 9:16"
+    event_bus.emit("tool_completed", {"tool": "change_format", "message": f"Кадр: {label}"})
+    return f"Формат видео: Instagram Reels 9:16 ({label})"
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # REGISTRY DEFINITION
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1164,7 +1181,7 @@ _LOCAL_RUNNERS = {
     },
     "change_format": {
         "schema": ChangeFormatArgs,
-        "runner": lambda t, m, a: t.edits.append({"action": "change_format", "format": "9:16"}) or event_bus.emit("tool_completed", {"tool": "change_format", "message": "Формат зафиксирован: Instagram Reels 9:16"}) or "Формат видео: Instagram Reels 9:16"
+        "runner": change_format
     },
     "stitch_video_clip": {
         "schema": StitchVideoClipArgs,
@@ -1228,7 +1245,7 @@ _TOOL_DESCRIPTIONS = {
     "build_transition": "Вставляет звуковой и визуальный переход (whoosh, glitch, film) на склейках.",
     "apply_topic_transitions": "Автоматически находит смены темы в речи спикера по транскрипту и ставит монтажные переходы (whoosh/glitch/film) на эти таймкоды.",
     "modify_clip": "Изменяет параметры (начало, конец, громкость, текст, поисковый запрос) или полностью удаляет (delete=True) конкретный выделенный клип на таймлайне.",
-    "change_format": "Всегда обрезает видео в Instagram Reels 9:16 (единственный формат продукта).",
+    "change_format": "Ставит горизонтальный исходник в Reel 9:16. fit=cover — заполнить кадр (обрезать бока). fit=contain — положить 16:9 горизонтально с полями. scale и focus_x/y двигают кадр.",
     "stitch_video_clip": "Склеивает (добавляет) фрагмент из загруженного дополнительного видеоролика в проект.",
     "search_and_add_music": "Ищет в стоковой библиотеке фоновую музыку по текстовому запросу, скачивает её на сервер и накладывает на таймлайн проекта.",
     "search_and_add_sticker": "Ищет в стоковой библиотеке графический стикер или эмодзи, скачивает его на сервер и накладывает поверх видеоряда в указанные координаты.",

@@ -62,6 +62,20 @@ class TestSmartCut(unittest.TestCase):
         self.assertEqual(dup_cut["start"], 1.5)
         self.assertTrue(dup_cut["end"] >= 2.5)
 
+    def test_natural_breath_pause_is_kept(self):
+        mock_transcript = {
+            "words": [
+                {"word": "Это", "start": 0.0, "end": 0.3},
+                {"word": "просто", "start": 1.0, "end": 1.4},
+                {"word": "важно", "start": 1.5, "end": 2.0},
+            ]
+        }
+        cuts = suggest_smart_cuts(mock_transcript)
+        reasons = [c["reason"] for c in cuts]
+        self.assertNotIn("silence", reasons)
+        self.assertFalse(any("это" in (c.get("text") or "").lower() for c in cuts if c["reason"] == "filler"))
+        self.assertFalse(any("просто" in (c.get("text") or "").lower() for c in cuts if c["reason"] == "filler"))
+
     def test_noise_and_offscreen_cuts(self):
         mock_transcript = {
             "segments": [

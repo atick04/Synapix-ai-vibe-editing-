@@ -18,6 +18,7 @@ import TextSidebar from "@/components/TextSidebar";
 import GraphicsSidebar from "@/components/GraphicsSidebar";
 import MusicSidebar from "@/components/MusicSidebar";
 import TransitionsSidebar from "@/components/TransitionsSidebar";
+import ReframeSidebar from "@/components/ReframeSidebar";
 import { VibeProvider } from "@/context/VibeContext";
 import { useLanguage } from "@/context/LanguageContext";
 
@@ -40,6 +41,15 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             const ext = fn.split('.').pop()?.toLowerCase();
             if (ext && ['mov', 'avi', 'mkv'].includes(ext)) {
                 fn = fn.substring(0, fn.lastIndexOf('.')) + '.mp4';
+            }
+            // Uploads are stored as {projectId}.ext — the camera name in the URL 404s.
+            if (
+                !fn.toLowerCase().startsWith(id.toLowerCase()) &&
+                !fn.includes('_rendered') &&
+                !fn.includes('_rvm')
+            ) {
+                const suffix = fn.includes('.') ? fn.slice(fn.lastIndexOf('.')) : '.MP4';
+                fn = `${id}${suffix}`;
             }
             setFilename(fn);
             localStorage.setItem(`filename_${id}`, fn);
@@ -105,6 +115,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     const [isGraphicsOpen, setIsGraphicsOpen] = useState(false);
     const [isMusicOpen, setIsMusicOpen] = useState(false);
     const [isTransitionsOpen, setIsTransitionsOpen] = useState(false);
+    const [isReframeOpen, setIsReframeOpen] = useState(false);
     const chatEndRef = useRef<HTMLDivElement>(null);
     const chatContainerRef = useRef<HTMLDivElement>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
@@ -130,6 +141,17 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
     
     // Manual Format Control
     const [targetFormat, setTargetFormat] = useState<'auto' | '16:9' | '9:16'>('9:16');
+    const [sourceIsLandscape, setSourceIsLandscape] = useState(false);
+
+    const handleSourceAspect = useCallback((aspect: number) => {
+        const landscape = aspect > 1.05;
+        setSourceIsLandscape(landscape);
+        if (!landscape) return;
+        setActiveEdits(prev => {
+            if (prev.some(e => e.action === 'change_format')) return prev;
+            return [{ action: 'change_format', format: '9:16', fit: 'cover', scale: 1, focus_x: 0.5, focus_y: 0.45 }, ...prev];
+        });
+    }, []);
 
     // Brand custom assets
     const [brandId, setBrandId] = useState<string>("default");
@@ -530,12 +552,16 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
         setIsMusicOpen(false);
         setIsMaskingOpen(false);
         setIsTransitionsOpen(false);
+        setIsReframeOpen(false);
     }, []);
 
     const editorPanelClass = isMobile
-        ? "rainbow-glow-container fixed inset-x-0 z-40 flex flex-col min-h-0 top-12 bottom-[var(--app-mobile-nav)] px-1.5 pb-1.5"
+        ? "mobile-editor-sheet"
         : "rainbow-glow-container w-full md:w-[330px] h-full min-h-0 flex-shrink-0 transition-all duration-300 z-10";
-    const anyToolOpen = isTextOpen || isGraphicsOpen || isMusicOpen || isMaskingOpen || isTransitionsOpen;
+    const editorPanelInnerClass = isMobile
+        ? "relative z-10 w-full h-full min-h-0 overflow-hidden flex flex-col bg-[#161618]"
+        : "w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col";
+    const anyToolOpen = isTextOpen || isGraphicsOpen || isMusicOpen || isMaskingOpen || isTransitionsOpen || isReframeOpen;
 
     useEffect(() => {
         const handleResize = () => {
@@ -1098,59 +1124,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
             .catch(err => console.error("Failed to load templates", err));
     }, []);
 
-    // Audio waveform peaks with precise AudioContext lifecycle management (prevents Web Audio memory leaks)
-    useEffect(() => {
-        if (!currentVideo) return;
-        let active = true;
-        let audioCtx: AudioContext | null = null;
-        const generatePeaks = async () => {
-            try {
-                const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-                audioCtx = new AudioContextClass();
-                const response = await fetch(currentVideo, { credentials: "include" });
-                const arrayBuffer = await response.arrayBuffer();
-                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-                if (!active) {
-                    return;
-                }
-                const channelData = audioBuffer.getChannelData(0);
-                const peaks = [];
-                const samples = 1000;
-                const blockSize = Math.floor(channelData.length / samples);
-                for (let i = 0; i < samples; i++) {
-                    let blockStart = blockSize * i;
-                    let sum = 0;
-                    for (let j = 0; j < blockSize; j++) {
-                        sum += Math.abs(channelData[blockStart + j]);
-                    }
-                    peaks.push(sum / blockSize);
-                }
-                const maxPeak = Math.max(...peaks);
-                const normalizedPeaks = peaks.map(p => (p / maxPeak) * 100);
-                if (active) {
-                    setAudioPeaks(normalizedPeaks);
-                }
-            } catch (error) {
-                console.warn("Failed to generate audio peaks (using fallback):", error);
-                if (active) {
-                    setAudioPeaks(Array(100).fill(20));
-                }
-            } finally {
-                if (audioCtx && audioCtx.state !== 'closed') {
-                    try {
-                        await audioCtx.close();
-                    } catch (e) {}
-                }
-            }
-        };
-        generatePeaks();
-        return () => {
-            active = false;
-            if (audioCtx && audioCtx.state !== 'closed') {
-                audioCtx.close().catch(() => {});
-            }
-        };
-    }, [currentVideo]);
+    // Waveform peaks come from the companion .mp3 below — never fetch the full MP4.
 
     // Prefer companion .mp3 for waveform peaks (more reliable than decoding mp4 after reload)
     useEffect(() => {
@@ -1182,7 +1156,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                 const maxPeak = Math.max(...peaks, 1e-6);
                 if (active) setAudioPeaks(peaks.map((p) => (p / maxPeak) * 100));
             } catch {
-                /* keep whatever peaks the main video effect produced */
+                if (active) setAudioPeaks(Array(100).fill(20));
             } finally {
                 if (audioCtx && audioCtx.state !== "closed") {
                     try { await audioCtx.close(); } catch { /* ignore */ }
@@ -1737,7 +1711,11 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                                 setActiveEdits((prev: any[]) => {
                                     const newActionTypes = new Set(data.edits.map((e: any) => e.action));
                                     const kept = prev.filter((e: any) => !newActionTypes.has(e.action));
-                                    return [...kept, ...data.edits];
+                                    const next = [...kept, ...data.edits];
+                                    try {
+                                        if (id) localStorage.setItem(`activeEdits_${id}`, JSON.stringify(next));
+                                    } catch {}
+                                    return next;
                                 });
                                 const dur = duration || 10000;
                                 const cuts = data.edits.filter((e: any) => e.action === "cut_out").sort((a: any, b: any) => a.start - b.start);
@@ -1865,8 +1843,12 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                         </svg>
                     </Link>
-                    <span className="md:hidden text-[13px] font-medium text-white truncate max-w-[140px]">
-                        {filename || "Проект"}
+                    <span className="md:hidden text-[13px] font-medium text-white truncate max-w-[42vw]">
+                        {(() => {
+                            const raw = (filename || "").replace(/\.[^.]+$/, "");
+                            if (!raw || /^[0-9a-f]{8}-[0-9a-f]{4}/i.test(raw)) return "Проект";
+                            return raw;
+                        })()}
                     </span>
 
                     <div className="hidden md:flex items-center gap-2 text-xs text-neutral-500 ml-2">
@@ -1945,11 +1927,11 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
 
             <div className="flex-1 flex overflow-hidden flex-row min-h-0 relative">
                 {/* Main Content Area */}
-                <div className="flex-1 flex overflow-hidden flex-row relative p-1.5 md:p-3 gap-1.5 md:gap-3 min-h-0">
+                <div className="flex-1 flex overflow-hidden flex-row relative p-0 md:p-3 gap-0 md:gap-3 min-h-0">
                 
                 {/* 2. Center: Preview + Timeline */}
                 {(!isMobile || activeMobileTab === 'editor') && (
-                    <div className="flex-1 flex flex-col min-w-0 h-full gap-3 min-h-0">
+                    <div className="flex-1 flex flex-col min-w-0 h-full gap-2 md:gap-3 min-h-0 p-1.5 md:p-0">
                         {/* Video Preview */}
                         <div
                             className="flex-1 overflow-hidden relative rounded-2xl bg-black/5 dark:bg-white/5 shadow-sm border border-black/5 dark:border-white/10"
@@ -1964,6 +1946,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                                     edl={multiTrackEdl}
                                     isPlaying={isPlaying}
                                     targetFormat={targetFormat}
+                                    onSourceAspect={handleSourceAspect}
                                     onTogglePlay={() => setIsPlaying(!isPlaying)}
                                     onTimeUpdate={(t: number) => {
                                         // time updates are already handled by SandboxPlayer internally
@@ -2082,7 +2065,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                 {/* ── Right Sidebars Area ── */}
                 {isChatOpen && (!isMobile || activeMobileTab === 'chat') && (
                     <div className={editorPanelClass}>
-                        <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
+                        <div className={editorPanelInnerClass}>
                             <ChatSidebar 
                                 chat={chat} 
                                 message={message} 
@@ -2106,7 +2089,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
 
                 {isLibraryOpen && (!isMobile || activeMobileTab === 'library') && (
                     <div className={editorPanelClass}>
-                        <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
+                        <div className={editorPanelInnerClass}>
                             <ReferencesSidebar 
                                 activeEdits={activeEdits} 
                                 onActiveEditsChange={setActiveEdits} 
@@ -2143,7 +2126,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
 
                 {isTextOpen && (!isMobile || activeMobileTab === 'tools') && (
                     <div className={editorPanelClass}>
-                        <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
+                        <div className={editorPanelInnerClass}>
                             <TextSidebar
                                 fontStyle={fontStyle}
                                 setFontStyle={setFontStyle}
@@ -2164,7 +2147,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
 
                 {isGraphicsOpen && (!isMobile || activeMobileTab === 'tools') && (
                     <div className={editorPanelClass}>
-                        <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
+                        <div className={editorPanelInnerClass}>
                             <GraphicsSidebar
                                 activeEdits={activeEdits}
                                 onEditsChange={setActiveEdits}
@@ -2177,7 +2160,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
 
                 {isMusicOpen && (!isMobile || activeMobileTab === 'tools') && (
                     <div className={editorPanelClass}>
-                        <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
+                        <div className={editorPanelInnerClass}>
                             <MusicSidebar
                                 activeEdits={activeEdits}
                                 onEditsChange={setActiveEdits}
@@ -2189,7 +2172,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
 
                 {isMaskingOpen && (!isMobile || activeMobileTab === 'tools') && (
                     <div className={editorPanelClass}>
-                        <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
+                        <div className={editorPanelInnerClass}>
                             <MaskingSidebar
                                 activeEdits={activeEdits}
                                 onEditsChange={setActiveEdits}
@@ -2201,7 +2184,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
 
                 {isTransitionsOpen && (!isMobile || activeMobileTab === 'tools') && (
                     <div className={editorPanelClass}>
-                        <div className="w-full h-full rounded-[15px] rainbow-glass-panel overflow-hidden flex flex-col">
+                        <div className={editorPanelInnerClass}>
                             <TransitionsSidebar
                                 activeEdits={activeEdits}
                                 onEditsChange={setActiveEdits}
@@ -2213,25 +2196,43 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                     </div>
                 )}
 
+                {isReframeOpen && (!isMobile || activeMobileTab === 'tools') && (
+                    <div className={editorPanelClass}>
+                        <div className={editorPanelInnerClass}>
+                            <ReframeSidebar
+                                activeEdits={activeEdits}
+                                onEditsChange={setActiveEdits}
+                                onClose={() => setIsReframeOpen(false)}
+                                sourceIsLandscape={sourceIsLandscape}
+                            />
+                        </div>
+                    </div>
+                )}
+
                 {isMobile && activeMobileTab === 'tools' && !anyToolOpen && (
                     <div className={editorPanelClass}>
-                        <div className="w-full h-full rounded-[15px] bg-[#161618] border border-white/10 overflow-hidden flex flex-col p-4">
-                            <p className="text-[11px] uppercase tracking-wider text-neutral-500 mb-3">Инструменты</p>
-                            <div className="grid grid-cols-2 gap-2">
+                        <div className="relative z-10 w-full h-full min-h-0 overflow-y-auto bg-[#161618] px-4 py-4">
+                            <p className="text-[13px] font-semibold text-white mb-1">Инструменты</p>
+                            <p className="text-[12px] text-neutral-500 mb-4 leading-relaxed">
+                                Стили текста, графика, музыка и переходы. Монтаж ролика — во вкладке «Монтаж».
+                            </p>
+                            <div className="grid grid-cols-2 gap-2.5">
                                 {[
-                                    { label: "Текст", run: () => { closeEditorPanels(); setIsTextOpen(true); } },
-                                    { label: "Графика", run: () => { closeEditorPanels(); setIsGraphicsOpen(true); } },
-                                    { label: "Музыка", run: () => { closeEditorPanels(); setIsMusicOpen(true); } },
-                                    { label: "Маскинг", run: () => { closeEditorPanels(); setIsMaskingOpen(true); } },
-                                    { label: "Переходы", run: () => { closeEditorPanels(); setIsTransitionsOpen(true); } },
+                                    { label: "Текст", hint: "Субтитры и шрифты", run: () => { closeEditorPanels(); setIsTextOpen(true); } },
+                                    { label: "Графика", hint: "Карточки и схемы", run: () => { closeEditorPanels(); setIsGraphicsOpen(true); } },
+                                    { label: "Музыка", hint: "Фон и эффекты", run: () => { closeEditorPanels(); setIsMusicOpen(true); } },
+                                    { label: "Маскинг", hint: "Текст за спикером", run: () => { closeEditorPanels(); setIsMaskingOpen(true); } },
+                                    { label: "Переходы", hint: "Склейки клипов", run: () => { closeEditorPanels(); setIsTransitionsOpen(true); } },
+                                    { label: "Кадр", hint: "16:9 → Reel 9:16", run: () => { closeEditorPanels(); setIsReframeOpen(true); } },
                                 ].map((tool) => (
                                     <button
                                         key={tool.label}
                                         type="button"
                                         onClick={tool.run}
-                                        className="min-h-14 rounded-xl border border-white/10 bg-white/[0.04] text-[13px] font-medium text-neutral-200 active:bg-white/[0.08]"
+                                        className="min-h-[76px] rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3 text-left active:bg-white/[0.08]"
                                     >
-                                        {tool.label}
+                                        <span className="block text-[15px] font-semibold text-white">{tool.label}</span>
+                                        <span className="block text-[12px] text-neutral-500 mt-1 leading-snug">{tool.hint}</span>
                                     </button>
                                 ))}
                             </div>
@@ -2250,7 +2251,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                             label: "Чат",
                             isOpen: isChatOpen,
                             badge: true,
-                            onClick: () => { setIsChatOpen(!isChatOpen); setIsLibraryOpen(false); setIsTextOpen(false); setIsGraphicsOpen(false); setIsMusicOpen(false); setIsMaskingOpen(false); setIsTransitionsOpen(false); },
+                            onClick: () => { setIsChatOpen(!isChatOpen); setIsLibraryOpen(false); setIsTextOpen(false); setIsGraphicsOpen(false); setIsMusicOpen(false); setIsMaskingOpen(false); setIsTransitionsOpen(false); setIsReframeOpen(false); },
                             icon: (
                                 <svg className="w-[18px] h-[18px] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
@@ -2261,7 +2262,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                             id: "library",
                             label: "Медиа",
                             isOpen: isLibraryOpen,
-                            onClick: () => { setIsLibraryOpen(!isLibraryOpen); setIsChatOpen(false); setIsTextOpen(false); setIsGraphicsOpen(false); setIsMusicOpen(false); setIsMaskingOpen(false); setIsTransitionsOpen(false); },
+                            onClick: () => { setIsLibraryOpen(!isLibraryOpen); setIsChatOpen(false); setIsTextOpen(false); setIsGraphicsOpen(false); setIsMusicOpen(false); setIsMaskingOpen(false); setIsTransitionsOpen(false); setIsReframeOpen(false); },
                             icon: (
                                 <svg className="w-[18px] h-[18px] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -2272,7 +2273,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                             id: "text",
                             label: "Текст",
                             isOpen: isTextOpen,
-                            onClick: () => { setIsTextOpen(!isTextOpen); setIsChatOpen(false); setIsLibraryOpen(false); setIsGraphicsOpen(false); setIsMusicOpen(false); setIsMaskingOpen(false); setIsTransitionsOpen(false); },
+                            onClick: () => { setIsTextOpen(!isTextOpen); setIsChatOpen(false); setIsLibraryOpen(false); setIsGraphicsOpen(false); setIsMusicOpen(false); setIsMaskingOpen(false); setIsTransitionsOpen(false); setIsReframeOpen(false); },
                             icon: (
                                 <svg className="w-[18px] h-[18px] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M4 6h16M4 12h16m-7 6h7" />
@@ -2283,7 +2284,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                             id: "graphics",
                             label: "Графика",
                             isOpen: isGraphicsOpen,
-                            onClick: () => { setIsGraphicsOpen(!isGraphicsOpen); setIsChatOpen(false); setIsLibraryOpen(false); setIsTextOpen(false); setIsMusicOpen(false); setIsMaskingOpen(false); setIsTransitionsOpen(false); },
+                            onClick: () => { setIsGraphicsOpen(!isGraphicsOpen); setIsChatOpen(false); setIsLibraryOpen(false); setIsTextOpen(false); setIsMusicOpen(false); setIsMaskingOpen(false); setIsTransitionsOpen(false); setIsReframeOpen(false); },
                             icon: (
                                 <svg className="w-[18px] h-[18px] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M14 10l-2 1m0 0l-2-1m2 1v2.5M20 7l-2 1m2-1l-2-1m2 1v2.5M14 4l-2-1-2 1M4 7l2-1M4 7l2 1M4 7v2.5M12 21l-2-1m2 1l2-1m-2 1v-2.5M6 18l-2-1v-2.5M18 18l2-1v-2.5" />
@@ -2294,7 +2295,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                             id: "music",
                             label: "Музыка",
                             isOpen: isMusicOpen,
-                            onClick: () => { setIsMusicOpen(!isMusicOpen); setIsChatOpen(false); setIsLibraryOpen(false); setIsTextOpen(false); setIsGraphicsOpen(false); setIsMaskingOpen(false); setIsTransitionsOpen(false); },
+                            onClick: () => { setIsMusicOpen(!isMusicOpen); setIsChatOpen(false); setIsLibraryOpen(false); setIsTextOpen(false); setIsGraphicsOpen(false); setIsMaskingOpen(false); setIsTransitionsOpen(false); setIsReframeOpen(false); },
                             icon: (
                                 <svg className="w-[18px] h-[18px] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
@@ -2305,7 +2306,7 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                             id: "masking",
                             label: "Маскинг",
                             isOpen: isMaskingOpen,
-                            onClick: () => { setIsMaskingOpen(!isMaskingOpen); setIsChatOpen(false); setIsLibraryOpen(false); setIsTextOpen(false); setIsGraphicsOpen(false); setIsMusicOpen(false); setIsTransitionsOpen(false); },
+                            onClick: () => { setIsMaskingOpen(!isMaskingOpen); setIsChatOpen(false); setIsLibraryOpen(false); setIsTextOpen(false); setIsGraphicsOpen(false); setIsMusicOpen(false); setIsTransitionsOpen(false); setIsReframeOpen(false); },
                             icon: (
                                 <svg className="w-[18px] h-[18px] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
@@ -2316,10 +2317,21 @@ export default function EditorPage({ params }: { params: Promise<{ id: string }>
                             id: "transitions",
                             label: "Переходы",
                             isOpen: isTransitionsOpen,
-                            onClick: () => { setIsTransitionsOpen(!isTransitionsOpen); setIsChatOpen(false); setIsLibraryOpen(false); setIsTextOpen(false); setIsGraphicsOpen(false); setIsMusicOpen(false); setIsMaskingOpen(false); },
+                            onClick: () => { setIsTransitionsOpen(!isTransitionsOpen); setIsChatOpen(false); setIsLibraryOpen(false); setIsTextOpen(false); setIsGraphicsOpen(false); setIsMusicOpen(false); setIsMaskingOpen(false); setIsReframeOpen(false); },
                             icon: (
                                 <svg className="w-[18px] h-[18px] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                                </svg>
+                            )
+                        },
+                        {
+                            id: "reframe",
+                            label: "Кадр",
+                            isOpen: isReframeOpen,
+                            onClick: () => { setIsReframeOpen(!isReframeOpen); setIsChatOpen(false); setIsLibraryOpen(false); setIsTextOpen(false); setIsGraphicsOpen(false); setIsMusicOpen(false); setIsMaskingOpen(false); setIsTransitionsOpen(false); },
+                            icon: (
+                                <svg className="w-[18px] h-[18px] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4" />
                                 </svg>
                             )
                         },

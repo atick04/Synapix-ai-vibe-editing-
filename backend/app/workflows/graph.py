@@ -47,7 +47,7 @@ def should_continue(state: VideoEditingState) -> str:
         else:
             parsed = safe_json_loads(content_clean)
 
-        tool_calls = parsed.get("tool_calls", [])
+        tool_calls = parsed.get("tool_calls", []) if parsed else []
         if tool_calls:
             return "execute_single_tool"
     except Exception:
@@ -55,6 +55,10 @@ def should_continue(state: VideoEditingState) -> str:
         import re
         if re.search(r'"tool_calls"\s*:\s*\[\s*{', content):
             return "execute_single_tool"
+
+    from app.services.beat_sheet import planned_calls_for_message
+    if planned_calls_for_message(state.get("user_message") or ""):
+        return "execute_single_tool"
 
     return "run_critic" if is_eval else END
 

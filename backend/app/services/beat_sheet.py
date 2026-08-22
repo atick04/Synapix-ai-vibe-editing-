@@ -30,14 +30,101 @@ for i, names in enumerate(
 
 
 def is_full_montage(message: str) -> bool:
-    msg = (message or "").lower()
+    msg = (message or "").lower().strip()
     keys = (
         "полный монтаж", "авто-монтаж", "автомонтаж", "смонтируй", "смонтировать",
-        "монтируй", "начинай", "поехали", "сделай всё", "сделай все",
-        "shorts", "reels", "tiktok", "для соцсетей", "динамичн",
-        "кинетические субтитры", "хук-графика",
+        "монтируй полностью", "полный авто", "сделай всё сам", "сделай все сам",
+        "сделай всё", "сделай все", "с нуля", "начинай монтаж",
     )
-    return any(k in msg for k in keys)
+    if any(k in msg for k in keys):
+        return True
+    return msg in ("начинай", "поехали", "давай", "ок", "да", "делай", "го", "гоу")
+
+
+# Single-purpose chat → only these tools may run. First match wins.
+_TARGETED_INTENTS = (
+    (
+        ("субтит", "caption", "karaoke", "титр речи", "текст речи", "надписи к речи", "подписи"),
+        frozenset({"build_kinetic_typography"}),
+    ),
+    (
+        ("цветокор", "лут", "lut", "color grade", "грейд"),
+        frozenset({"apply_color_grade"}),
+    ),
+    (
+        ("зум", "наезд", "zoom"),
+        frozenset({"create_zoom"}),
+    ),
+    (
+        ("музык", "саундтрек", "bgm", "lofi", "трек"),
+        frozenset({"select_bgm", "search_and_add_music"}),
+    ),
+)
+
+
+def targeted_allowlist(message: str) -> Optional[frozenset]:
+    """If the user asked for one job, return the only tools allowed. Else None."""
+    if is_full_montage(message):
+        return None
+    msg = (message or "").lower()
+    if not msg or msg == "init_plan":
+        return None
+    hits = [tools for keys, tools in _TARGETED_INTENTS if any(k in msg for k in keys)]
+    if len(hits) != 1:
+        return None
+    return hits[0]
+
+
+_DIRECT_REPLIES = {
+    "build_kinetic_typography": "Добавил кинетические субтитры. Могу сменить стиль или пресет.",
+    "apply_color_grade": "Поставил цветокор на весь ролик.",
+    "select_bgm": "Добавил фоновую музыку. Могу сменить трек или громкость.",
+}
+
+
+def planned_calls_for_message(
+    message: str,
+    existing_calls: Optional[Sequence[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """Tools that must run for this message. Empty = not a direct command."""
+    allow = targeted_allowlist(message)
+    if not allow:
+        return list(existing_calls or []) if existing_calls is not None else []
+    kept: List[Dict[str, Any]] = []
+    for call in existing_calls or []:
+        name = call.get("name") or ""
+        if name not in allow:
+            continue
+        args = dict(call.get("arguments") or {})
+        if name == "build_kinetic_typography":
+            args.setdefault("subtitle_preset", "resolve_classic")
+        kept.append({"name": name, "arguments": args})
+    if kept:
+        return kept
+    if "build_kinetic_typography" in allow:
+        return [{"name": "build_kinetic_typography", "arguments": {"subtitle_preset": "resolve_classic"}}]
+    if "apply_color_grade" in allow:
+        return [{"name": "apply_color_grade", "arguments": {}}]
+    if "select_bgm" in allow:
+        return [{"name": "select_bgm", "arguments": {"asset_query": "lofi chill", "volume": -22}}]
+    return []
+
+
+def filter_tools_for_intent(
+    calls: Sequence[Dict[str, Any]],
+    message: str,
+) -> List[Dict[str, Any]]:
+    if not targeted_allowlist(message):
+        return list(calls or [])
+    return planned_calls_for_message(message, calls)
+
+
+def reply_for_tools(calls: Sequence[Dict[str, Any]]) -> str:
+    for call in calls or []:
+        reply = _DIRECT_REPLIES.get(call.get("name") or "")
+        if reply:
+            return reply
+    return "Готово."
 
 
 def _duration_from_transcript(data: Dict[str, Any]) -> float:
@@ -164,6 +251,12 @@ def _pick_job(
     if role == "hook":
         if family == "raw" or density == "minimal":
             return "overlay" if overlays_left else "face"
+        words = len((text or "").split())
+        # Short punch → fullscreen TITLE. Longer intro stays on the speaker.
+        if words >= 16 and overlays_left:
+            return "overlay"
+        if family == "signal" and overlays_left:
+            return "overlay"
         return "title" if titles_left else "overlay"
 
     if role in ("payoff", "cta"):
@@ -204,6 +297,43 @@ def _pick_job(
         return "face"
 
     return "face"
+
+
+def _emphasis(text: str) -> bool:
+    t = text or ""
+    words = [w for w in re.split(r"\s+", t.strip()) if w]
+    if re.search(r"\d", t):
+        return True
+    if len(words) <= 10:
+        return True
+    return bool(re.search(
+        r"поэтому|итог|главн|важно|секрет|слушай|вот в чём|именно|никогда|всегда",
+        t, re.I,
+    ))
+
+
+def _max_zooms(duration: float, look: Dict[str, Any]) -> int:
+    density = str((look.get("montage") or {}).get("graphic_density") or "low")
+    if density == "minimal" or look.get("family") == "raw":
+        return 1
+    if duration < 22:
+        return 1
+    if duration < 38:
+        return 2
+    return 3
+
+
+def _want_zoom(job: str, role: str, text: str, zooms_used: int, max_zooms: int) -> bool:
+    """Punch-in only on a spoken accent, never as a metronome on every beat."""
+    if job != "face" or zooms_used >= max_zooms:
+        return False
+    if role == "hook":
+        return False
+    if role in ("turn", "payoff") and _emphasis(text):
+        return True
+    if role == "proof" and _emphasis(text) and zooms_used == 0:
+        return True
+    return False
 
 
 def _headline(text: str, limit: int = 5) -> str:
@@ -260,6 +390,9 @@ def build_beat_sheet(
     titles_left = title_budget
     overlays_left = overlay_budget
     diagrams_left = _diagram_budget(look, len(chunks))
+    max_zooms = _max_zooms(duration, look)
+    zooms_used = 0
+    last_job = ""
     beats: List[Dict[str, Any]] = []
     from app.services.idea_map import build_idea_map, concept_from_map
 
@@ -270,6 +403,9 @@ def build_beat_sheet(
             role, text, look, titles_left, overlays_left, has_user_broll,
             diagrams_left=diagrams_left, idea_spec=idea_spec,
         )
+        # Don't stack overlay/title/diagram on neighbouring beats — leave a face rest.
+        if job in ("overlay", "title", "diagram") and last_job in ("overlay", "title", "diagram"):
+            job = "face"
         if job == "title":
             titles_left = max(0, titles_left - 1)
         elif job == "overlay":
@@ -280,7 +416,10 @@ def build_beat_sheet(
         end = round(float(ch["end"]), 2)
         if end - start > 8.5:
             end = round(start + 8.5, 2)
-        zoom = job in ("face", "overlay") and role in ("hook", "problem", "proof", "turn")
+        zoom = _want_zoom(job, role, text, zooms_used, max_zooms)
+        if zoom:
+            zooms_used += 1
+        last_job = job
         if job == "diagram" and idea_spec:
             concept = concept_from_map(idea_spec)
         else:
@@ -340,7 +479,8 @@ def director_beat_contract(sheet: Optional[Dict[str, Any]], *, full: bool = True
 {grid}
 
 ПОЛНЫЙ АВТОМОНТАЖ — СТРОГО ТРИ ФАЗЫ В ОДНОМ tool_calls:
-1) PICTURE LOCK: `cut_clip` (если просили вырезать паузы) + `create_zoom` ТОЛЬКО на битах с +zoom.
+1) PICTURE LOCK: `cut_clip` только длинные паузы (>1с) и слова-паразиты — не режь дыхание.
+   `create_zoom` ТОЛЬКО на битах с +zoom (ударная фраза). Между зумами лицо ≥6с без камеры.
 2) COVERAGE: `create_scene` fullscreen+kinetic_title ТОЛЬКО job=title;
    overlay ТОЛЬКО job=overlay; `add_broll` ТОЛЬКО job=broll;
    job=diagram → `create_scene` layout=overlay scene_template=idea_map.
@@ -462,9 +602,10 @@ def snap_tools_to_beats(
             if zi < len(zoom_beats):
                 b = zoom_beats[zi]
                 zi += 1
-                span = min(2.4, max(1.3, b["end"] - b["start"] - 0.2))
-                args["start_time"] = round(b["start"] + 0.15, 2)
+                span = min(1.8, max(1.2, min(2.0, b["end"] - b["start"] - 0.35)))
+                args["start_time"] = round(b["start"] + 0.25, 2)
                 args["end_time"] = round(args["start_time"] + span, 2)
+                args.setdefault("type", "zoom_in")
             out.append({"name": name, "arguments": args})
         else:
             out.append(call if "arguments" in call else {"name": name, "arguments": args})

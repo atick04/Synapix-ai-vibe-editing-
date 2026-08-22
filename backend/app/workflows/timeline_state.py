@@ -23,6 +23,21 @@ class TimelineState:
             # Deep copy or copy to prevent side effects
             self.edits = [dict(e) for e in initial_edits]
 
+    def set_format(self, fmt: str = "9:16", focus_x: float = 0.5, focus_y: float = 0.45, fit: str = "cover", scale: float = 1.0) -> Dict[str, Any]:
+        """Lock output to Reels 9:16: cover fills the frame, contain letterboxes 16:9."""
+        self.edits = [e for e in self.edits if e.get("action") != "change_format"]
+        fit_n = "contain" if str(fit).lower() in ("contain", "letterbox", "fit", "horizontal") else "cover"
+        edit = {
+            "action": "change_format",
+            "format": "9:16",
+            "fit": fit_n,
+            "scale": round(max(0.45, min(2.2, float(scale))), 3),
+            "focus_x": round(max(0.0, min(1.0, float(focus_x))), 3),
+            "focus_y": round(max(0.0, min(1.0, float(focus_y))), 3),
+        }
+        self.edits.insert(0, edit)
+        return edit
+
     def add_cut(self, start: float, end: float) -> Dict[str, Any]:
         """Mark a region for cutting out silence or repeated takes."""
         edit = {

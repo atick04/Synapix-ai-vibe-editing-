@@ -1,8 +1,10 @@
 """Unit tests for topic-change transition detection."""
 
 from app.services.topic_transition_service import (
+    collect_splice_points,
     detect_topic_boundaries,
     boundaries_to_transition_edits,
+    is_breath_cut,
 )
 
 
@@ -40,3 +42,19 @@ def test_ignores_same_topic_without_signals():
     }
     boundaries = detect_topic_boundaries(transcript, min_gap_sec=4.0)
     assert len(boundaries) <= 1
+
+
+def test_breath_cuts_do_not_get_whoosh():
+    edits = [
+        {"action": "cut_out", "start": 2.0, "end": 2.8, "reason": "silence", "text": "Затянутая пауза"},
+        {"action": "cut_out", "start": 6.0, "end": 6.4, "reason": "filler", "text": "Слово-паразит"},
+        {"action": "cut_out", "start": 12.0, "end": 13.5, "reason": "duplicate", "text": "Повтор"},
+    ]
+    assert is_breath_cut(edits[0])
+    assert is_breath_cut(edits[1])
+    assert not is_breath_cut(edits[2])
+    points = collect_splice_points(edits, from_topics=False, min_gap_sec=2.0, skip_before_sec=1.0)
+    times = [p["time"] for p in points]
+    assert 13.5 in times
+    assert 2.8 not in times
+    assert 6.4 not in times

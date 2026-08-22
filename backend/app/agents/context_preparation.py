@@ -87,7 +87,8 @@ async def prepare_context_node(state: VideoEditingState) -> VideoEditingState:
                             "action": "cut_out",
                             "start": round(c["start"], 2),
                             "end": round(c["end"], 2),
-                            "reason": c.get("text", c.get("reason", "Авто-обрезка"))
+                            "reason": c.get("reason", "cut"),
+                            "text": c.get("text", "Авто-обрезка"),
                         })
 
                     # Step 1b: Detect topic-change moments for transitions
@@ -202,21 +203,16 @@ async def prepare_context_node(state: VideoEditingState) -> VideoEditingState:
     video_path = os.path.join("uploads", f"{file_id}.mp4")
     if os.path.exists(video_path):
         try:
-            cmd = [
-                "ffprobe", "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "stream=width,height", "-of", "json",
-                video_path
-            ]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
-            probe_data = json.loads(res.stdout)
-            if "streams" in probe_data and probe_data["streams"]:
-                width = int(probe_data["streams"][0].get("width", 1080))
-                height = int(probe_data["streams"][0].get("height", 1920))
+            from app.services.reframe import probe_video_display_size
+            dw, dh, _rot = probe_video_display_size(video_path)
+            if dw and dh:
+                width, height = dw, dh
         except Exception as e:
             print(f"[PrepareContext] ffprobe display dims check failed: {e}")
 
     aspect_ratio = "horizontal" if width > height else "vertical"
     print(f"[PrepareContext] Detected display resolution: {width}x{height} ({aspect_ratio})")
+    source_w, source_h = width, height
 
     # ── Override with Manual Format ──
     target_format = state.get("target_format", "auto")
@@ -228,6 +224,24 @@ async def prepare_context_node(state: VideoEditingState) -> VideoEditingState:
         width, height = 1080, 1920
         aspect_ratio = "vertical"
         print(f"[PrepareContext] Manual override to 9:16 ({width}x{height})")
+
+    # Landscape talking-head → lock a 9:16 cover crop on the timeline
+    if target_format != "16:9":
+        try:
+            from app.services.reframe import format_edit, needs_vertical_reframe
+            if needs_vertical_reframe(source_w, source_h):
+                existing = (session or {}).get("active_edits") or []
+                if not any(e.get("action") == "change_format" for e in existing):
+                    from app.workflows.production_session import update_session
+                    update_session(file_id, {
+                        "active_edits": [format_edit(), *existing],
+                        "needs_reframe": True,
+                    })
+                width, height = 1080, 1920
+                aspect_ratio = "vertical"
+                print("[PrepareContext] Auto reframe 16:9 → 9:16 cover crop")
+        except Exception as reframe_err:
+            print(f"[PrepareContext] Auto reframe skipped: {reframe_err}")
 
     # ── Load Media Library ──
     media_library = []

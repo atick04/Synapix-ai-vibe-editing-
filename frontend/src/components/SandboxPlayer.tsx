@@ -171,6 +171,7 @@ interface Props {
     onDurationChange?: (d: number) => void;
     duration?: number;
     targetFormat?: 'auto' | '16:9' | '9:16';
+    onSourceAspect?: (aspect: number, width: number, height: number) => void;
     mediaLibrary?: any[];
     transcript?: { words: TranscriptWord[] } | null;
     subtitleConfig?: SubtitleConfig | null;
@@ -191,6 +192,72 @@ interface Props {
 //  Helpers
 // ──────────────────────────────────────────────────────────────────
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+function reframeLayout(
+    srcW: number,
+    srcH: number,
+    canvasW: number,
+    canvasH: number,
+    mode: 'cover' | 'contain',
+    zoom = 1,
+    focusX = 0.5,
+    focusY = 0.5,
+) {
+    const srcR = srcW / Math.max(1, srcH);
+    const dstR = canvasW / Math.max(1, canvasH);
+    const fx = Math.min(1, Math.max(0, focusX));
+    const fy = Math.min(1, Math.max(0, focusY));
+    if (mode === 'contain') {
+        const s = Math.min(1, Math.max(0.45, zoom));
+        let dw: number;
+        let dh: number;
+        if (srcR > dstR) {
+            dw = canvasW * s;
+            dh = dw / srcR;
+        } else {
+            dh = canvasH * s;
+            dw = dh * srcR;
+        }
+        return {
+            sx: 0,
+            sy: 0,
+            sWidth: srcW,
+            sHeight: srcH,
+            dx: (canvasW - dw) * fx,
+            dy: (canvasH - dh) * fy,
+            dWidth: dw,
+            dHeight: dh,
+        };
+    }
+    const z = Math.min(2.2, Math.max(1, zoom));
+    let cropW: number;
+    let cropH: number;
+    if (srcR > dstR) {
+        cropH = srcH / z;
+        cropW = cropH * dstR;
+        if (cropW > srcW) {
+            cropW = srcW;
+            cropH = cropW / dstR;
+        }
+    } else {
+        cropW = srcW / z;
+        cropH = cropW / dstR;
+        if (cropH > srcH) {
+            cropH = srcH;
+            cropW = cropH * dstR;
+        }
+    }
+    return {
+        sx: (srcW - cropW) * fx,
+        sy: (srcH - cropH) * fy,
+        sWidth: cropW,
+        sHeight: cropH,
+        dx: 0,
+        dy: 0,
+        dWidth: canvasW,
+        dHeight: canvasH,
+    };
+}
 
 function easeInOutCubic(t: number): number {
     const x = Math.min(1, Math.max(0, t));
@@ -544,6 +611,7 @@ const SandboxPlayer = forwardRef<HTMLVideoElement, Props>(function SandboxPlayer
     onDurationChange,
     duration = 0,
     targetFormat,
+    onSourceAspect,
     mediaLibrary,
     transcript,
     subtitleConfig,
@@ -3408,17 +3476,21 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
         const t = video.currentTime;
         const scale = getZoomScale(editsRef.current, t);
 
-        let plateSx = 0;
-        let plateSy = 0;
-        let plateSw = VW;
-        let plateSh = VH;
-        if (videoRatio > targetRatio) {
-            plateSw = VH * targetRatio;
-            plateSx = (VW - plateSw) / 2;
-        } else if (videoRatio < targetRatio) {
-            plateSh = VW / targetRatio;
-            plateSy = (VH - plateSh) / 2;
-        }
+        const fmtEdit = editsRef.current.find(e => e.action === 'change_format');
+        const rawFit = String(fmtEdit?.fit || fmtEdit?.mode || 'cover').toLowerCase();
+        const fitMode: 'cover' | 'contain' = (rawFit === 'contain' || rawFit === 'letterbox' || rawFit === 'horizontal') ? 'contain' : 'cover';
+        const focusX = Number(fmtEdit?.focus_x ?? 0.5);
+        const focusY = Number(fmtEdit?.focus_y ?? (fitMode === 'contain' ? 0.5 : 0.45));
+        const reframeZoom = Number(fmtEdit?.scale ?? 1);
+        const layout = reframeLayout(VW, VH, W, H, fitMode, reframeZoom, focusX, focusY);
+        let plateSx = layout.sx;
+        let plateSy = layout.sy;
+        let plateSw = layout.sWidth;
+        let plateSh = layout.sHeight;
+        const destX = layout.dx;
+        const destY = layout.dy;
+        const destW = layout.dWidth;
+        const destH = layout.dHeight;
         _captionVideoPlate = {
             video,
             sx: plateSx,
@@ -3475,18 +3547,14 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 ctx.filter = 'none';
             }
 
-            // Draw cropped and centered video
-            let sWidth = VW;
-            let sHeight = VH;
-            let sx = 0;
-            let sy = 0;
-
-            if (videoRatio > targetRatio) {
-                sWidth = VH * targetRatio;
-                sx = (VW - sWidth) / 2;
-            } else if (videoRatio < targetRatio) {
-                sHeight = VW / targetRatio;
-                sy = (VH - sHeight) / 2;
+            // Draw cropped and centered video (cover into 9:16 or letterboxed 16:9)
+            let sWidth = plateSw;
+            let sHeight = plateSh;
+            let sx = plateSx;
+            let sy = plateSy;
+            if (fitMode === 'contain') {
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, 0, W, H);
             }
 
             const hasActiveOverlay = editsRef.current.some(e =>
@@ -3591,7 +3659,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                         }
                         ctx.fillRect(0, 0, W, H);
                     } else {
-                        ctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, W, H);
+                        ctx.drawImage(video, sx, sy, sWidth, sHeight, destX, destY, destW, destH);
                     }
                     ctx.restore();
 
@@ -3656,7 +3724,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                         tctx.filter = 'none';
                         tctx.globalAlpha = 1;
                         tctx.globalCompositeOperation = 'source-over';
-                        tctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, W, H);
+                        tctx.drawImage(video, sx, sy, sWidth, sHeight, destX, destY, destW, destH);
                         tctx.globalCompositeOperation = 'destination-in';
                         tctx.drawImage(mc, 0, 0, matteW, matteH, 0, 0, W, H);
                         tctx.globalCompositeOperation = 'source-over';
@@ -3672,7 +3740,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                     ctx.save();
                     ctx.filter = 'none';
                     ctx.globalAlpha = 1;
-                    ctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, W, H);
+                    ctx.drawImage(video, sx, sy, sWidth, sHeight, destX, destY, destW, destH);
                     ctx.restore();
                 }
             } else {
@@ -3681,7 +3749,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 if (hasActiveOverlay) {
                     ctx.filter = 'blur(10px) brightness(0.35)';
                 }
-                ctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, W, H);
+                ctx.drawImage(video, sx, sy, sWidth, sHeight, destX, destY, destW, destH);
                 ctx.restore();
             }
 
@@ -3963,6 +4031,20 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                 filmGrain,
                 zoom: scale,
                 templateId: selectedTemplate,
+                coverCrop: fitMode === 'contain'
+                    ? { x: 0, y: 0, w: 1, h: 1 }
+                    : {
+                        x: plateSx / VW,
+                        y: (VH - plateSy - plateSh) / VH,
+                        w: plateSw / VW,
+                        h: plateSh / VH,
+                    },
+                videoLayout: {
+                    x: destX / W,
+                    y: destY / H,
+                    w: destW / W,
+                    h: destH / H,
+                },
             }, t, false, activeMG);
         }
     }, [textOverlays, drawAestheticCaptions, drawStyledTextOverlay, transcript, focusedClipId, targetRatio, selectedEntity, threeReady, behindModeActive, activeSemanticScenes, vibeConfig, rvmAlphaSrc, rvmAlphaReady, rvmMaskSrc, rvmMaskReady, videoSrc, subtitleConfig, resolveGraphicPlayerIndex]);
@@ -4758,15 +4840,14 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                     setVideoReady(true);
                     if (v.videoWidth && v.videoHeight) {
                         setVideoAspect(v.videoWidth / v.videoHeight);
+                        onSourceAspect?.(v.videoWidth / v.videoHeight, v.videoWidth, v.videoHeight);
                     }
                 }}
-                onError={(e) => {
+                onError={() => {
                     const video = videoRef.current;
                     if (video && video.src.includes('_proxy')) {
                         console.warn('[SandboxPlayer] Proxy video failed to load, falling back to original:', videoSrc);
                         setProxyFailed(true);
-                    } else {
-                        console.error('SandboxPlayer video error:', e);
                     }
                 }}
             />
@@ -4841,7 +4922,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                             position: isSplitActive ? 'absolute' : 'relative',
                             top: 0,
                             left: 0,
-                            objectFit: isSplitActive ? 'cover' : 'contain',
+                            objectFit: 'cover',
                             cursor: 'pointer',
                             display: videoReady && (!threeReady || behindModeActive) ? 'block' : 'none',
                         }}
@@ -4860,7 +4941,7 @@ try { (function(){ ${code} })(); } catch(e){ console.warn('[Scene]', e); }
                             position: isSplitActive ? 'absolute' : 'relative',
                             top: 0,
                             left: 0,
-                            objectFit: isSplitActive ? 'cover' : 'contain',
+                            objectFit: 'cover',
                             cursor: 'pointer',
                             display: videoReady && threeReady && !behindModeActive ? 'block' : 'none',
                         }}

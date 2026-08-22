@@ -59,13 +59,13 @@ class RetentionCritic:
                 if in_gap:
                     in_gap = False
                     gap_duration = t - gap_start
-                    if gap_duration >= 5.0:
+                    if gap_duration >= 7.5:
                         boring_gaps.append((gap_start, t, gap_duration))
             t += step
             
         if in_gap:
             gap_duration = duration - gap_start
-            if gap_duration >= 5.0:
+            if gap_duration >= 7.5:
                 boring_gaps.append((gap_start, duration, gap_duration))
                 
         for start, end, gap_dur in boring_gaps:
@@ -73,7 +73,7 @@ class RetentionCritic:
             for b in (beat_sheet or {}).get("beats") or []:
                 if b.get("job") != "face":
                     continue
-                if start >= float(b.get("start", 0)) - 0.2 and end <= float(b.get("end", 0)) + 0.2 and gap_dur < 6.5:
+                if start >= float(b.get("start", 0)) - 0.2 and end <= float(b.get("end", 0)) + 0.2 and gap_dur < 9.0:
                     skip = True
                     break
             if skip:
@@ -88,14 +88,14 @@ class RetentionCritic:
             
         # 3. Check pacing rates
         rate = metrics["pacing_rate_per_10s"]
-        if rate < 2.0:
+        if rate < 1.2:
             issues.append(f"ℹ️ Низкий темп смены кадров: {rate:.1f} изменений на 10 сек. Зритель может заскучать.")
-            score -= 10
-        elif rate > 6.0:
+            score -= 6
+        elif rate > 5.0:
             issues.append(f"⚠️ Сверхвысокий темп смены кадров ({rate:.1f}/10с). Монтаж слишком гиперактивный.")
             score -= 10
         else:
-            issues.append(f"✓ Идеальный темп смены кадров: {rate:.1f} изменений на 10 сек (норма 2.5 - 3.5).")
+            issues.append(f"✓ Темп смены кадров: {rate:.1f} изменений на 10 сек (норма 1.4–3.2, не метроном).")
 
         html_graphics = [
             e for e in edits
@@ -220,29 +220,30 @@ class RetentionCritic:
                 if in_gap:
                     in_gap = False
                     gap_duration = t - gap_start
-                    if gap_duration >= 5.0:
-                        # Suggest adding zoom in the middle of the boring zone
-                        z_start = round(gap_start + 1.0, 2)
-                        z_end = round(min(z_start + 2.5, t - 0.5), 2)
-                        fixes.append({
-                            "issue": "Boring talking head zone",
-                            "recommendation": "create_zoom",
-                            "start": z_start,
-                            "end": z_end
-                        })
+                    if gap_duration >= 8.0 and len(zooms) < 2:
+                        z_start = round(gap_start + gap_duration * 0.35, 2)
+                        z_end = round(min(z_start + 1.6, t - 0.4), 2)
+                        if z_end > z_start + 1.1:
+                            fixes.append({
+                                "issue": "Long talking-head hold",
+                                "recommendation": "create_zoom",
+                                "start": z_start,
+                                "end": z_end,
+                            })
             t += step
             
         if in_gap:
             gap_duration = duration - gap_start
-            if gap_duration >= 5.0:
-                z_start = round(gap_start + 1.0, 2)
-                z_end = round(min(z_start + 2.5, duration - 0.5), 2)
-                fixes.append({
-                    "issue": "Boring talking head zone at ending",
-                    "recommendation": "create_zoom",
-                    "start": z_start,
-                    "end": z_end
-                })
+            if gap_duration >= 8.0 and len(zooms) < 2:
+                z_start = round(gap_start + gap_duration * 0.35, 2)
+                z_end = round(min(z_start + 1.6, duration - 0.4), 2)
+                if z_end > z_start + 1.1:
+                    fixes.append({
+                        "issue": "Long talking-head hold at ending",
+                        "recommendation": "create_zoom",
+                        "start": z_start,
+                        "end": z_end,
+                    })
                 
         # 2. Check for missing BGM soundtrack and suggest design_sound
         if not bgm:
@@ -256,7 +257,7 @@ class RetentionCritic:
         # 3. Check for slow pacing and suggest B-roll injection
         metrics = TimelineMetrics.calculate(edits, duration)
         broll_beats = [b for b in ((beat_sheet or {}).get("beats") or []) if b.get("job") == "broll"]
-        if metrics["pacing_rate_per_10s"] < 2.0 and duration >= 8.0 and (not beat_sheet or broll_beats):
+        if metrics["pacing_rate_per_10s"] < 1.2 and duration >= 16.0 and (not beat_sheet or broll_beats):
             target = broll_beats[0] if broll_beats else None
             fixes.append({
                 "issue": "Low visual change frequency",
@@ -329,13 +330,14 @@ class RetentionCritic:
                     and max(bs, float(e.get("start") or 0)) < min(be, float(e.get("end") or 0))
                     for e in edits
                 )
-                if not zhit:
+                existing = len([e for e in edits if e.get("action") == "camera_zoom"])
+                if not zhit and existing < 2:
                     fixes.append({
-                        "issue": f"Face beat {b.get('id')} needs zoom",
+                        "issue": f"Accent beat {b.get('id')} missing punch-in",
                         "recommendation": "create_zoom",
-                        "start": round(bs + 0.15, 2),
-                        "end": round(min(be, bs + 2.2), 2),
-                        "description": "зум на лице",
+                        "start": round(bs + 0.25, 2),
+                        "end": round(min(be, bs + 1.7), 2),
+                        "description": "зум на акценте речи",
                     })
 
         return fixes

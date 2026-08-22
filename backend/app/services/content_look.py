@@ -382,6 +382,7 @@ graphics={density}, titles на ролик: {titles}, B-roll: {m.get("broll_bias
 - GSAP ease только power2 / power3 (settle). Не back.out.
 - density=minimal/low → максимум 1 TITLE, 1 abstract, 1 idea_map если в речи есть путь/причина/vs.
 - density=medium → 2–3 TITLE/abstract + до 2 карт мысли на механизм, всё равно не чаще чем раз в 6–8с.
+- Зум только на ударной фразе, не чаще zoom_count. Не наезд каждые 3с.
 - job=diagram → overlay `idea_map` (rail/split/stack/thesis по мысли бита). Не TITLE и не Pexels «мозг».
 - broll_bias=none_unless_user → сток Pexels не ставь, только свои клипы.
 - broll_bias=user_first → сначала asset_id пользователя.

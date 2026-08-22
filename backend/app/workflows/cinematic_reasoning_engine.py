@@ -30,10 +30,12 @@ SYSTEM_INSTRUCTIONS_TEMPLATE = """Ты — РЕЖИССЁР АВТОМОНТАЖ
 - Если формат ещё не 9:16 — вызови `change_format` с format="9:16" в начале монтажа.
 
 ⚡ ЗОЛОТЫЕ СТАНДАРТЫ МОНТАЖА REELS:
-1. ДИНАМИЧНЫЙ ТЕМП И ШАБЛОНЫ УДЕРЖАНИЯ (Pattern Interrupts):
-   - Удержание внимания требует визуального изменения каждые 2.5 - 3.5 секунды! Говорящая голова без перебивок усыпляет зрителя.
-   - Разделяй таймлайн на отрезки и чередуй: [Speaker Zoom In] → [B-roll] → [Infographics / Graphics Overlay] → [Speaker Zoom Out].
-   - Используй отчет темпа речи (Pacing) как творческий ориентир: на эмоциональных пиках (`peaks`) или логических акцентах ты полностью волен расставлять наезды камеры (`create_zoom`) любой длительности и масштаба, которые посчитаешь нужными.
+1. РИТМ РЕЧИ, НЕ МЕТРОНОМ:
+   - НЕ ставь визуальную смену каждые 2.5с. Это выглядит как один и тот же шаблон в каждом ролике.
+   - Держи план, пока мысль не закончена. Один ход на акцент: зум ИЛИ графика ИЛИ B-roll — не все сразу.
+   - ЗАПРЕЩЕНО чередовать механически [Zoom In] → [B-roll] → [Graphics] → [Zoom Out] на каждом куске.
+   - Зум (`create_zoom`) только на ударной фразе из Pacing peaks / бита с +zoom. Между зумами ≥6 секунд лицо без камеры. Не зумь «чтобы было движение».
+   - Дыхание и паузы 0.5–1.1с оставляй. Режь только слова-паразиты и паузы длиннее ~1.2с.
 
 2. ДИНАМИЧЕСКОЕ УПРАВЛЕНИЕ И СТИЛИЗАЦИЯ СУБТИТРОВ (Kinetic Subtitles Customization):
    - Всегда настраивай профессиональные субтитры через `build_kinetic_typography`.
@@ -80,9 +82,9 @@ SYSTEM_INSTRUCTIONS_TEMPLATE = """Ты — РЕЖИССЁР АВТОМОНТАЖ
    - Зумы не озвучиваются. SFX только на склейки, TITLE, плашки и вход стока — это делает `design_sound`.
 
     4. РИТМ REELS — СТОРИТЕЛЛИНГ СЛОЯМИ ПО BEAT SHEET:
-    Сетка битов в контексте — закон. На бит РОВНО ОДИН ход. Между акцентами лицо ≥3с.
-    Сначала picture lock (склейки, зумы), потом coverage (title/overlay/diagram/broll по job), потом звук и цвет.
-    Цель на 30–45с: ~50% talking-head, ~15% abstract, ~10% TITLE, ~15% карта мысли, ~10% свой/сток B-roll.
+    Сетка битов в контексте — закон. На бит РОВНО ОДИН ход. Между акцентами лицо ≥4с.
+    Сначала picture lock (склейки, редкие зумы), потом coverage (title/overlay/diagram/broll по job), потом звук и цвет.
+    Цель: больше лица, чем графики. Не копируй прошлый ролик один-в-один: если хук уже TITLE — следующий акцент не TITLE.
     Графика — Synapix Optical Cut (регистрационные риски + волосяная линия + один accent из Content Look).
     Не копируй чужие UI-киты. Не ставь indigo/cyan/gold, если их нет в Content Look.
 
@@ -110,7 +112,7 @@ SYSTEM_INSTRUCTIONS_TEMPLATE = """Ты — РЕЖИССЁР АВТОМОНТАЖ
     - Финальный цветокор: `apply_color_grade` с preset из Content Look.
 
 5. КАМЕРА, ЦВЕТ, ЗВУК (Talking-head polish):
-   - `create_zoom`: длительность 1.2–2.5с, type=`zoom_in` (мягкий punch с settle — без резкого обрыва!), или `zoom_hold` для удержания. intensity бери из Content Look (обычно 1.10–1.16).
+   - `create_zoom`: 1.2–1.8с, type=`zoom_in` (мягкий punch с settle). intensity из Content Look (1.08–1.14). Не ставь zoom_in на каждый бит.
    - В финале авто-монтажа вызови `apply_color_grade` с preset из Content Look на весь ролик, затем ОДИН `design_sound`.
    - Точечно «добавь музыку» — `select_bgm` (−20…−24 dB). Не дублируй `select_bgm` в том же ходе, что и `design_sound`.
 
@@ -137,8 +139,11 @@ SYSTEM_INSTRUCTIONS_TEMPLATE = """Ты — РЕЖИССЁР АВТОМОНТАЖ
 🔥 КРИТИЧЕСКИЕ ПРАВИЛА ВЫПОЛНЕНИЯ:
 1. РАБОТАЙ СТРОГО ЧЕРЕЗ ИНСТРУМЕНТЫ. Тебе запрещено генерировать raw edit logic напрямую. Всегда вызывай соответствующие функции из списка.
 2. СТРОГО ТОЧЕЧНОЕ ВЫПОЛНЕНИЕ (Targeted Single-Tool Execution):
-   - Если пользователь просит КОНКРЕТНУЮ операцию (например, "добавь музыку", "сделай зум", "поставь текст позади", "поменяй шрифт"), вызови СТРОГО 1 ИНСТРУМЕНТ, выполняющий именно эту задачу! КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО генерировать массовые цепочки из 5-7 вызовов или перезапускать полный авто-монтаж, если пользователь не просил "полный монтаж" или "сделай всё сам".
-   - Если пользователь дает общую команду ("сделай авто-монтаж", "начинай", "поехали" или согласился с полным планом), тогда вызови несколько инструментов за один ход (субтитры + зумы + графика + цветокор) и ОБЯЗАТЕЛЬНО заверши ход одним `design_sound`.
+   - Если пользователь просит КОНКРЕТНУЮ операцию, вызови СТРОГО инструменты этой операции. Больше ничего.
+   - «добавь субтитры» / «кинетические субтитры» / «подписи» → ТОЛЬКО `build_kinetic_typography`. ЗАПРЕЩЕНО: cut_clip, design_sound, build_transition, create_zoom, create_scene.
+   - «добавь музыку» → ТОЛЬКО `select_bgm`. «зум» → ТОЛЬКО `create_zoom`.
+   - КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО резать видео, вешать SFX/whoosh или запускать полный автомонтаж, если пользователь этого не просил.
+   - Если пользователь дает общую команду ("сделай авто-монтаж", "начинай", "поехали" или согласился с полным планом), тогда вызови несколько инструментов за один ход и ОБЯЗАТЕЛЬНО заверши ход одним `design_sound`.
    - Категорически запрещено выдумывать несуществующие инструменты (`match_cut`, `add_kinetic_zoom`, `add_graphics`, `add_transition`, `speaker_masking`). СТРОГО используй имена из списка ниже!
 3. СТРОГИЕ ОБЯЗАТЕЛЬНЫЕ АРГУМЕНТЫ ИНСТРУМЕНТОВ:
    - `search_and_add_music`: ОБЯЗАТЕЛЬНЫЙ аргумент `query` (строка, например: 'lofi chill beat').
@@ -226,10 +231,21 @@ async def cinematic_reasoning_agent(state: VideoEditingState) -> Dict[str, Any]:
     pacing_report = NarrativePacing.analyze_transcript(transcript_text)
     style_info = memory.get_style_profile()
     from app.services.content_look import director_look_contract
-    from app.services.beat_sheet import director_beat_contract, is_full_montage
+    from app.services.beat_sheet import director_beat_contract, is_full_montage, targeted_allowlist
     look_context = director_look_contract(memory.get_content_look())
     full_montage = is_full_montage(user_message)
     beat_context = director_beat_contract(memory.get_beat_sheet(), full=full_montage)
+    allow = targeted_allowlist(user_message)
+    if allow:
+        names = ", ".join(sorted(allow))
+        intent_lock = (
+            f"\n==== INTENT LOCK (НАРУШАТЬ ЗАПРЕЩЕНО) ====\n"
+            f"Пользователь просит ОДНУ операцию. В tool_calls разрешены ТОЛЬКО: {names}.\n"
+            f"ЗАПРЕЩЕНО в этом ходе: cut_clip, design_sound, build_transition, "
+            f"create_zoom, create_scene, add_broll, apply_color_grade — если их нет в списке выше.\n"
+        )
+    else:
+        intent_lock = ""
 
     # Extract hook details from the production session
     narrative_arc = memory.session.get("narrative_arc", {})
@@ -361,6 +377,7 @@ async def cinematic_reasoning_agent(state: VideoEditingState) -> Dict[str, Any]:
 Стилевой профиль проекта: {json.dumps(style_info, ensure_ascii=False)}
 {look_context}
 {beat_context}
+{intent_lock}
 Отчет темпа речи (Pacing): {json.dumps(pacing_report, ensure_ascii=False)}
 Визуальный контекст (VLM): "{visual_context}"
 Разрешение видео: {width}x{height} (формат: {aspect_ratio})
@@ -385,7 +402,8 @@ async def cinematic_reasoning_agent(state: VideoEditingState) -> Dict[str, Any]:
 ==== ИНСТРУКЦИЯ ДЛЯ ВЫПОЛНЕНИЯ ====
 Пользователь прислал конкретный запрос на монтаж: "{user_message}"
 Ты ДОЛЖЕН сразу же проанализировать этот запрос и вызвать соответствующие инструменты из Tools Registry для его выполнения на основе транскрипта и pacing-отчета!
-Не пиши пустой список "tool_calls" и не задавай лишних вопросов, если пользователь дал четкую команду (например: добавить музыку -> вызови `select_bgm`; сделать зум -> вызови `create_zoom` на таймкод из pacing peaks или транскрипта; полный автомонтаж -> СНАЧАЛА заполни Beat Sheet: picture lock → coverage → finish, в конце `design_sound`).
+Не пиши пустой список "tool_calls" и не задавай лишних вопросов, если пользователь дал четкую команду (например: добавить субтитры -> ТОЛЬКО `build_kinetic_typography`, без cut_clip и без SFX; добавить музыку -> `select_bgm`; сделать зум -> `create_zoom`; полный автомонтаж -> picture lock → coverage → finish, в конце `design_sound`).
+{intent_lock}
 
 ==== ТЕКУЩИЙ КОНТЕКСТ ====
 1. Запрос пользователя: "{user_message}"
@@ -393,6 +411,7 @@ async def cinematic_reasoning_agent(state: VideoEditingState) -> Dict[str, Any]:
 3. Стилевой профиль проекта: {json.dumps(style_info, ensure_ascii=False)}
 {look_context}
 {beat_context}
+{intent_lock}
 4. Отчет темпа речи (Pacing): {json.dumps(pacing_report, ensure_ascii=False)}
 5. Визуальный контекст (VLM): "{visual_context}"
 6. Характеристики видео: {width}x{height} (формат: {aspect_ratio})
@@ -598,17 +617,19 @@ async def execute_single_tool_node(state: VideoEditingState) -> Dict[str, Any]:
     session_state = memory.export_session_state() or {}
     duration = session_state.get("duration", 10.0)
 
+    from app.services.beat_sheet import (
+        is_full_montage, sort_tool_calls, snap_tools_to_beats, filter_tools_for_intent,
+    )
+    user_msg = state.get("user_message") or ""
+    tool_calls_queue = filter_tools_for_intent(tool_calls_queue, user_msg)
+    full = is_full_montage(user_msg)
+
     if not tool_calls_queue:
         return {
             "messages": [HumanMessage(content="⚠️ Ошибка: Инструменты для вызова не найдены.")],
             "active_edits": active_edits
         }
 
-    from app.services.beat_sheet import is_full_montage, sort_tool_calls, snap_tools_to_beats
-    full = is_full_montage(state.get("user_message") or "")
-    if not full:
-        names = [c.get("name") for c in tool_calls_queue]
-        full = sum(1 for n in names if n in ("create_scene", "add_broll", "create_zoom", "build_kinetic_typography")) >= 3
     tool_calls_queue = snap_tools_to_beats(
         tool_calls_queue,
         memory.get_beat_sheet() if hasattr(memory, "get_beat_sheet") else {},
@@ -706,9 +727,9 @@ async def execute_single_tool_node(state: VideoEditingState) -> Dict[str, Any]:
         tool_results.append(f"- {friendly_name}: {result_log}")
         ReasoningManager.update_execution(friendly_name, idx, total_tools, f"Готово: {result_log}")
 
-    # Full auto-edit: one sound-design pass at the end (bed + sparse SFX + duck).
+    # Sound and splice SFX only on an explicit full auto-edit — never on «добавь субтитры».
     montage_count = len([n for n in executed_names if n in MONTAGE_TOOLS])
-    if "design_sound" not in executed_names and montage_count >= 3:
+    if full and "design_sound" not in executed_names and montage_count >= 3:
         try:
             ds_log = await executor.execute_tool("design_sound", {})
             tool_results.append(f"- 🎧 Саунд-дизайн: {ds_log}")
@@ -717,23 +738,19 @@ async def execute_single_tool_node(state: VideoEditingState) -> Dict[str, Any]:
         except Exception as ds_err:
             logger.warning(f"Auto design_sound failed: {ds_err}")
 
-    # Legacy splice SFX only if sound designer did not run this turn
     topic_boundaries = state.get("topic_boundaries") or []
-    ran_cut = any(n in ("cut_clip", "apply_topic_transitions") for n in executed_names)
-    ran_montage = any(n in MONTAGE_TOOLS for n in executed_names)
     already_did_topics = "apply_topic_transitions" in executed_names
     already_did_sound = "design_sound" in executed_names
 
-    if (ran_cut or ran_montage) and not already_did_sound:
+    if full and not already_did_sound:
         try:
             auto_logs = ensure_transitions_on_splices(
                 timeline,
                 memory,
                 topic_boundaries,
                 from_cuts=True,
-                # If agent already called apply_topic_transitions, still cover cut splices
                 from_topics=not already_did_topics,
-                min_gap_sec=2.5,
+                min_gap_sec=4.0,
             )
             if auto_logs:
                 tool_results.append(

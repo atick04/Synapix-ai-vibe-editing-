@@ -80,6 +80,22 @@ def ensure_web_compatible_mp4(file_path: str, file_id: str) -> str:
 async def process_video_pipeline(video_path: str, audio_path: str, file_id: str):
     """Фоновая задача: достать аудио, распознать текст и сделать визуальный анализ"""
     video_path = ensure_web_compatible_mp4(video_path, file_id)
+
+    try:
+        from app.services.reframe import probe_video_display_size, needs_vertical_reframe
+        from app.workflows.production_session import update_session
+        dw, dh, rot = probe_video_display_size(video_path)
+        if dw and dh:
+            update_session(file_id, {
+                "source_width": dw,
+                "source_height": dh,
+                "source_rotation": rot,
+                "needs_reframe": needs_vertical_reframe(dw, dh),
+            })
+            if needs_vertical_reframe(dw, dh):
+                log_progress(file_id, "📱 Исходник 16:9 — в редакторе кадр автоматически станет Reel 9:16. Сдвинь ползунок, если лицо не по центру.")
+    except Exception as probe_err:
+        log_progress(file_id, f"⚠️ Не удалось прочитать размер кадра: {probe_err}")
     
     # Создаем прокси-файл (480p) для мобильных устройств
     dir_name = os.path.dirname(video_path)
@@ -892,11 +908,12 @@ async def auto_compose_endpoint(file_id: str, req: AutoComposeRequest, user=Depe
         initial_state = {
             "file_id": file_id,
             "user_message": (
-                "Сделай авто-монтаж Instagram Reels 9:16: вырежи паузы, "
-                "кинетические субтитры (2–3 слова), зумы на акцентах речи, "
-                "хук-графика в начале, 1–3 B-roll/плашки на punchline, "
-                "один energetic bed с ducking под голос и точечные SFX на cuts. "
-                "Только вертикальный Reels — без YouTube 16:9 и long-form."
+                "Сделай авто-монтаж Instagram Reels 9:16: убери только длинные паузы "
+                "(больше секунды) и слова-паразиты, сохрани дыхание речи. "
+                "Кинетические субтитры (2–3 слова). Зум только на 1–2 ударных фразах, не метрономом. "
+                "Хук-графика в начале если мысль короткая, иначе лицо. 1–2 B-roll/плашки на punchline. "
+                "Один bed с ducking под голос. SFX только на смысловые склейки, не на каждую паузу. "
+                "Только вертикальный Reels."
             ),
             "is_evaluation": False,
             "template_id": req.template_id or "instagram_reels",
