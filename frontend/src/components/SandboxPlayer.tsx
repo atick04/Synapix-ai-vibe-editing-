@@ -50,8 +50,13 @@ interface Edit {
     text_opacity?: number;
     gradient_color2?: string;
     replace_background?: boolean;
-    mode?: string;       // overlay | full_broll | fullscreen | split
+    mode?: string;       // overlay | full_broll | fullscreen | split | cover | contain
     layout?: string;
+    format?: string;
+    fit?: string;        // cover | contain — 16:9 → 9:16 reframe
+    focus_x?: number;
+    focus_y?: number;
+    scale?: number;
     design_aspect?: string; // "16:9" | "9:16" — canvas HTML was authored for
     preset?: string;
     component?: string;
